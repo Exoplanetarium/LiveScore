@@ -1,29 +1,32 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { useFonts } from 'expo-font';
-import { Stack } from 'expo-router';
-import { StatusBar } from 'expo-status-bar';
-import 'react-native-reanimated';
-
-import { useColorScheme } from '@/hooks/useColorScheme';
+import { Ionicons } from '@expo/vector-icons';
+import { Tabs } from "expo-router";
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const [loaded] = useFonts({
-    SpaceMono: require('../assets/fonts/SpaceMono-Regular.ttf'),
-  });
-
-  if (!loaded) {
-    // Async font loading only occurs in development.
-    return null;
-  }
-
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="+not-found" />
-      </Stack>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <Tabs
+      screenOptions={{
+        tabBarActiveTintColor: '#2f95dc',
+        headerShown: false,
+      }}
+    >
+      <Tabs.Screen
+        name="index"
+        options={{
+          title: 'Analyze',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'musical-notes' : 'musical-notes-outline'} color={color} size={28} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="record"
+        options={{
+          title: 'Record',
+          tabBarIcon: ({ color, focused }) => (
+            <Ionicons name={focused ? 'mic' : 'mic-outline'} color={color} size={28} />
+          ),
+        }}
+      />
+    </Tabs>
   );
 }
