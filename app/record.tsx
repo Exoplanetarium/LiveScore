@@ -2,101 +2,105 @@ import { Ionicons } from '@expo/vector-icons';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import React, { useRef, useState } from 'react';
-import { Alert, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, PermissionsAndroid, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import AudioRecord from 'react-native-audio-record';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 
 export default function RecordScreen() {
-  const [recording, setRecording] = useState<Audio.Recording | null>(null);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
   const [duration, setDuration] = useState(0);
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const wavPath = `${FileSystem.documentDirectory}audio.wav`;
+
+  useEffect(() => {
+    // Initialize AudioRecord
+    const options = {
+      sampleRate: 44100,
+      channels: 1,
+      bitsPerSample: 16,
+      audioSource: 6, // VOICE_RECOGNITION
+      wavFile: 'audio.wav'
+    };
+    
+    AudioRecord.init(options);
+    
+    return () => {
+      AudioRecord.stop();
+    };
+  }, []);
 
   const requestPermissions = async () => {
-    const { status } = await Audio.requestPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Please grant microphone permissions to record audio.');
-      return false;
+    if (Platform.OS === 'android') {
+      try {
+        const granted = await PermissionsAndroid.request(
+          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+          {
+            title: 'Microphone Permission',
+            message: 'This app needs access to your microphone to record audio.',
+            buttonNeutral: 'Ask Me Later',
+            buttonNegative: 'Cancel',
+            buttonPositive: 'OK',
+          }
+        );
+        return granted === PermissionsAndroid.RESULTS.GRANTED;
+      } catch (err) {
+        console.warn(err);
+        return false;
+      }
     }
-    return true;
+    return true; // iOS permissions handled by react-native-audio-record
   };
 
   const startRecording = async () => {
     try {
       const hasPermission = await requestPermissions();
-      if (!hasPermission) return;
+      if (!hasPermission) {
+        Alert.alert('Permission Required', 'Please grant microphone permissions to record audio.');
+        return;
+      }
 
-      // Configure audio mode for high quality recording
-      await Audio.setAudioModeAsync({
-        allowsRecordingIOS: true,
-        playsInSilentModeIOS: true,
-        playThroughEarpieceAndroid: false,
-        staysActiveInBackground: false,
-      });
-
-      // High quality recording options for piano
-      const recordingOptions = {
-        android: {
-          extension: '.wav',
-          outputFormat: Audio.AndroidOutputFormat.DEFAULT,
-          audioEncoder: Audio.AndroidAudioEncoder.DEFAULT,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 128000,
-        },
-        ios: {
-          extension: '.wav',
-          outputFormat: Audio.IOSOutputFormat.LINEARPCM,
-          audioQuality: Audio.IOSAudioQuality.HIGH,
-          sampleRate: 44100,
-          numberOfChannels: 1,
-          bitRate: 128000,
-          linearPCMBitDepth: 16,
-          linearPCMIsBigEndian: false,
-          linearPCMIsFloat: false,
-        },
-        web: {
-          mimeType: 'audio/wav',
-          bitsPerSecond: 128000,
-        },
-      };
-
-      const { recording } = await Audio.Recording.createAsync(recordingOptions);
-      setRecording(recording);
       setIsRecording(true);
       setDuration(0);
+      setRecordingUri(null);
+
+      // Start recording
+      AudioRecord.start();
 
       // Start duration timer
       intervalRef.current = setInterval(() => {
         setDuration(prev => prev + 0.1);
-      }, 100);
+      }, 100) as unknown as NodeJS.Timeout;
 
     } catch (err) {
       console.error('Failed to start recording', err);
       Alert.alert('Error', 'Failed to start recording. Please try again.');
+      setIsRecording(false);
     }
   };
 
   const stopRecording = async () => {
-    if (!recording) return;
-
     try {
       setIsRecording(false);
+      
       if (intervalRef.current) {
         clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
 
-      await recording.stopAndUnloadAsync();
-      const uri = recording.getURI();
-      setRecordingUri(uri);
-      setRecording(null);
+      // Stop recording and get the file path
+      const audioFile = await AudioRecord.stop();
+      console.log('Recording saved to:', audioFile);
+      setRecordingUri(audioFile);
+
+      console.log("recordingUri raw:", recordingUri);
+      const info = await FileSystem.getInfoAsync(recordingUri as any, { size: true });
+      console.log("FileSystem.getInfoAsync:", info);
       
-      console.log('Recording saved to:', uri);
     } catch (err) {
       console.error('Failed to stop recording', err);
       Alert.alert('Error', 'Failed to stop recording.');
@@ -127,7 +131,7 @@ export default function RecordScreen() {
       setSound(newSound);
       setIsPlaying(true);
 
-      newSound.setOnPlaybackStatusUpdate((status) => {
+      newSound.setOnPlaybackStatusUpdate((status: any) => {
         if (status.isLoaded && status.didJustFinish) {
           setIsPlaying(false);
         }
@@ -145,37 +149,24 @@ export default function RecordScreen() {
     try {
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
       const fileName = `piano_recording_${timestamp}.wav`;
+  
+      const fullRecordingPath = `${recordingUri}`;
+      console.log('Full recording path:', fullRecordingPath);    
+      const documentsDir = FileSystem.documentDirectory;
+      const newUri = `${documentsDir}${fileName}`;
       
-      if (Platform.OS === 'web') {
-        // For web, create a download link
-        const response = await fetch(recordingUri);
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = fileName;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-      } else {
-        // For mobile, copy to a more accessible location and share
-        const documentsDir = FileSystem.documentDirectory;
-        const newUri = `${documentsDir}${fileName}`;
-        
-        await FileSystem.copyAsync({
-          from: recordingUri,
-          to: newUri,
-        });
+      await FileSystem.copyAsync({
+        from: fullRecordingPath,
+        to: newUri,
+      });
 
-        if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(newUri, {
-            mimeType: 'audio/wav',
-            dialogTitle: 'Share Piano Recording',
-          });
-        } else {
-          Alert.alert('Success', `Recording saved to: ${newUri}`);
-        }
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(newUri, {
+          mimeType: 'audio/wav',
+          dialogTitle: 'Share Piano Recording',
+        });
+      } else {
+        Alert.alert('Success', `Recording saved to: ${newUri}`);
       }
     } catch (err) {
       console.error('Failed to share recording', err);
@@ -234,7 +225,7 @@ export default function RecordScreen() {
             <TouchableOpacity
               style={[styles.recordButton, styles.recordButtonInactive]}
               onPress={startRecording}
-              disabled={!!recording}
+              disabled={isRecording}
             >
               <Ionicons name="mic" size={32} color="white" />
             </TouchableOpacity>
@@ -299,8 +290,7 @@ export default function RecordScreen() {
           • Hold device close to piano for best quality{'\n'}
           • Minimize background noise{'\n'}
           • Record in a quiet environment{'\n'}
-          • Keep recordings under 30 seconds for analysis{'\n'}
-          • Use 44.1kHz sample rate for optimal pitch detection
+          • Records in 44.1kHz WAV format for optimal pitch detection
         </ThemedText>
       </View>
     </ThemedView>
@@ -311,6 +301,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 20,
+    paddingTop: 80,
     alignItems: 'center',
   },
   title: {
@@ -324,7 +315,7 @@ const styles = StyleSheet.create({
   },
   recordingArea: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 20,
   },
   durationContainer: {
     marginBottom: 30,

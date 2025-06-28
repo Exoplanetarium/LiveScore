@@ -43,3 +43,7 @@ dataset/
 
 # virtual environment
 env/
+
+# audio
+*.wav
+*.mp3

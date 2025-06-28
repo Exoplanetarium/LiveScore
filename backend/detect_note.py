@@ -3,12 +3,11 @@ import os
 import librosa
 import numpy as np
 import soundfile as sf
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from hmmlearn import hmm
+from numba import njit
 from scipy.signal import get_window
 
-# ─── Constants ────────────────────────────────────────────────────────────────
+#* ─── Constants ────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 44100
 FRAME_SIZE  = 2048
 HOP_SIZE    = 512
@@ -16,11 +15,24 @@ FFT_SIZE    = 2048
 MAG_SIZE    = FFT_SIZE // 2 + 1
 CQT_BINS    = 88
 WINDOW_TYPE = 'hann'
+CHORD_INTERVALS = {
+    'maj':  [0, 4, 7],
+    'min':  [0, 3, 7],
+    'dim':  [0, 3, 6],
+    'aug':  [0, 4, 8],
+    'sus2': [0, 2, 7],
+    'sus4': [0, 5, 7],
+    'maj7': [0, 4, 7, 11],
+    'min7': [0, 3, 7, 10],
+    'dom7': [0, 4, 7, 10],
+}
+ROOTS = ['C', 'C#', 'D', 'D#', 'E', 'F', 
+            'F#', 'G', 'G#', 'A', 'A#', 'B']
 
 # Precompute MIDI → Hz for CQT bins 21…108
 bin_freq = np.array([440.0 * 2**((m - 69)/12) for m in np.arange(21, 21 + CQT_BINS)])
 
-# ─── 1) Read + High-Pass Filter ────────────────────────────────────────────────
+#* ─── Read + High-Pass Filter ────────────────────────────────────────────────
 def read_wav(path):
     audio, sr = sf.read(path)
     if audio.ndim > 1:
@@ -37,7 +49,7 @@ def read_wav(path):
         prev_x, prev_y = audio[i], y[i]
     return y
 
-# ─── 2) Frame Audio ───────────────────────────────────────────────────────────
+#* ─── Frame Audio ───────────────────────────────────────────────────────────
 def frame_audio(audio):
     win = get_window(WINDOW_TYPE, FRAME_SIZE, fftbins=True)
     num_frames = 1 + (len(audio) - FRAME_SIZE)//HOP_SIZE
@@ -47,7 +59,7 @@ def frame_audio(audio):
     ])
     return frames  # shape (T, FRAME_SIZE)
 
-# ─── 3) Magnitude & Flux ──────────────────────────────────────────────────────
+#* ─── Magnitude & Flux ──────────────────────────────────────────────────────
 def compute_magnitude(frame):
     X = np.fft.rfft(frame, n=FFT_SIZE)
     return np.abs(X)  # shape (MAG_SIZE,)
@@ -74,7 +86,7 @@ def find_onsets(flux, window=50, K=1.5):
             onsets.append(t)
     return onsets
 
-# ─── 4) CQT & HPS Pitch Picker ────────────────────────────────────────────────
+#* ─── CQT & HPS Pitch Picker ────────────────────────────────────────────────
 def compute_cqt(frame):
     # returns length-CQT_BINS magnitude vector
     # librosa.cqt returns complex; we take abs
@@ -156,7 +168,97 @@ def pick_pitches_HPS(cqt_mag, max_voices=4, max_h=5):
     
     return sorted(notes)
 
-# ─── 5) TWM Pitch Picker ──────────────────────────────────────────────────────
+#* ─── Chord Detection ────────────────────────────────────────────────────────
+def make_templates():
+    """Build normalized pitch-class templates for common triads."""
+    templates, labels = [], []
+    for i, root in enumerate(ROOTS):
+        for quality, intervals in CHORD_INTERVALS.items():
+            vec = np.zeros(12, dtype=float)
+            for interval in intervals:
+                vec[(i + interval) % 12] = 1.0
+            vec /= np.linalg.norm(vec)
+            templates.append(vec)
+            labels.append(f"{root}:{quality}")
+    return np.stack(templates), labels
+
+CH_TEMPLATES, CH_LABELS = make_templates()
+# single‐note templates = identity
+NOTE_TEMPLATES = np.eye(12)
+NOTE_LABELS    = ROOTS.copy()
+
+def extract_chroma(audio, sr, hop_length=512):
+    C = librosa.feature.chroma_cqt(audio, sr=sr, hop_length=hop_length)
+    return C / (np.linalg.norm(C,axis=0,keepdims=True)+1e-6)
+
+
+def match_chords(chroma: np.ndarray,
+                 templates: np.ndarray,
+                 labels: list[str]):
+    """
+    Frame-wise template matching.
+
+    Args:
+      chroma:    shape (12, T) matrix of normalized chroma vectors
+      templates: shape (N, 12) array of chord templates
+      labels:    length-N list of chord names matching templates rows
+
+    Returns:
+      roots:    length-T list of chord labels (e.g. "C:maj")
+      roots_pc: length-T list of semitone classes (0=C,1=C#, …)
+      scores:   shape (N, T) similarity scores for each chord/template
+    """
+    # 1) Compute similarity between each template and each chroma frame
+    scores = templates.dot(chroma)         # (N, T)
+
+    # 2) Pick best-matching template per frame
+    best_idx = np.argmax(scores, axis=0)   # (T,)
+    roots    = [labels[i] for i in best_idx]
+
+    # 3) Map root names to pitch classes
+    roots_pc = []
+    for lbl in roots:
+        root_name = lbl.split(':')[0]  # e.g. "C" from "C:maj"
+        roots_pc.append(ROOTS.index(root_name))
+
+    return roots, roots_pc, scores
+
+def smooth_with_hmm(emission_probs: np.ndarray,
+                    labels: list[str],
+                    stay_prob: float = 0.9) -> list[str]:
+    """
+    emission_probs: shape (n_frames, n_states) of P(observed | state)
+    labels:        list of length n_states mapping state idx → label
+    """
+    n_states = emission_probs.shape[1]
+    # build HMM
+    model = hmm.MultinomialHMM(n_components=n_states, init_params="")
+    # uniform start
+    model.startprob_ = np.ones(n_states) / n_states
+    # high self-transition
+    tm = np.full((n_states, n_states), (1 - stay_prob)/(n_states-1))
+    np.fill_diagonal(tm, stay_prob)
+    model.transmat_ = tm
+    # emission probabilities (rows = states, cols = symbols)
+    # but MultinomialHMM expects shape (n_states, n_symbols),
+    # so we treat each frame as drawing one “symbol” (the best chord idx)
+    # instead, we’ll do custom decode: use log(emission_probs) as log-likelihoods.
+
+    # Run Viterbi
+    logp = np.log(emission_probs + 1e-8)  # avoid log(0)
+    _, state_seq = model.decode(logp, algorithm="viterbi")
+    return [labels[s] for s in state_seq]
+
+def detect_true_bass_pc(mag_frame, floor_frac=0.1):
+    """Find the semitone class of the lowest active bin in a magnitude spectrum."""
+    thresh = mag_frame.max() * floor_frac
+    active_bins = np.where(mag_frame >= thresh)[0]
+    if active_bins.size == 0:
+        return None
+    # lowest active bin index modulo 12 gives the pitch class
+    return int(active_bins.min() % 12)
+
+#* ─── TWM Pitch Picker ──────────────────────────────────────────────────────
 class Peak:
     def __init__(self,f,m,p,b): self.freq, self.mag, self.phase, self.bin = f,m,p,b
 
@@ -266,7 +368,7 @@ def detect_pitch_yin_enhanced(frame, min_freq=50, max_freq=800, threshold=0.1, d
     # Use longer frame for better low frequency resolution
     if len(frame) < 4096:
         # Zero-pad to get better frequency resolution for low notes
-        padded_frame = np.zeros(8192)  # Even longer for better low-freq resolution
+        padded_frame = np.zeros(4096) 
         padded_frame[:len(frame)] = frame
         frame = padded_frame
     
@@ -282,31 +384,11 @@ def detect_pitch_yin_enhanced(frame, min_freq=50, max_freq=800, threshold=0.1, d
     if min_period >= max_period or max_period <= min_period + 10:
         return None
     
-    # Step 1: Difference function (squared difference)
-    diff_func = np.zeros(max_period + 1)
-    
-    for tau in range(min_period, max_period + 1):
-        diff_sum = 0
-        for j in range(len(windowed) - tau):
-            diff = windowed[j] - windowed[j + tau]
-            diff_sum += diff * diff
-        diff_func[tau] = diff_sum
-    
-    # Step 2: Cumulative mean normalized difference function
-    # This is the key improvement of YIN over autocorrelation
-    cmnd_func = np.ones_like(diff_func)
-    cmnd_func[0] = 1
-    
-    running_sum = 0
-    for tau in range(1, len(diff_func)):
-        running_sum += diff_func[tau]
-        if running_sum > 0:
-            cmnd_func[tau] = diff_func[tau] / (running_sum / tau)
-        else:
-            cmnd_func[tau] = 1
-    
+    # Step 1: Difference function (squared difference) and CMND using JIT
+    diff_func = _yin_diff(windowed, min_period, max_period)
+    cmnd_func = _yin_cmnd(diff_func)
+
     # Step 3: Absolute threshold - find first minimum below threshold
-    # Use adaptive threshold for better low-frequency detection
     adaptive_threshold = threshold
     best_period = None
     
@@ -400,7 +482,34 @@ def detect_pitch_yin_enhanced(frame, min_freq=50, max_freq=800, threshold=0.1, d
     
     return None
 
-# ─── 6.5) Robust Pitch Detection with Octave Error Correction ─────────────────
+# JIT-compiled difference function for YIN
+@njit
+def _yin_diff(windowed, min_period, max_period):
+    N = windowed.shape[0]
+    diff_func = np.zeros(max_period + 1)
+    for tau in range(min_period, max_period + 1):
+        s = 0.0
+        for j in range(N - tau):
+            diff = windowed[j] - windowed[j + tau]
+            s += diff * diff
+        diff_func[tau] = s
+    return diff_func
+
+# JIT-compiled cumulative mean normalized difference function
+@njit
+def _yin_cmnd(diff_func):
+    N = diff_func.shape[0]
+    cmnd = np.ones(N)
+    cumsum = 0.0
+    for tau in range(1, N):
+        cumsum += diff_func[tau]
+        if cumsum > 0.0:
+            cmnd[tau] = diff_func[tau] * tau / cumsum
+        else:
+            cmnd[tau] = 1.0
+    return cmnd
+
+#* ─── Robust Pitch Detection with Octave Error Correction ─────────────────
 def detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug=False):
     """
     Robust pitch detection that combines multiple methods and corrects octave errors
@@ -661,7 +770,7 @@ def score_harmonic_fit(fundamental_freq, fft_mag, freqs):
     
     return score
 
-# ─── 6) Fundamental Frequency Detection ────────────────────────────────────────
+#* ─── Fundamental Frequency Detection ────────────────────────────────────────
 def detect_fundamental_simple(cqt_mag, min_confidence=0.1, debug=False):
     """Simple fundamental detection - find the strongest peak that has harmonics, accounting for missing fundamental"""
     max_mag = np.max(cqt_mag)
@@ -746,6 +855,7 @@ def detect_fundamental_simple(cqt_mag, min_confidence=0.1, debug=False):
         print(f"  Debug: Strongest peak is {midi_to_name_local(strongest_note)} (MIDI {strongest_note}) with mag={cqt_mag[strongest_peak_idx]:.3f}")
     
     # Only consider missing fundamental if the best candidate has very weak fundamental support
+    # and there's strong evidence of harmonics without a clear fundamental
     best_note_idx = best_note - 21
     if (0 <= best_note_idx < len(cqt_mag) and 
         cqt_mag[best_note_idx] < 0.3 * max_mag):  # Only if fundamental is quite weak
@@ -871,10 +981,108 @@ def detect_fundamental_from_fft(frame, min_freq=40, max_freq=600):
     
     return None, freqs, fft_mag
 
-# ─── 7) Main Pipeline ─────────────────────────────────────────────────────────
+#* ─── Main Analysis Function ──────────────────────────────────────────────────
+def detect_single_note_frame(frame, debug=False):
+    fft_note, freqs, fft_mag = detect_fundamental_from_fft(frame)
+    cqt_mag = compute_cqt(frame)
+    simple_note = detect_fundamental_simple(cqt_mag, debug=debug)
+    hps_notes = pick_pitches_HPS(cqt_mag, max_voices=1)
+    robust_note, robust_method = detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug=debug)
+
+    if robust_note:
+        return {"label": robust_note, "method": f"Robust ({robust_method})", "confidence": 0.9}
+    if simple_note and hps_notes and simple_note == hps_notes[0]:
+        return {"label": simple_note, "method": "CQT (consensus)", "confidence": 0.8}
+    if simple_note:
+        return {"label": simple_note, "method": "CQT (simple)", "confidence": 0.7}
+    if hps_notes:
+        return {"label": hps_notes[0], "method": "CQT (HPS)", "confidence": 0.6}
+    if fft_note:
+        return {"label": fft_note, "method": "FFT", "confidence": 0.5}
+    return {"label": None, "method": "None", "confidence": 0.0}
+
+
+def detect_chord_frame(chroma, mag, frame_idx):
+    note_scores = NOTE_TEMPLATES.dot(chroma[:, frame_idx])
+    chord_scores = CH_TEMPLATES.dot(chroma[:, frame_idx])
+    best_note_score = note_scores.max()
+    best_chord_score = chord_scores.max()
+
+    # Chord result
+    ci = int(np.argmax(chord_scores))
+    chord_label = CH_LABELS[ci]
+    root_pc = ROOTS.index(chord_label.split(':')[0])
+    bass_pc = detect_true_bass_pc(mag[:, frame_idx])
+    if bass_pc is None or bass_pc == root_pc:
+        inv = 'root'
+    elif bass_pc in {(root_pc+3)%12, (root_pc+4)%12}:
+        inv = 'first'
+    elif bass_pc == (root_pc+7)%12:
+        inv = 'second'
+    else:
+        inv = 'slash'
+
+    return {
+        "type": "chord",
+        "label": chord_label,
+        "inversion": inv,
+        "confidence": float(best_chord_score),
+        "note_score": float(best_note_score)
+    }
+
+def analyze_audio(wav_path_or_array, debug=False):
+    # 1) Load
+    if isinstance(wav_path_or_array, str):
+        audio = read_wav(wav_path_or_array)
+    else:
+        audio = wav_path_or_array
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=1)
+
+    # 2) Onsets
+    frames = frame_audio(audio)
+    mags = np.array([compute_magnitude(f) for f in frames])
+    flux = normalize(compute_flux(mags))
+    onsets = find_onsets(flux)
+
+    # 3) Precompute chroma & full-range CQT
+    chroma = extract_chroma(audio, SAMPLE_RATE, hop_length=HOP_SIZE)
+    C_full = np.abs(librosa.cqt(
+        audio, sr=SAMPLE_RATE,
+        hop_length=HOP_SIZE,
+        n_bins=CQT_BINS,
+        bins_per_octave=12,
+        fmin=librosa.note_to_hz('C1')
+    ))
+
+    results = {"onsets": [], "notes": [], "chords": []}
+    # 4) Process each onset frame
+    for onset in onsets:
+        t = onset * HOP_SIZE / SAMPLE_RATE
+        frame = frames[min(onset + 3, len(frames)-1)]
+
+        # Decide single note vs chord
+        note_score = NOTE_TEMPLATES.dot(chroma[:, onset]).max()
+        chord_score = CH_TEMPLATES.dot(chroma[:, onset]).max()
+        if debug:
+            print(f"Frame {onset}: note_score={note_score:.3f}, chord_score={chord_score:.3f}")
+
+        if note_score >= chord_score:
+            res = detect_single_note_frame(frame, debug)
+            if res["label"] is not None:
+                res.update({"time_seconds": round(t, 3), "frame_index": int(onset)})
+                results["notes"].append(res)
+        else:
+            res = detect_chord_frame(chroma, C_full, onset)
+            res.update({"time_seconds": round(t, 3), "frame_index": int(onset)})
+            results["chords"].append(res)
+
+    return results
+
+#* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Use absolute path to audio file
-    wav_path = os.path.join(os.path.dirname(__file__), 'audio', 'test.wav')
+    wav_path = os.path.join(os.path.dirname(__file__), 'audio', 'test_chromatic.wav')
     print(f"Reading audio from: {wav_path}")
     try:
         audio = read_wav(wav_path)

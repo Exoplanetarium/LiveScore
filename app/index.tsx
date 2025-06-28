@@ -5,6 +5,8 @@ import { Alert, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-nat
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 
+const BACKEND_URL = 'https://livescore-production-4dfa.up.railway.app';
+
 export default function AnalyzeScreen() {
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [analysisResults, setAnalysisResults] = useState<any>(null);
@@ -32,15 +34,45 @@ export default function AnalyzeScreen() {
 
     setIsAnalyzing(true);
     try {
-      // TODO: Connect to your Python backend for analysis
-      // For now, this is a placeholder
-      await new Promise(resolve => setTimeout(resolve, 2000)); // Simulate analysis
+      console.log('Preparing file upload:', selectedFile);
       
+      // Create proper FormData with file
+      const formData = new FormData();
+      
+      // This is the correct way to append a file in React Native
+      formData.append('file', {
+        uri: selectedFile,
+        name: 'audio.aac',
+        type: 'audio/aac',
+      } as any);
+      
+      console.log('Sending file to server...');
+      
+      const response = await fetch(`${BACKEND_URL}/analyze`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      console.log('Response status:', response.status);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Server error:', errorText);
+        throw new Error(`Server error: ${response.status} - ${errorText}`);
+      }
+
+      const results = await response.json();
+      console.log('Selected file:', selectedFile);
+
+      // Transform results for display
       setAnalysisResults({
-        onsets: [1, 2, 3],
-        notes: ['C4', 'E4', 'G4'],
-        confidence: 0.87,
-        method: 'Robust (YIN)',
+        onsets: results.onsets.map((onset: any) => onset.time_seconds),
+        notes: results.notes.map((note: any) => note.note_name),
+        confidence: results.notes.length > 0 
+          ? results.notes.reduce((acc: number, note: any) => acc + note.confidence, 0) / results.notes.length 
+          : 0,
+        method: results.notes.length > 0 ? results.notes[0].method : 'No detection',
+        details: results, // Store full results for debugging
       });
     } catch (err) {
       console.error('Analysis error:', err);
@@ -107,7 +139,7 @@ export default function AnalyzeScreen() {
           <View style={styles.resultItem}>
             <ThemedText style={styles.resultLabel}>Detected Notes:</ThemedText>
             <ThemedText style={styles.resultValue}>
-              {analysisResults.notes.join(', ')}
+              {analysisResults.notes.length > 0 ? analysisResults.notes.join(', ') : 'None detected'}
             </ThemedText>
           </View>
           
@@ -119,7 +151,7 @@ export default function AnalyzeScreen() {
           </View>
           
           <View style={styles.resultItem}>
-            <ThemedText style={styles.resultLabel}>Confidence:</ThemedText>
+            <ThemedText style={styles.resultLabel}>Average Confidence:</ThemedText>
             <ThemedText style={styles.resultValue}>
               {(analysisResults.confidence * 100).toFixed(1)}%
             </ThemedText>
@@ -131,6 +163,40 @@ export default function AnalyzeScreen() {
               {analysisResults.method}
             </ThemedText>
           </View>
+
+          {analysisResults.details?.analysis_summary && (
+            <>
+              <View style={styles.resultItem}>
+                <ThemedText style={styles.resultLabel}>Duration:</ThemedText>
+                <ThemedText style={styles.resultValue}>
+                  {analysisResults.details.analysis_summary.duration_seconds.toFixed(2)}s
+                </ThemedText>
+              </View>
+              
+              {analysisResults.details.analysis_summary.detected_fundamental && (
+                <View style={styles.resultItem}>
+                  <ThemedText style={styles.resultLabel}>Fundamental:</ThemedText>
+                  <ThemedText style={styles.resultValue}>
+                    {analysisResults.details.analysis_summary.detected_fundamental.note_name}
+                  </ThemedText>
+                </View>
+              )}
+            </>
+          )}
+
+          {/* Show individual note timings */}
+          {analysisResults.details?.notes && analysisResults.details.notes.length > 0 && (
+            <View style={styles.noteTimings}>
+              <ThemedText style={styles.resultLabel}>Note Timings:</ThemedText>
+              {analysisResults.details.notes.map((note: any, index: number) => (
+                <View key={index} style={styles.noteItem}>
+                  <ThemedText style={styles.noteText}>
+                    {note.time_seconds.toFixed(2)}s: {note.note_name} ({(note.confidence * 100).toFixed(0)}%)
+                  </ThemedText>
+                </View>
+              ))}
+            </View>
+          )}
         </ScrollView>
       )}
 
@@ -148,6 +214,7 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 20,
+    paddingTop: 80,
   },
   title: {
     marginBottom: 8,
@@ -240,5 +307,20 @@ const styles = StyleSheet.create({
   infoText: {
     opacity: 0.7,
     fontSize: 12,
+  },
+  noteTimings: {
+    marginTop: 15,
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(128, 128, 128, 0.2)',
+  },
+  noteItem: {
+    paddingVertical: 4,
+    paddingLeft: 10,
+  },
+  noteText: {
+    fontSize: 14,
+    opacity: 0.8,
+    fontFamily: 'monospace',
   },
 });
