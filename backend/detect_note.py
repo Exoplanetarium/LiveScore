@@ -5,7 +5,7 @@ import numpy as np
 import soundfile as sf
 from hmmlearn import hmm
 from numba import njit
-from scipy.signal import get_window
+from scipy.signal import get_window, medfilt
 
 #* ─── Constants ────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 44100
@@ -119,7 +119,7 @@ def pick_pitches_HPS(cqt_mag, max_voices=4, max_h=5):
 
     residual = cqt_mag.copy()
     notes = []
-      # Normalize CQT for better thresholding
+    # Normalize CQT for better thresholding
     max_mag = np.max(cqt_mag)
     if max_mag == 0:
         return notes
@@ -188,9 +188,8 @@ NOTE_TEMPLATES = np.eye(12)
 NOTE_LABELS    = ROOTS.copy()
 
 def extract_chroma(audio, sr, hop_length=512):
-    C = librosa.feature.chroma_cqt(audio, sr=sr, hop_length=hop_length)
-    return C / (np.linalg.norm(C,axis=0,keepdims=True)+1e-6)
-
+    C = librosa.feature.chroma_cqt(y=audio, sr=sr, hop_length=hop_length)
+    return C / (np.linalg.norm(C, axis=0, keepdims=True) + 1e-6)
 
 def match_chords(chroma: np.ndarray,
                  templates: np.ndarray,
@@ -256,7 +255,7 @@ def detect_true_bass_pc(mag_frame, floor_frac=0.1):
     if active_bins.size == 0:
         return None
     # lowest active bin index modulo 12 gives the pitch class
-    return int(active_bins.min() % 12)
+    return int(active_bins.min().item() % 12)
 
 #* ─── TWM Pitch Picker ──────────────────────────────────────────────────────
 class Peak:
@@ -983,33 +982,104 @@ def detect_fundamental_from_fft(frame, min_freq=40, max_freq=600):
 
 #* ─── Main Analysis Function ──────────────────────────────────────────────────
 def detect_single_note_frame(frame, debug=False):
+    def midi_to_name(m):
+        names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+        return f"{names[m%12]}{(m//12)-1}"
+
+    # Method 1: FFT-based detection
     fft_note, freqs, fft_mag = detect_fundamental_from_fft(frame)
+    if debug and fft_note:
+        print(f"  FFT method: {midi_to_name(fft_note)} (MIDI {fft_note})")
+    
+    # Method 2: CQT-based detection
     cqt_mag = compute_cqt(frame)
-    simple_note = detect_fundamental_simple(cqt_mag, debug=debug)
+    
+    # Method 3: Simple CQT method
+    simple_note = detect_fundamental_simple(cqt_mag)
+    if debug and simple_note:
+        print(f"  Simple method: {midi_to_name(simple_note)}")
+    
+    # Method 4: HPS method
     hps_notes = pick_pitches_HPS(cqt_mag, max_voices=1)
-    robust_note, robust_method = detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug=debug)
-
+    if debug and hps_notes:
+        print(f"  HPS method: {midi_to_name(hps_notes[0])}")
+    
+    # Method 5: Robust detection with octave correction
+    robust_note, robust_method = detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug)
+    if debug and robust_note:
+        print(f"  Robust method: {midi_to_name(robust_note)} (via {robust_method})")
+    
+    # Choose the best method (prefer robust method if available)
     if robust_note:
-        return {"label": robust_note, "method": f"Robust ({robust_method})", "confidence": 0.9}
-    if simple_note and hps_notes and simple_note == hps_notes[0]:
-        return {"label": simple_note, "method": "CQT (consensus)", "confidence": 0.8}
-    if simple_note:
-        return {"label": simple_note, "method": "CQT (simple)", "confidence": 0.7}
-    if hps_notes:
-        return {"label": hps_notes[0], "method": "CQT (HPS)", "confidence": 0.6}
-    if fft_note:
-        return {"label": fft_note, "method": "FFT", "confidence": 0.5}
-    return {"label": None, "method": "None", "confidence": 0.0}
+        final_note = robust_note
+        method_used = f"Robust ({robust_method})"
+        confidence = 0.9
+    elif simple_note and hps_notes and simple_note == hps_notes[0]:
+        # Both CQT methods agree
+        final_note = simple_note
+        method_used = "CQT (consensus)"
+        confidence = 0.8
+    elif simple_note:
+        # Use simple CQT method as primary
+        final_note = simple_note
+        method_used = "CQT (simple)"
+        confidence = 0.7
+    elif hps_notes:
+        # Fall back to HPS
+        final_note = hps_notes[0]
+        method_used = "CQT (HPS)"
+        confidence = 0.6
+    elif fft_note:
+        # FFT as last resort
+        final_note = fft_note
+        method_used = "FFT"
+        confidence = 0.5
+    else:
+        final_note = None
+        method_used = "None"
+        confidence = 0.0
+    
+    # Add note information if detected
+    if final_note:
+        note_info = {
+            "time_seconds": 0,
+            "frame_index": 0,
+            "midi_note": int(final_note),
+            "note_name": midi_to_name(final_note),
+            "frequency_hz": round(440.0 * 2**((final_note - 69)/12), 2),
+            "method": method_used,
+            "confidence": confidence
+        }
+        
+    return note_info
 
+def detect_chord_frame(chroma, mag, frame_idx, debug=False):
+    c_frame = chroma[:, frame_idx]
 
-def detect_chord_frame(chroma, mag, frame_idx):
-    note_scores = NOTE_TEMPLATES.dot(chroma[:, frame_idx])
-    chord_scores = CH_TEMPLATES.dot(chroma[:, frame_idx])
-    best_note_score = note_scores.max()
+    score = 0
+
+    # 2) Chroma-peak ratio check
+    sorted_bins = np.sort(c_frame)[::-1]
+    if sorted_bins[1] >= 0.5 * sorted_bins[0]:
+        score += 1
+
+    # 3) Template vs note score
+    note_score = NOTE_TEMPLATES.dot(c_frame).max()
+    chord_scores = CH_TEMPLATES.dot(c_frame)
     best_chord_score = chord_scores.max()
+    if best_chord_score > note_score:
+        score += 1
+
+    if debug:
+        print(f"[ChordGate] frame={frame_idx}, pts={score}/2, "
+              f"ratio={sorted_bins[1]/sorted_bins[0]:.2f}, "
+              f"note>chord? {note_score:.2f}>{best_chord_score:.2f}")
+
+    if score < 1:
+        return None
 
     # Chord result
-    ci = int(np.argmax(chord_scores))
+    ci = int(np.argmax(chord_scores).item())
     chord_label = CH_LABELS[ci]
     root_pc = ROOTS.index(chord_label.split(':')[0])
     bass_pc = detect_true_bass_pc(mag[:, frame_idx])
@@ -1026,8 +1096,8 @@ def detect_chord_frame(chroma, mag, frame_idx):
         "type": "chord",
         "label": chord_label,
         "inversion": inv,
-        "confidence": float(best_chord_score),
-        "note_score": float(best_note_score)
+        "confidence": best_chord_score,
+        "note_score": note_score
     }
 
 def analyze_audio(wav_path_or_array, debug=False):
@@ -1048,41 +1118,228 @@ def analyze_audio(wav_path_or_array, debug=False):
     # 3) Precompute chroma & full-range CQT
     chroma = extract_chroma(audio, SAMPLE_RATE, hop_length=HOP_SIZE)
     C_full = np.abs(librosa.cqt(
-        audio, sr=SAMPLE_RATE,
+        y=audio, 
+        sr=SAMPLE_RATE,
         hop_length=HOP_SIZE,
         n_bins=CQT_BINS,
         bins_per_octave=12,
         fmin=librosa.note_to_hz('C1')
     ))
 
+    # 4) Compute gating features
+    T = chroma.shape[1]
+    peak_ratios = np.zeros(T)
+    score_ratios = np.zeros(T)
+    spec_entropy = np.zeros(T)
+    spec_flatness = np.zeros(T)
+    for i in range(T):
+        bins = np.sort(chroma[:, i])[::-1]
+        peak_ratios[i] = bins[1] / (bins[0] + 1e-9)
+        note_sc = NOTE_TEMPLATES.dot(chroma[:,i]).max()
+        chord_sc = CH_TEMPLATES.dot(chroma[:,i]).max()
+        score_ratios[i] = chord_sc / (note_sc + 1e-9)
+        mf = C_full[:, i]
+        p = mf / (mf.sum() + 1e-9)
+        spec_entropy[i] = -np.sum(p * np.log(p + 1e-9))
+        geo = np.exp(np.mean(np.log(mf + 1e-9)))
+        arith = np.mean(mf + 1e-9)
+        spec_flatness[i] = geo / arith
+
+    # 4.1) Dynamic thresholds
+    thr_peak       = np.median(peak_ratios) + np.std(peak_ratios)
+    thr_score      = np.median(score_ratios) + 1.5*np.std(score_ratios)
+    thr_entropy    = np.median(spec_entropy) + 0.5*np.std(spec_entropy)
+    thr_flatness   = np.median(spec_flatness) + 0.5*np.std(spec_flatness)
+
+    # 4.2) Smooth gate across time
+    gate_raw = ((peak_ratios>thr_peak).astype(int)
+                + (score_ratios>thr_score).astype(int)
+                + (spec_entropy>thr_entropy).astype(int)
+                + (spec_flatness>thr_flatness).astype(int)) >= 3
+    gate_smooth = medfilt(gate_raw.astype(int), kernel_size=5).astype(bool)
+
     results = {"onsets": [], "notes": [], "chords": []}
     # 4) Process each onset frame
-    for onset in onsets:
-        t = onset * HOP_SIZE / SAMPLE_RATE
-        frame = frames[min(onset + 3, len(frames)-1)]
+    for i, onset in enumerate(onsets):
+        idx = min(onset + 3, len(frames)-1)
+        frame = frames[idx]
+        
+        # Convert frame index to time
+        time_seconds = onset * HOP_SIZE / SAMPLE_RATE
 
-        # Decide single note vs chord
-        note_score = NOTE_TEMPLATES.dot(chroma[:, onset]).max()
-        chord_score = CH_TEMPLATES.dot(chroma[:, onset]).max()
         if debug:
-            print(f"Frame {onset}: note_score={note_score:.3f}, chord_score={chord_score:.3f}")
+            print(f"\n=== ONSET {i+1} at frame {onset} ({time_seconds:.2f}s) ===")
 
-        if note_score >= chord_score:
-            res = detect_single_note_frame(frame, debug)
-            if res["label"] is not None:
-                res.update({"time_seconds": round(t, 3), "frame_index": int(onset)})
-                results["notes"].append(res)
+        if gate_smooth[onset]:
+            # chord detection on harmonic
+            res = detect_chord_frame(chroma, C_full, onset, debug)
+            if res:
+                res.update({"time_seconds":round(time_seconds,3), "frame_index":int(onset)})
+                results["chords"].append(res)
         else:
-            res = detect_chord_frame(chroma, C_full, onset)
-            res.update({"time_seconds": round(t, 3), "frame_index": int(onset)})
-            results["chords"].append(res)
+            # note detection on original
+            res = detect_single_note_frame(frame, debug)
+            if res["midi_note"]:
+                res.update({"time_seconds":round(time_seconds,3), "frame_index":int(onset)})
+                results["notes"].append(res)
 
+    # Add analysis summary with proper Python types
+    results["analysis_summary"] = {
+        "total_onsets": len(onsets),
+        "total_notes": len(results["notes"]),
+        "total_chords": len(results["chords"]),
+        "duration_seconds": float(len(audio) / SAMPLE_RATE),
+        "sample_rate": int(SAMPLE_RATE)
+    }
+
+    return results
+
+#* ─── Command-line Analysis Function ───────────────────────────────────────────
+def analyze_audio_cmdline(wav_path_or_array):
+    """
+    Command-line focused audio analysis that only does single note detection.
+    Based on the original implementation before chord detection was added.
+    """
+    try:
+        # Read audio
+        if isinstance(wav_path_or_array, str):
+            audio = read_wav(wav_path_or_array)
+            print(f"✓ Loaded audio file: {wav_path_or_array}")
+        else:
+            audio = wav_path_or_array
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+            print("✓ Loaded audio array")
+    except Exception as e:
+        print(f"✗ Failed to read audio: {str(e)}")
+        return {"error": f"Failed to read audio: {str(e)}"}
+    
+    def midi_to_name(m):
+        names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
+        return f"{names[m%12]}{(m//12)-1}"
+    
+    print(f"Audio duration: {len(audio) / SAMPLE_RATE:.2f}s")
+    
+    # Traditional onset detection
+    print("🔍 Detecting onsets...")
+    frames = frame_audio(audio)
+    mags = np.array([compute_magnitude(f) for f in frames])
+    flux = normalize(compute_flux(mags))
+    onsets = find_onsets(flux)
+    
+    print(f"✓ Found {len(onsets)} onsets at frames: {onsets}")
+    
+    # Results structure
+    results = {
+        "onsets": [],
+        "notes": [],
+        "analysis_summary": {
+            "total_onsets": len(onsets),
+            "duration_seconds": float(len(audio) / SAMPLE_RATE),
+            "sample_rate": int(SAMPLE_RATE)
+        }
+    }
+    
+    # Process each onset
+    print("🎵 Analyzing notes at each onset...")
+    for i, onset in enumerate(onsets):
+        idx = min(onset + 3, len(frames)-1)
+        frame = frames[idx]
+        
+        # Convert frame index to time
+        time_seconds = float(onset * HOP_SIZE / SAMPLE_RATE)
+        
+        print(f"\n=== ONSET {i+1}/{len(onsets)} at frame {onset} ({time_seconds:.2f}s) ===")
+        
+        # Method 1: FFT-based detection
+        fft_note, freqs, fft_mag = detect_fundamental_from_fft(frame)
+        if fft_note:
+            print(f"  FFT method: {midi_to_name(fft_note)} (MIDI {fft_note})")
+        
+        # Method 2: CQT-based detection
+        cqt_mag = compute_cqt(frame)
+        
+        # Method 3: Simple CQT method
+        simple_note = detect_fundamental_simple(cqt_mag)
+        if simple_note:
+            print(f"  Simple method: {midi_to_name(simple_note)}")
+        
+        # Method 4: HPS method
+        hps_notes = pick_pitches_HPS(cqt_mag, max_voices=1)
+        if hps_notes:
+            print(f"  HPS method: {midi_to_name(hps_notes[0])}")
+        
+        # Method 5: Robust detection with octave correction
+        robust_note, robust_method = detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug=False)
+        if robust_note:
+            print(f"  Robust method: {midi_to_name(robust_note)} (via {robust_method})")
+        
+        # Choose the best method (prefer robust method if available)
+        if robust_note:
+            final_note = robust_note
+            method_used = f"Robust ({robust_method})"
+            confidence = 0.9
+        elif simple_note and hps_notes and simple_note == hps_notes[0]:
+            # Both CQT methods agree
+            final_note = simple_note
+            method_used = "CQT (consensus)"
+            confidence = 0.8
+        elif simple_note:
+            # Use simple CQT method as primary
+            final_note = simple_note
+            method_used = "CQT (simple)"
+            confidence = 0.7
+        elif hps_notes:
+            # Fall back to HPS
+            final_note = hps_notes[0]
+            method_used = "CQT (HPS)"
+            confidence = 0.6
+        elif fft_note:
+            # FFT as last resort
+            final_note = fft_note
+            method_used = "FFT"
+            confidence = 0.5
+        else:
+            final_note = None
+            method_used = "None"
+            confidence = 0.0
+        
+        # Add onset information
+        onset_info = {
+            "time_seconds": round(time_seconds, 3),
+            "frame_index": int(onset)
+        }
+        results["onsets"].append(onset_info)
+        
+        # Add note information if detected
+        if final_note:
+            note_info = {
+                "time_seconds": round(time_seconds, 3),
+                "frame_index": int(onset),
+                "midi_note": int(final_note),
+                "note_name": midi_to_name(final_note),
+                "frequency_hz": round(440.0 * 2**((final_note - 69)/12), 2),
+                "method": method_used,
+                "confidence": confidence
+            }
+            results["notes"].append(note_info)
+            
+            print(f"  ➤ DETECTED: {midi_to_name(final_note)} (method: {method_used}, confidence: {confidence:.1f})")
+        else:
+            print(f"  ➤ No note detected")
+    
+    print(f"\n🎼 Analysis complete!")
+    print(f"   Total onsets: {len(results['onsets'])}")
+    print(f"   Notes detected: {len(results['notes'])}")
+    print(f"   Detection rate: {len(results['notes'])/len(results['onsets'])*100:.1f}%")
+    
     return results
 
 #* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Use absolute path to audio file
     wav_path = os.path.join(os.path.dirname(__file__), 'audio', 'test_chromatic.wav')
+    print(f"🎹 Piano Note Detection - Command Line")
     print(f"Reading audio from: {wav_path}")
     try:
         audio = read_wav(wav_path)
@@ -1090,111 +1347,13 @@ if __name__ == "__main__":
         print(f"Failed to open audio file: {e}")
         exit()
 
-    # Traditional onset detection
-    frames = frame_audio(audio)                      # (T, FRAME_SIZE)
-    mags   = np.array([compute_magnitude(f) for f in frames])
-    flux   = normalize(compute_flux(mags))
-    traditional_onsets = find_onsets(flux) # onsets in frame-indices    
-    onsets = traditional_onsets
-    print(f"Using traditional onset detection: {len(onsets)} onsets at frames: {onsets}")    # Prepare for CQT + pitch detection
-    fft_full = np.fft.rfft(frames, n=FFT_SIZE, axis=1)  # (T, MAG_SIZE) complex
-
-    def midi_to_name(m):
-        names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-        return f"{names[m%12]}{(m//12)-1}"
-
-    # Process each onset
-    for i, onset in enumerate(onsets):  
-        idx = min(onset + 3, len(frames)-1)
-        frame = frames[idx]
-        
-        print(f"\n=== ONSET {i+1} at frame {onset} ===")
-        
-        # Method 1: FFT-based detection
-        fft_note, freqs, fft_mag = detect_fundamental_from_fft(frame)
-        if fft_note:
-            print(f"FFT method: {midi_to_name(fft_note)} (MIDI {fft_note})")
-        else:
-            print("FFT method: No note detected")
-        
-        # Method 2: CQT-based detection
-        cqt_mag = compute_cqt(frame)
-        
-        # Show top CQT bins
-        top_bins = np.argsort(cqt_mag)[-5:][::-1]
-        print("Top 5 CQT bins:")
-        for j, bin_idx in enumerate(top_bins):
-            midi_note = 21 + bin_idx
-            freq = 440.0 * 2**((midi_note - 69)/12)
-            print(f"  {j+1}. {midi_to_name(midi_note)} ({freq:.1f}Hz) - mag: {cqt_mag[bin_idx]:.3f}")
-        
-        # Show top FFT peaks
-        peak_indices = np.argsort(fft_mag)[-10:][::-1]
-        print("Top 5 FFT peaks:")
-        fft_peaks_shown = 0
-        for j, peak_idx in enumerate(peak_indices):
-            if peak_idx > 0 and fft_peaks_shown < 5:  # Skip DC component
-                freq = freqs[peak_idx]
-                if 50 < freq < 2000:  # Only show reasonable frequencies
-                    try:
-                        midi_note = 69 + 12 * np.log2(freq / 440.0)
-                        midi_note_rounded = int(round(midi_note))
-                        if 21 <= midi_note_rounded <= 108:
-                            print(f"  {fft_peaks_shown+1}. {midi_to_name(midi_note_rounded)} ({freq:.1f}Hz) - mag: {fft_mag[peak_idx]:.3f}")
-                            fft_peaks_shown += 1
-                    except:
-                        pass
-        
-        # Method 3: HPS on CQT
-        hps_notes = pick_pitches_HPS(cqt_mag, max_voices=1)
-        if hps_notes:
-            print(f"HPS method: {midi_to_name(hps_notes[0])}")
-        else:
-            print("HPS method: No note detected")        # Method 4: Simple fundamental detection
-        simple_note = detect_fundamental_simple(cqt_mag, debug=False)
-        if simple_note:
-            print(f"Simple method: {midi_to_name(simple_note)}")
-        else:
-            print("Simple method: No note detected")
-          # Method 5: Robust detection with octave correction
-        robust_note, robust_method = detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug=True)
-        if robust_note:
-            print(f"Robust method: {midi_to_name(robust_note)} (via {robust_method})")
-        else:
-            print("Robust method: No note detected")
-        
-        # Choose the best method (prefer robust method if available)
-        if robust_note:
-            final_note = robust_note
-            method_used = f"Robust ({robust_method})"
-        elif simple_note and hps_notes and simple_note == hps_notes[0]:
-            # Both CQT methods agree
-            final_note = simple_note
-            method_used = "CQT (consensus)"
-        elif simple_note:
-            # Use simple CQT method as primary
-            final_note = simple_note
-            method_used = "CQT (simple)"
-        elif hps_notes:
-            # Fall back to HPS
-            final_note = hps_notes[0]
-            method_used = "CQT (HPS)"
-        elif fft_note:
-            # FFT as last resort
-            final_note = fft_note
-            method_used = "FFT"
-        else:
-            final_note = None
-            method_used = "None"
-        
-        if final_note:
-            print(f"FINAL: {midi_to_name(final_note)} - Single note (method: {method_used})")
-        else:
-            print("FINAL: No note detected")
+    results = analyze_audio_cmdline(audio)
     
-    # Simple fundamental frequency detection - find the strongest peak that has harmonics
-    simple_f0 = detect_fundamental_simple(cqt_mag)
-    if simple_f0 is not None:
-        print(f"\nDetected fundamental frequency: {midi_to_name(simple_f0)}")
+    if "error" not in results:
+        print("\n" + "="*50)
+        print("FINAL RESULTS:")
+        print("="*50)
+        for note in results["notes"]:
+            print(f"{note['time_seconds']:6.2f}s: {note['note_name']:>4} ({note['frequency_hz']:6.1f}Hz) - {note['method']}")
     else:
-        print("\nFundamental frequency detection failed.")
+        print(f"Analysis failed: {results['error']}")

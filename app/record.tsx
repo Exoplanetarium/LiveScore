@@ -24,7 +24,7 @@ export default function RecordScreen() {
       channels: 1,
       bitsPerSample: 16,
       audioSource: 6, // VOICE_RECOGNITION
-      wavFile: 'audio.wav'
+      wavFile: wavPath
     };
     
     AudioRecord.init(options);

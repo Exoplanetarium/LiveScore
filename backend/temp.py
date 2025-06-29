@@ -29,38 +29,13 @@ def analyze_audio(wav_path_or_array, debug=False):
     if debug:
         print("Performing chord analysis...")
     
-    try:
-        # Compute CQT for the entire audio for chord analysis
-        cqt_full = np.abs(librosa.cqt(
-            audio, sr=SAMPLE_RATE,
-            hop_length=HOP_SIZE,
-            n_bins=CQT_BINS,
-            bins_per_octave=12,
-            fmin=bin_freq[0],
-            filter_scale=1.0,
-            norm=1,
-            window='hann'
-        ))
-        
-        # Detect chords and inversions
-        chord_progression = detect_chords_and_inversions(cqt_full, audio, SAMPLE_RATE, HOP_SIZE)
-        
-        if debug:
-            print(f"Detected {len(chord_progression)} chord segments")
-            
-    except Exception as e:
-        if debug:
-            print(f"Chord analysis failed: {e}")
-        chord_progression = []
 
     # Results structure
     results = {
         "onsets": [],
         "notes": [],
-        "chords": chord_progression,
         "analysis_summary": {
             "total_onsets": len(onsets),
-            "total_chords": len(chord_progression),
             "duration_seconds": len(audio) / SAMPLE_RATE,
             "sample_rate": SAMPLE_RATE
         }
