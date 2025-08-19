@@ -1,10 +1,13 @@
 import os
+import warnings
+
+warnings.filterwarnings('ignore', module='librosa.*')
 
 import librosa
 import numpy as np
 import soundfile as sf
-from hmmlearn import hmm
 from numba import njit
+from scipy.optimize import nnls
 from scipy.signal import get_window, medfilt
 
 #* ─── Constants ────────────────────────────────────────────────────────────────
@@ -28,9 +31,21 @@ CHORD_INTERVALS = {
 }
 ROOTS = ['C', 'C#', 'D', 'D#', 'E', 'F', 
             'F#', 'G', 'G#', 'A', 'A#', 'B']
+test_benchmark = 'test_C3_E3_G3_C4_Cmaj_Fmaj7_Gdom7_Caug_Cmin.wav'
 
 # Precompute MIDI → Hz for CQT bins 21…108
 bin_freq = np.array([440.0 * 2**((m - 69)/12) for m in np.arange(21, 21 + CQT_BINS)])
+
+#* ─── Utility Functions ──────────────────────────────────────────────────────
+def note_to_name(note):
+    """Convert MIDI note number to a string name."""
+    if note < 21 or note > 108:
+        raise ValueError(f"Note {note} out of range (21-108)")
+    octave = (note // 12) - 1
+    pitch_class = note % 12
+    pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F',
+                        'F#', 'G', 'G#', 'A', 'A#', 'B']
+    return f"{pitch_classes[pitch_class]}{octave}"
 
 #* ─── Read + High-Pass Filter ────────────────────────────────────────────────
 def read_wav(path):
@@ -168,9 +183,112 @@ def pick_pitches_HPS(cqt_mag, max_voices=4, max_h=5):
     
     return sorted(notes)
 
+#* ─── Harmonic mixture model (BIC selection) ──────────────────────────────
+def _precompute_fft_freqs(sr=SAMPLE_RATE, n_fft=FFT_SIZE):
+    return np.fft.rfftfreq(n_fft, 1.0/sr)
+
+_FFT_FREQS = _precompute_fft_freqs()
+
+def _midi_to_hz(m): 
+    return 440.0 * 2**((m - 69)/12)
+
+def _template_for_midi(midi, freqs=_FFT_FREQS, H=8, sigma_bins=1.5):
+    """Return a length-|freqs| template for this midi's harmonic series."""
+    f0 = _midi_to_hz(midi)
+    # convert a 'sigma' in Hz to bins dynamically per harmonic
+    t = np.zeros_like(freqs, dtype=np.float32)
+    for h in range(1, H+1):
+        fh = h * f0
+        if fh >= freqs[-1]: 
+            break
+        # nearest bin and gaussian spread (in bins)
+        k = np.argmin(np.abs(freqs - fh))
+        # wider spread for higher harmonics (slightly)
+        sig_bins = sigma_bins * (1 + 0.1*(h-1))
+        # local gaussian without allocating full vector (clip to a small window)
+        rad = int(3*sig_bins) + 1
+        lo = max(0, k - rad); hi = min(len(freqs), k + rad + 1)
+        local = np.arange(lo, hi) - k
+        t[lo:hi] += (1.0/h) * np.exp(-0.5*(local/sig_bins)**2)
+    # normalize to unit norm so gains are meaningful
+    nrm = np.linalg.norm(t) + 1e-12
+    return t / nrm
+
+# Cache templates for speed
+_TEMPLATE_CACHE = {}
+def get_template(midi):
+    key = (int(midi), FFT_SIZE, SAMPLE_RATE)
+    if key not in _TEMPLATE_CACHE:
+        _TEMPLATE_CACHE[key] = _template_for_midi(int(midi))
+    return _TEMPLATE_CACHE[key]
+
+def _fit_nonneg_mixture(x, midis, iters=6):
+    """Fast NNLS via multiplicative updates on a small template set."""
+    if len(midis) == 0:
+        return np.array([]), np.sum(x*x)
+    D = np.stack([get_template(m) for m in midis], axis=1).astype(np.float32)  # (B,K)
+    a = np.maximum(D.T @ x, 1e-8)  # init by projection
+    Dt = D.T
+    for _ in range(iters):
+        num = Dt @ x
+        den = Dt @ (D @ a) + 1e-12
+        a *= num / den
+    recon = D @ a
+    err = np.sum((x - recon)**2)
+    return a, err
+
+def _bic(err, B, dof):
+    # err = sum of squared residuals, B = #bins in x, dof approx = #active gains + K (rough)
+    return B * np.log(max(err, 1e-18) / B) + dof * np.log(B)
+
+def _salience_candidates_from_fft(mag, top=8, H=6):
+    """Cheap salience: score each MIDI by aligning harmonics on FFT (no CQT)."""
+    # restrict to piano range
+    midi_lo, midi_hi = 24, 108
+    scores = []
+    for m in range(midi_lo, midi_hi+1):
+        t = get_template(m)
+        # dot with log-magnitude to reduce dominance of a few bins
+        s = float((t * np.log1p(mag)).sum())
+        scores.append((s, m))
+    scores.sort(reverse=True)
+    return [m for s,m in scores[:top]]
+
+def estimate_voices_bic(mag_window, max_K=3, H=8):
+    """
+    mag_window: 1D FFT magnitude you'd like to explain (ideally averaged over ±1 frame around the onset).
+    Returns: dict with {'K', 'midis', 'gains', 'bic', 'err'}
+    """
+    # Normalize the target spectrum so BIC compares apples to apples
+    x = mag_window.astype(np.float32).copy()
+    if x.max() > 0:
+        x /= (x.max() + 1e-12)
+    B = len(x)
+
+    # Propose ~8 MIDI candidates via FFT salience (fast, no thresholds)
+    cand_midis = _salience_candidates_from_fft(x, top=8, H=H)
+
+    best = {'K': 0, 'midis': [], 'gains': np.array([]), 'bic': _bic(np.sum(x*x), B, 0), 'err': float(np.sum(x*x))}
+    # Try K=1..max_K by taking top-K candidates; refine by pruning tiny gains
+    for K in range(1, max_K+1):
+        midis = cand_midis[:K]
+        gains, err = _fit_nonneg_mixture(x, midis, iters=6)
+        # prune near-zero components and recompute (optional)
+        keep = gains > (0.02 * gains.max())
+        if keep.any() and keep.sum() < K:
+            midis = [m for m, k in zip(midis, keep) if k]
+            gains, err = _fit_nonneg_mixture(x, midis, iters=4)
+            K_eff = len(midis)
+        else:
+            K_eff = K
+        bic = _bic(err, B, dof=K_eff*1.8)  # mild penalty; tweak 1.3–2.0 if needed
+        if bic < best['bic']:
+            best = {'K': K_eff, 'midis': midis, 'gains': gains[:K_eff], 'bic': bic, 'err': float(err)}
+    return best
+
 #* ─── Chord Detection ────────────────────────────────────────────────────────
 def make_templates():
-    """Build normalized pitch-class templates for common triads."""
+    """Build normalized pitch-class templates for common chords."""
     templates, labels = [], []
     for i, root in enumerate(ROOTS):
         for quality, intervals in CHORD_INTERVALS.items():
@@ -185,68 +303,88 @@ def make_templates():
 CH_TEMPLATES, CH_LABELS = make_templates()
 # single‐note templates = identity
 NOTE_TEMPLATES = np.eye(12)
-NOTE_LABELS    = ROOTS.copy()
 
 def extract_chroma(audio, sr, hop_length=512):
     C = librosa.feature.chroma_cqt(y=audio, sr=sr, hop_length=hop_length)
     return C / (np.linalg.norm(C, axis=0, keepdims=True) + 1e-6)
 
-def match_chords(chroma: np.ndarray,
-                 templates: np.ndarray,
-                 labels: list[str]):
+def _cqt_center_freqs(n_bins, bpo, fmin):
+    # Center frequencies for each CQT bin
+    idx = np.arange(n_bins, dtype=float)
+    return fmin * (2.0 ** (idx / float(bpo)))
+
+def _harmonic_bins(b0, bpo, H=3):
+    # CQT is log2 frequency; multiply by h -> + bpo*log2(h)
+    offs = [0.0] + [np.log2(h) * bpo for h in range(2, H+1)]
+    return [int(round(b0 + off)) for off in offs]
+
+def estimate_bass_bin(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('C1'), frames_ahead=3, lowpass_hz=220.0,
+                      q_thresh=0.75, min_sep_bins=2, H=3, w=(1.0, 0.6, 0.4)):
     """
-    Frame-wise template matching.
-
-    Args:
-      chroma:    shape (12, T) matrix of normalized chroma vectors
-      templates: shape (N, 12) array of chord templates
-      labels:    length-N list of chord names matching templates rows
-
-    Returns:
-      roots:    length-T list of chord labels (e.g. "C:maj")
-      roots_pc: length-T list of semitone classes (0=C,1=C#, …)
-      scores:   shape (N, T) similarity scores for each chord/template
+    Robust bass-bin estimator around onset frame t0 (causal average).
+    - Uses median over frames [t0 .. t0+frames_ahead] to avoid pre-transition smear
+    - Low-pass to <= lowpass_hz to focus on bass
+    - Selects candidates above a robust quantile, enforces local-peak separation
+    - Scores candidates by harmonicity (energy at 1x/2x/3x)
+    - Fixes 'missing fundamental' by promoting +1 octave if needed
     """
-    # 1) Compute similarity between each template and each chroma frame
-    scores = templates.dot(chroma)         # (N, T)
+    n_bins, n_frames = mag.shape
+    t1 = min(n_frames, t0 + max(1, frames_ahead))
+    S = np.median(mag[:, t0:t1], axis=1)  # robust, causal
+    if not np.any(S):
+        return None
 
-    # 2) Pick best-matching template per frame
-    best_idx = np.argmax(scores, axis=0)   # (T,)
-    roots    = [labels[i] for i in best_idx]
+    freqs = _cqt_center_freqs(n_bins, bpo, fmin)
+    low_mask = freqs <= lowpass_hz
+    S_low = S * low_mask.astype(float)
 
-    # 3) Map root names to pitch classes
-    roots_pc = []
-    for lbl in roots:
-        root_name = lbl.split(':')[0]  # e.g. "C" from "C:maj"
-        roots_pc.append(ROOTS.index(root_name))
+    # Robust threshold (quantile over nonzeros)
+    nz = S_low[S_low > 0]
+    if nz.size == 0:
+        return None
+    thr = np.quantile(nz, q_thresh)
+    cand = np.where(S_low >= thr)[0]
+    if cand.size == 0:
+        return int(np.argmax(S_low))  # fallback
 
-    return roots, roots_pc, scores
+    # Keep local maxima & enforce min separation to avoid dense clusters
+    keep = []
+    for b in cand:
+        l = max(0, b-1); r = min(n_bins-1, b+1)
+        if S_low[b] >= S_low[l] and S_low[b] >= S_low[r]:
+            if not keep or (b - keep[-1]) >= min_sep_bins:
+                keep.append(b)
+    if not keep:
+        keep = cand.tolist()
 
-def smooth_with_hmm(emission_probs: np.ndarray,
-                    labels: list[str],
-                    stay_prob: float = 0.9) -> list[str]:
+    # Harmonicity score: sum of energies at 1x,2x,3x (with weights)
+    def hscore(b0):
+        bins = _harmonic_bins(b0, bpo, H=H)
+        s = 0.0
+        for k, bb in enumerate(bins):
+            if 0 <= bb < n_bins:
+                s += (w[k] if k < len(w) else 1.0) * S[min(bb, n_bins-1)]
+        return s
+
+    best = max(keep, key=hscore)
+
+    # Missing-fundamental fix: if energy 1 octave above is much stronger, shift up
+    one_oct = best + int(round(bpo))
+    if one_oct < n_bins and S[best] < 0.5 * S[one_oct]:
+        best = one_oct
+
+    return int(best)
+
+def bin_to_octave(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('C1'), a4=440.0):
     """
-    emission_probs: shape (n_frames, n_states) of P(observed | state)
-    labels:        list of length n_states mapping state idx → label
+    Map CQT bin -> musical octave using actual CQT config.
+    Octave number uses MIDI convention: C4 in octave 4, etc.
     """
-    n_states = emission_probs.shape[1]
-    # build HMM
-    model = hmm.MultinomialHMM(n_components=n_states, init_params="")
-    # uniform start
-    model.startprob_ = np.ones(n_states) / n_states
-    # high self-transition
-    tm = np.full((n_states, n_states), (1 - stay_prob)/(n_states-1))
-    np.fill_diagonal(tm, stay_prob)
-    model.transmat_ = tm
-    # emission probabilities (rows = states, cols = symbols)
-    # but MultinomialHMM expects shape (n_states, n_symbols),
-    # so we treat each frame as drawing one “symbol” (the best chord idx)
-    # instead, we’ll do custom decode: use log(emission_probs) as log-likelihoods.
-
-    # Run Viterbi
-    logp = np.log(emission_probs + 1e-8)  # avoid log(0)
-    _, state_seq = model.decode(logp, algorithm="viterbi")
-    return [labels[s] for s in state_seq]
+    if bin_idx is None:
+        return None
+    freq = fmin * (2.0 ** (bin_idx / float(bpo)))
+    midi = 69.0 + 12.0 * np.log2(freq / float(a4))
+    return int(np.floor(midi / 12.0) - 1)
 
 def detect_true_bass_pc(mag_frame, floor_frac=0.1):
     """Find the semitone class of the lowest active bin in a magnitude spectrum."""
@@ -257,106 +395,133 @@ def detect_true_bass_pc(mag_frame, floor_frac=0.1):
     # lowest active bin index modulo 12 gives the pitch class
     return int(active_bins.min().item() % 12)
 
-#* ─── TWM Pitch Picker ──────────────────────────────────────────────────────
-class Peak:
-    def __init__(self,f,m,p,b): self.freq, self.mag, self.phase, self.bin = f,m,p,b
+def _bin_to_pc(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('C1'), a4=440.0):
+    """
+    Map a CQT bin index to a pitch-class (0..11) via frequency -> MIDI -> PC.
+    """
+    freq = fmin * (2.0 ** (bin_idx / float(bpo)))
+    midi = 69.0 + 12.0 * np.log2(freq / float(a4))
+    return int(round(midi)) % 12
 
-def parabolic_interp(y1,y2,y3,k):
-    a = (y1 - 2*y2 + y3)/2
-    b = (y3 - y1)/2
-    if a==0: return k*SAMPLE_RATE/FFT_SIZE
-    xp = -b/(2*a)
-    return (k+xp)*SAMPLE_RATE/FFT_SIZE
+def detect_bass_pc_conf(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('C1'), frames_ahead=2, lowpass_hz=220.0):
+    """
+    Causal, low-band bass PC + confidence.
+    Returns (bass_pc, bass_rel) where bass_rel in [0,1] is bass bin energy
+    relative to low-band max. If no clear bass, returns (None, 0.0).
+    """
+    n_bins, n_frames = mag.shape
+    t1 = min(n_frames, t0 + max(1, frames_ahead))
+    S = np.median(mag[:, t0:t1], axis=1)
 
-def find_spectral_peaks(mag, fft_complex, thresh=0.01, max_peaks=50):
-    M = np.max(mag)
-    min_t = thresh*M
-    peaks = []
-    for k in range(1, MAG_SIZE-1):
-        if mag[k]>mag[k-1] and mag[k]>mag[k+1] and mag[k]>min_t:
-            f = parabolic_interp(mag[k-1],mag[k],mag[k+1],k)
-            ph = np.angle(fft_complex[k])
-            peaks.append(Peak(f, mag[k], ph, k))
-            if len(peaks)>=max_peaks: break
-    peaks.sort(key=lambda pk: pk.mag, reverse=True)
-    return peaks
+    freqs = _cqt_center_freqs(n_bins, bpo, fmin)
+    mask = (freqs <= lowpass_hz).astype(float)
+    S_low = S * mask
 
-def compute_TWM_error(peaks, f0, max_h=10):
-    if not peaks: return 1e6
-    err, nm = 0,0
-    # forward
-    for h in range(1, max_h+1):
-        tgt = f0*h
-        if tgt>SAMPLE_RATE/2: break
-        d = min(abs(pk.freq - tgt) for pk in peaks)
-        err += d; nm+=1
-    # backward
-    for pk in peaks:
-        if pk.freq < 0.8*f0: continue
-        h = int(round(pk.freq/f0))
-        if h<1 or h>max_h: continue
-        err += abs(pk.freq - f0*h)*pk.mag
-    return err/(nm+1)
+    if not np.any(S_low):
+        return (None, 0.0)
 
-def detect_f0_TWM(peaks, lo=80, hi=800):
-    if not peaks: return 0
-    best, be = 0,1e6
-    for f0 in np.arange(lo, hi+1, 2):
-        e = compute_TWM_error(peaks,f0)
-        if e<be: best,be = f0,e
-    # refine
-    for f0 in np.arange(max(lo,best-5), min(hi,best+5)+1, 0.2):
-        e = compute_TWM_error(peaks,f0)
-        if e<be: best,be = f0,e
-    return best if be<50 else 0
+    b = int(np.argmax(S_low))
+    bass_rel = float(S_low[b] / (S_low.max() + 1e-12))
+    return (_bin_to_pc(b, bpo=bpo, fmin=fmin), bass_rel)
 
-def pick_pitches_TWM(cqt_mag, mag, fft_complex, max_voices=4):
-    peaks = find_spectral_peaks(mag, fft_complex)
-    f0 = detect_f0_TWM(peaks, 80, 800)
-    notes = []
-    if f0>0:
-        m = int(round(69 + 12*np.log2(f0/440)))
-        if 21<=m<=108: notes.append(m)
-    
-    # More conservative polyphonic detection
-    residual = cqt_mag.copy()
-    if notes:
-        # Remove harmonics of the fundamental more aggressively
-        b0 = notes[0]-21
-        fundamental_mag = cqt_mag[b0] if 0 <= b0 < CQT_BINS else 0
-        
-        for h in range(1, 8):  # Check more harmonics
-            b = int(round(b0 + 12*np.log2(h)))
-            if 0<=b<CQT_BINS:
-                # More aggressive harmonic subtraction
-                residual[b] = max(0, residual[b] - cqt_mag[b] * 0.8)
-    
-    # Much higher threshold for additional notes to avoid harmonic confusion
-    mres = np.max(residual)
-    threshold = 0.8 * mres  # Increased from 0.5 to 0.8
-    
-    # Only add additional notes if they're significantly strong
-    additional_notes = []
-    for b in range(CQT_BINS):
-        if residual[b] > threshold and len(notes) + len(additional_notes) < max_voices:
-            midi = 21+b
-            if midi not in notes:
-                # Extra check: make sure this isn't close to a harmonic of existing notes
-                is_harmonic = False
-                for existing_note in notes:
-                    freq_existing = 440.0 * 2**((existing_note - 69)/12)
-                    freq_candidate = 440.0 * 2**((midi - 69)/12)
-                    ratio = freq_candidate / freq_existing
-                    # Check if it's close to a harmonic ratio (2, 3, 4, 5, 6)
-                    for h in [2, 3, 4, 5, 6]:
-                        if abs(ratio - h) < 0.1:  # Within 10% of harmonic ratio
-                            is_harmonic = True
-                            break
-                if not is_harmonic:
-                    additional_notes.append(midi)
-    
-    notes.extend(additional_notes)
-    return sorted(notes)
+def chord_tone_pcs(root_pc, quality):
+    """Return ordered chord tone pitch-classes for a given quality.
+
+    The order is root, 3rd, 5th [, 7th] to map to inversion names.
+    """
+    q = (quality or "").lower()
+    if "maj7" in q:
+        iv = (0, 4, 7, 11)
+    elif "dom7" in q or q == "7":
+        iv = (0, 4, 7, 10)
+    elif "m7b5" in q or "half" in q:
+        iv = (0, 3, 6, 10)
+    elif "min7" in q or (("m7" in q) and ("m7b5" not in q)):
+        iv = (0, 3, 7, 10)
+    elif "dim7" in q:
+        iv = (0, 3, 6, 9)
+    elif "aug" in q:
+        iv = (0, 4, 8)
+    elif "dim" in q:
+        iv = (0, 3, 6)
+    elif "min" in q:
+        iv = (0, 3, 7)
+    else:
+        iv = (0, 4, 7)
+    return [ (root_pc + i) % 12 for i in iv ]
+
+def compute_inversion(root_pc, quality, pc_energies, mag, 
+                      t0, *, bpo=12, fmin=librosa.note_to_hz('C1'),
+                      min_bass_rel=0.60, bass_vs_root=0.85):
+    """
+    Smart inversion decision returning 'root'|'first'|'second'|'third'.
+
+    Uses a causal low-band bass estimate and compares bass strength to the
+    root; falls back to 'root' when ambiguous. Never returns 'slash'.
+    """
+    # 1) robust bass pc + confidence
+    bass_pc, bass_rel = detect_bass_pc_conf(mag, t0, bpo=bpo, fmin=fmin)
+    if bass_pc is None:
+        return "root"
+
+    tones = chord_tone_pcs(root_pc, quality)
+
+    # 2) If bass isn't a chord tone, prefer root
+    if bass_pc not in tones:
+        return "root"
+
+    # 3) Strength checks
+    root_e = float(pc_energies[root_pc]) if pc_energies is not None else 1.0
+    bass_e = float(pc_energies[bass_pc]) if pc_energies is not None else bass_rel
+
+    if bass_rel < min_bass_rel:
+        return "root"
+    if pc_energies is not None and bass_e < bass_vs_root * root_e:
+        return "root"
+
+    # 4) Map bass tone to inversion
+    pos = tones.index(bass_pc)
+    if len(tones) == 3:
+        return ["root", "first", "second"][pos] if pos < 3 else "root"
+    else:
+        return ["root", "first", "second", "third"][pos] if pos < 4 else "root"
+
+def has_seventh_bic(x_chroma, root_pc, quality='maj7'):
+    """
+    Decide if the 7th is present using NNLS + BIC.
+    x_chroma: (12,) normalized chroma for the onset (median over ~3 frames is ok)
+    root_pc: 0..11 (C=0)
+    quality: 'maj7' or 'dom7'
+    Returns: (keep_seventh: bool, debug: dict)
+    """
+    # chord bins
+    tri = [(root_pc + i) % 12 for i in (0, 4, 7)]         # major triad basis
+    sev_int = 11 if quality == 'maj7' else 10
+    sev = (root_pc + sev_int) % 12
+
+    # design matrices (12 x k), columns are one-hots
+    A3 = np.eye(12)[:, tri]                # k=3
+    A4 = np.eye(12)[:, tri + [sev]]        # k=4
+
+    # NNLS fits
+    w3, _ = nnls(A3, x_chroma)
+    r3 = x_chroma - A3 @ w3
+    sse3 = float(np.dot(r3, r3))
+
+    w4, _ = nnls(A4, x_chroma)
+    r4 = x_chroma - A4 @ w4
+    sse4 = float(np.dot(r4, r4))
+
+    # BIC (N=12 features, k params = number of active tones)
+    N = 12
+    bic3 = N * np.log(sse3 / N + 1e-12) + 3 * np.log(N)
+    bic4 = N * np.log(sse4 / N + 1e-12) + 4 * np.log(N)
+
+    keep = (bic4 < bic3)  # prefer maj7/dom7 only if it wins after penalty
+    dbg = dict(sse3=sse3, sse4=sse4, bic3=bic3, bic4=bic4, w3=w3, w4=w4)
+    return keep, dbg
+
+#* ─── YIN Pitch Detection ────────────────────────────────────────────────
 
 def detect_pitch_yin_enhanced(frame, min_freq=50, max_freq=800, threshold=0.1, debug=False):
     """
@@ -821,9 +986,6 @@ def detect_fundamental_simple(cqt_mag, min_confidence=0.1, debug=False):
                     return f"{names[m%12]}{(m//12)-1}"
                 
                 print(f"    Candidate {midi_to_name_local(midi_note)} (MIDI {midi_note}): fund_mag={fundamental_mag:.3f}, score={harmonic_score:.3f}, harmonics={harmonic_count}")
-                if harmonic_details:
-                    for h, mag, weight in harmonic_details:
-                        print(f"      Harmonic {h}: mag={mag:.3f}, weight={weight:.3f}")
     
     if not candidates:
         if debug:
@@ -980,6 +1142,102 @@ def detect_fundamental_from_fft(frame, min_freq=40, max_freq=600):
     
     return None, freqs, fft_mag
 
+#* ─── Ringing note cancellation ────────────────────────────────────────
+class RingTrack:
+    __slots__ = ("midi", "f0", "harm_gains", "last_time")
+    def __init__(self, midi, gains_h, t_now):
+        self.midi = int(midi)
+        self.f0   = 440.0 * 2**((self.midi - 69)/12)
+        self.harm_gains = np.array(gains_h, dtype=np.float32)  # length H (h=1..H)
+        self.last_time  = float(t_now)
+
+ACTIVE_TRACKS = []  # global list of RingTrack
+HARM_COUNT = 8
+FUND_PROTECT_BW_BINS = 2  # don't cancel around f0 when there is a fresh onset
+
+def harmonic_atom(freqs, f, sigma_bins=1.5, bw=3):
+    k = np.argmin(np.abs(freqs - f))
+    lo = max(0, k - bw); hi = min(len(freqs), k + bw + 1)
+    local = np.arange(lo, hi) - k
+    atom = np.zeros_like(freqs, dtype=np.float32)
+    g = np.exp(-0.5*(local/sigma_bins)**2)
+    atom[lo:hi] = g / (np.linalg.norm(g)+1e-12)
+    return atom
+
+def prev_template_matrix(freqs, tracks, t_now, tau_fund=0.35, tau_harm=0.22, protect_bins=None):
+    """
+    Build dictionary D_prev for all harmonics of active tracks at time t_now.
+    Columns: each is a single harmonic atom with its current decayed gain cap.
+    Returns D_prev (B,K), caps (K,), meta list [(track_idx, h), ...]
+    """
+    cols, caps, meta = [], [], []
+    for ti, tr in enumerate(tracks):
+        dt = max(0.0, t_now - tr.last_time)
+        for h in range(1, HARM_COUNT+1):
+            fh = tr.f0 * h
+            if fh >= SAMPLE_RATE/2: break
+            atom = harmonic_atom(freqs, fh)
+            # decay: fundamentals ring longer than harmonics
+            tau = tau_fund if h == 1 else tau_harm
+            cap = tr.harm_gains[h-1] * np.exp(-dt / tau)
+            # optional: protect bins around any "fresh onset" region (fundamental only)
+            if protect_bins is not None and h == 1:
+                k = np.argmin(np.abs(freqs - fh))
+                lo = max(0, k - FUND_PROTECT_BW_BINS); hi = min(len(freqs), k + FUND_PROTECT_BW_BINS + 1)
+                atom[lo:hi] = 0.0  # do not cancel fundamentals near fresh onset
+            if cap > 1e-4 and np.any(atom):
+                cols.append(atom); caps.append(cap); meta.append((ti, h))
+    if not cols:
+        return None, None, None
+    D_prev = np.stack(cols, axis=1)
+    return D_prev, np.array(caps, dtype=np.float32), meta
+
+def nnls_capped(D, x, caps, iters=6):
+    """Multiplicative NNLS with per-coefficient upper bounds (caps)."""
+    if D is None: 
+        return None
+    a = np.minimum(np.maximum(D.T @ x, 0.0), caps.copy())
+    Dt = D.T
+    for _ in range(iters):
+        num = Dt @ x
+        den = Dt @ (D @ a) + 1e-12
+        a *= num / den
+        a = np.minimum(a, caps)
+    return a
+
+def cancel_ringing(mag_window, freqs, onset_midi_seeds=None):
+    """
+    Predict-and-subtract previous notes. Returns residual spectrum and
+    the per-track updated harmonic gains (to store back).
+    """
+    if not ACTIVE_TRACKS:
+        return mag_window, {}
+    # protect fundamentals near fresh seeds (don’t suppress a re-strike)
+    protect_bins = None
+    if onset_midi_seeds:
+        protect_bins = set([int(m) for m in onset_midi_seeds])
+
+    # build prev dictionary
+    D_prev, caps, meta = prev_template_matrix(freqs, ACTIVE_TRACKS, t_now=0.0, protect_bins=protect_bins)
+    if D_prev is None:
+        return mag_window, {}
+
+    # fit previous-only contribution under caps
+    a = nnls_capped(D_prev, mag_window, caps, iters=6)
+    recon_prev = D_prev @ a
+    resid = np.maximum(0.0, mag_window - recon_prev)
+
+    # gather updated per-track harmonic gains
+    updated = {}
+    if a is not None:
+        # sum contributions per (track,h)
+        for coeff, (ti,h) in zip(a, meta):
+            updated.setdefault(ti, np.zeros(HARM_COUNT, dtype=np.float32))
+            updated[ti][h-1] += float(coeff)
+
+    return resid, updated
+
+
 #* ─── Main Analysis Function ──────────────────────────────────────────────────
 def detect_single_note_frame(frame, debug=False):
     def midi_to_name(m):
@@ -1050,11 +1308,39 @@ def detect_single_note_frame(frame, debug=False):
             "method": method_used,
             "confidence": confidence
         }
+    else:
+        note_info = None
         
     return note_info
 
-def detect_chord_frame(chroma, mag, frame_idx, debug=False):
-    c_frame = chroma[:, frame_idx]
+def detect_chord_multiframe(chroma, mag, frame_idx, num_frames=3, debug=False):
+    """
+    Multi-frame chord detection for improved accuracy.
+    
+    Args:
+        chroma: Chroma features (12, T)
+        mag: CQT magnitude (bins, T) 
+        frame_idx: Starting frame index
+        num_frames: Number of frames to analyze (default 3)
+        debug: Enable debug logging
+    
+    Returns:
+        Chord detection result or None
+    """
+    # Ensure we don't go beyond available frames
+    end_frame = min(frame_idx + num_frames, chroma.shape[1])
+    actual_frames = end_frame - frame_idx
+    
+    if actual_frames < 1:
+        return None
+    
+    # Average chroma across multiple frames for stability
+    c_frames = chroma[:, frame_idx:end_frame]
+    c_frame = np.mean(c_frames, axis=1)  # Average across time dimension
+    
+    if debug:
+        print(f"[MultiFrame] Analyzing frames {frame_idx}-{end_frame-1} ({actual_frames} frames)")
+        print(f"[MultiFrame] Chroma energy distribution: {np.round(c_frame, 3)}")
 
     score = 0
 
@@ -1067,55 +1353,117 @@ def detect_chord_frame(chroma, mag, frame_idx, debug=False):
     note_score = NOTE_TEMPLATES.dot(c_frame).max()
     chord_scores = CH_TEMPLATES.dot(c_frame)
     best_chord_score = chord_scores.max()
-    if best_chord_score > note_score:
+    if best_chord_score > note_score + 0.1:
         score += 1
 
     if debug:
-        print(f"[ChordGate] frame={frame_idx}, pts={score}/2, "
+        print(f"[MultiFrame] frame={frame_idx}, pts={score}/2, "
               f"ratio={sorted_bins[1]/sorted_bins[0]:.2f}, "
-              f"note>chord? {note_score:.2f}>{best_chord_score:.2f}")
+              f"chord_score={best_chord_score:.2f} vs note_score={note_score:.2f}")
 
-    if score < 1:
+    if score <= 1:
         return None
 
     # Chord result
     ci = int(np.argmax(chord_scores).item())
     chord_label = CH_LABELS[ci]
     root_pc = ROOTS.index(chord_label.split(':')[0])
-    bass_pc = detect_true_bass_pc(mag[:, frame_idx])
-    if bass_pc is None or bass_pc == root_pc:
-        inv = 'root'
-    elif bass_pc in {(root_pc+3)%12, (root_pc+4)%12}:
-        inv = 'first'
-    elif bass_pc == (root_pc+7)%12:
-        inv = 'second'
-    else:
-        inv = 'slash'
+    
+    # Post-filter 7th chord extensions with logging
+    quality = chord_label.split(':')[1]
+    if quality in ('maj7', 'dom7'):
+        keep7, dbg7 = has_seventh_bic(c_frame, root_pc, quality)
+        if debug:
+            print(f"[7th BIC] {quality}: keep={keep7}  bic3={dbg7['bic3']:.2f}  bic4={dbg7['bic4']:.2f}")
+        if not keep7:
+            original_label = chord_label
+            chord_label = f"{ROOTS[root_pc]}:maj"
+            ci = CH_LABELS.index(chord_label)
+            # use the same chroma you judged on (c_med) for a consistent score
+            best_chord_score = CH_TEMPLATES[ci].dot(c_frame)
+            if debug:
+                print(f"           Downgrading {original_label} → {chord_label}")
+    elif quality in ('min7', 'dim7'):
+        keep7, dbg7 = has_seventh_bic(c_frame, root_pc, quality)
+        if debug:
+            print(f"[7th BIC] {quality}: keep={keep7}  bic3={dbg7['bic3']:.2f}  bic4={dbg7['bic4']:.2f}")
+        if not keep7:
+            original_label = chord_label
+            chord_label = f"{ROOTS[root_pc]}:min"
+            ci = CH_LABELS.index(chord_label)
+            # use the same chroma you judged on (c_med) for a consistent score
+            best_chord_score = CH_TEMPLATES[ci].dot(c_frame)
+            if debug:
+                print(f"           Downgrading {original_label} → {chord_label}")
+                
+    # Use the middle frame for bass/inversion detection (most stable)
+    middle_frame = frame_idx + actual_frames // 2
 
+    # pc_energies is the chroma vector (pitch-class energies) for the frame
+    pc_energies = c_frame  # already averaged across frames above
+
+    # Use the smarter inversion computation which uses causal low-band bass
+    try:
+        inv = compute_inversion(
+            root_pc=root_pc,
+            quality=quality,
+            pc_energies=pc_energies,
+            mag=mag,
+            t0=middle_frame,
+            bpo=12,
+            fmin=librosa.note_to_hz('C1')
+        )
+    except Exception:
+        # Fallback to simple bass estimate if compute_inversion fails
+        bass_pc = detect_true_bass_pc(mag[:, middle_frame])
+        bass_bin = estimate_bass_bin(mag, middle_frame)
+        octave  = bin_to_octave(bass_bin)
+        if bass_pc is None or bass_pc == root_pc:
+            inv = 'root'
+        elif bass_pc in {(root_pc+3)%12, (root_pc+4)%12}:
+            inv = 'first'
+        elif bass_pc == (root_pc+7)%12:
+            inv = 'second'
+        else:
+            inv = 'root'
+
+    # compute octave for reporting (keep previous logic)
+    bass_bin = estimate_bass_bin(mag, middle_frame)
+    octave  = bin_to_octave(bass_bin)
+
+    if debug:
+        print(f"  ➤ DETECTED CHORD: {chord_label}, octave={octave}, inversion={inv}, confidence={best_chord_score:.3f}")
+    
     return {
         "type": "chord",
-        "label": chord_label,
+        "label": chord_label,  
+        "chord_quality": chord_label.split(':')[1],  # E.g., "maj", "min"
         "inversion": inv,
+        "octave": octave,
         "confidence": best_chord_score,
-        "note_score": note_score
+        "note_score": note_score,
+        "frames_analyzed": actual_frames
     }
 
 def analyze_audio(wav_path_or_array, debug=False):
-    # 1) Load
-    if isinstance(wav_path_or_array, str):
-        audio = read_wav(wav_path_or_array)
-    else:
-        audio = wav_path_or_array
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-
-    # 2) Onsets
+    try:
+        # 1) Load audio
+        if isinstance(wav_path_or_array, str):
+            audio = read_wav(wav_path_or_array)
+        else:
+            audio = wav_path_or_array
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+    except Exception as e:
+        return {"error": f"Failed to read audio: {str(e)}"}
+    
+    # 2) Onset detection with noise reduction
     frames = frame_audio(audio)
     mags = np.array([compute_magnitude(f) for f in frames])
     flux = normalize(compute_flux(mags))
     onsets = find_onsets(flux)
-
-    # 3) Precompute chroma & full-range CQT
+    
+    # 3) Precompute chroma & full-range CQT for chord detection
     chroma = extract_chroma(audio, SAMPLE_RATE, hop_length=HOP_SIZE)
     C_full = np.abs(librosa.cqt(
         y=audio, 
@@ -1125,13 +1473,14 @@ def analyze_audio(wav_path_or_array, debug=False):
         bins_per_octave=12,
         fmin=librosa.note_to_hz('C1')
     ))
-
-    # 4) Compute gating features
+    
+    # 4) Compute gating features for chord/note classification
     T = chroma.shape[1]
     peak_ratios = np.zeros(T)
     score_ratios = np.zeros(T)
     spec_entropy = np.zeros(T)
     spec_flatness = np.zeros(T)
+    
     for i in range(T):
         bins = np.sort(chroma[:, i])[::-1]
         peak_ratios[i] = bins[1] / (bins[0] + 1e-9)
@@ -1145,63 +1494,121 @@ def analyze_audio(wav_path_or_array, debug=False):
         arith = np.mean(mf + 1e-9)
         spec_flatness[i] = geo / arith
 
-    # 4.1) Dynamic thresholds
-    thr_peak       = np.median(peak_ratios) + np.std(peak_ratios)
-    thr_score      = np.median(score_ratios) + 1.5*np.std(score_ratios)
-    thr_entropy    = np.median(spec_entropy) + 0.5*np.std(spec_entropy)
-    thr_flatness   = np.median(spec_flatness) + 0.5*np.std(spec_flatness)
-
-    # 4.2) Smooth gate across time
-    gate_raw = ((peak_ratios>thr_peak).astype(int)
-                + (score_ratios>thr_score).astype(int)
-                + (spec_entropy>thr_entropy).astype(int)
-                + (spec_flatness>thr_flatness).astype(int)) >= 3
-    gate_smooth = medfilt(gate_raw.astype(int), kernel_size=5).astype(bool)
-
-    results = {"onsets": [], "notes": [], "chords": []}
-    # 4) Process each onset frame
+    # Results structure
+    results = {
+        "onsets": [],
+        "notes": [],
+        "chords": [],
+        "analysis_summary": {
+            "total_onsets": len(onsets),
+            "duration_seconds": float(len(audio) / SAMPLE_RATE),
+            "sample_rate": int(SAMPLE_RATE)
+        }
+    }
+    
+    # 5) Process each onset
     for i, onset in enumerate(onsets):
-        idx = min(onset + 3, len(frames)-1)
+        idx = min(onset, len(frames)-1)
         frame = frames[idx]
         
         # Convert frame index to time
         time_seconds = onset * HOP_SIZE / SAMPLE_RATE
-
-        if debug:
-            print(f"\n=== ONSET {i+1} at frame {onset} ({time_seconds:.2f}s) ===")
-
-        if gate_smooth[onset]:
-            # chord detection on harmonic
-            res = detect_chord_frame(chroma, C_full, onset, debug)
-            if res:
-                res.update({"time_seconds":round(time_seconds,3), "frame_index":int(onset)})
-                results["chords"].append(res)
+                
+        # Add onset information
+        onset_info = {
+            "time_seconds": round(time_seconds, 3),
+            "frame_index": int(onset)
+        }
+        results["onsets"].append(onset_info)
+        
+        # 1) Build a tiny onset-centered spectrum (average 2 frames ahead for stability)
+        fft_mag_center = compute_magnitude(frames[idx])
+        if 1 <= idx < len(frames)-1:
+            fft_mag_prev   = compute_magnitude(frames[idx-1])
+            fft_mag_next   = compute_magnitude(frames[idx+1])
+            mag_window = (fft_mag_prev + fft_mag_center + fft_mag_next) / 3.0
         else:
-            # note detection on original
-            res = detect_single_note_frame(frame, debug)
-            if res["midi_note"]:
-                res.update({"time_seconds":round(time_seconds,3), "frame_index":int(onset)})
-                results["notes"].append(res)
+            mag_window = fft_mag_center
 
-    # Add analysis summary with proper Python types
-    results["analysis_summary"] = {
-        "total_onsets": len(onsets),
+        # ringing cancellation
+        freqs = np.fft.rfftfreq(FFT_SIZE, 1.0/SAMPLE_RATE)
+        resid, updated = cancel_ringing(mag_window, freqs)
+        # 2) Explain it with K harmonic sources chosen by BIC
+        bic_est = estimate_voices_bic(resid, max_K=3, H=8)
+        K = bic_est['K']
+        midi_set = bic_est['midis']
+
+        is_chord_final = (K >= 2)
+
+        if is_chord_final:            
+            # Use existing chord detection for labeling and inversion analysis
+            res = detect_chord_multiframe(chroma, C_full, onset, num_frames=1, debug=True)
+            if res is not None:
+                res.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                results["chords"].append(res)
+            else:
+                # Single note → use the MIDI from BIC analysis
+                m = midi_set[0] if midi_set else None
+                if m is None:
+                    res_note = detect_single_note_frame(frame, debug=False)
+                    if res_note:
+                        res_note.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                else:
+                    note_name = note_to_name(m)
+                    frequency = _midi_to_hz(m)
+                    
+                    res_note = {
+                        "time_seconds": round(time_seconds, 3),
+                        "frame_index": int(onset),
+                        "midi_note": int(m),
+                        "note_name": note_name,
+                        "frequency_hz": round(frequency, 2),
+                        "method": "HarmonicMixture(BIC)",
+                        "confidence": 0.9
+                    }
+
+                if res_note: 
+                    results["notes"].append(res_note)
+        else:            
+            # Single note → use the MIDI from BIC analysis
+            m = midi_set[0] if midi_set else None
+            if m is None:
+                res_note = detect_single_note_frame(frame, debug=False)
+                if res_note:
+                    res_note.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+            else:
+                note_name = note_to_name(m)
+                frequency = _midi_to_hz(m)
+                
+                res_note = {
+                    "time_seconds": round(time_seconds, 3),
+                    "frame_index": int(onset),
+                    "midi_note": int(m),
+                    "note_name": note_name,
+                    "frequency_hz": round(frequency, 2),
+                    "method": "HarmonicMixture(BIC)",
+                    "confidence": 0.9
+                }
+
+            if res_note: 
+                results["notes"].append(res_note)
+
+    # Update analysis summary
+    results["analysis_summary"].update({
         "total_notes": len(results["notes"]),
-        "total_chords": len(results["chords"]),
-        "duration_seconds": float(len(audio) / SAMPLE_RATE),
-        "sample_rate": int(SAMPLE_RATE)
-    }
-
+        "total_chords": len(results["chords"])
+    })
+    
     return results
 
 #* ─── Command-line Analysis Function ───────────────────────────────────────────
 def analyze_audio_cmdline(wav_path_or_array):
     """
-    Command-line focused audio analysis that only does single note detection.
-    Based on the original implementation before chord detection was added.
+    Command-line focused audio analysis with both single note and chord detection.
+    Includes detailed console logging of the analysis process and thresholds.
     """
     try:
-        # Read audio
+        # 1) Load audio
         if isinstance(wav_path_or_array, str):
             audio = read_wav(wav_path_or_array)
             print(f"✓ Loaded audio file: {wav_path_or_array}")
@@ -1213,26 +1620,58 @@ def analyze_audio_cmdline(wav_path_or_array):
     except Exception as e:
         print(f"✗ Failed to read audio: {str(e)}")
         return {"error": f"Failed to read audio: {str(e)}"}
-    
-    def midi_to_name(m):
-        names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"]
-        return f"{names[m%12]}{(m//12)-1}"
-    
+
     print(f"Audio duration: {len(audio) / SAMPLE_RATE:.2f}s")
     
-    # Traditional onset detection
+    # 2) Onset detection with noise reduction
     print("🔍 Detecting onsets...")
     frames = frame_audio(audio)
     mags = np.array([compute_magnitude(f) for f in frames])
     flux = normalize(compute_flux(mags))
     onsets = find_onsets(flux)
+
     
     print(f"✓ Found {len(onsets)} onsets at frames: {onsets}")
+    
+    # 3) Precompute chroma & full-range CQT for chord detection
+    print("🎼 Computing chroma and CQT features...")
+    chroma = extract_chroma(audio, SAMPLE_RATE, hop_length=HOP_SIZE)
+    C_full = np.abs(librosa.cqt(
+        y=audio, 
+        sr=SAMPLE_RATE,
+        hop_length=HOP_SIZE,
+        n_bins=CQT_BINS,
+        bins_per_octave=12,
+        fmin=librosa.note_to_hz('C1')
+    ))
+    print(f"✓ Chroma shape: {chroma.shape}, CQT shape: {C_full.shape}")
+    
+    # 4) Compute gating features for chord/note classification
+    print("📊 Computing dynamic thresholds for chord/note gating...")
+    T = chroma.shape[1]
+    peak_ratios = np.zeros(T)
+    score_ratios = np.zeros(T)
+    spec_entropy = np.zeros(T)
+    spec_flatness = np.zeros(T)
+    
+    for i in range(T):
+        bins = np.sort(chroma[:, i])[::-1]
+        peak_ratios[i] = bins[1] / (bins[0] + 1e-9)
+        note_sc = NOTE_TEMPLATES.dot(chroma[:,i]).max()
+        chord_sc = CH_TEMPLATES.dot(chroma[:,i]).max()
+        score_ratios[i] = chord_sc / (note_sc + 1e-9)
+        mf = C_full[:, i]
+        p = mf / (mf.sum() + 1e-9)
+        spec_entropy[i] = -np.sum(p * np.log(p + 1e-9))
+        geo = np.exp(np.mean(np.log(mf + 1e-9)))
+        arith = np.mean(mf + 1e-9)
+        spec_flatness[i] = geo / arith
     
     # Results structure
     results = {
         "onsets": [],
         "notes": [],
+        "chords": [],
         "analysis_summary": {
             "total_onsets": len(onsets),
             "duration_seconds": float(len(audio) / SAMPLE_RATE),
@@ -1240,69 +1679,16 @@ def analyze_audio_cmdline(wav_path_or_array):
         }
     }
     
-    # Process each onset
-    print("🎵 Analyzing notes at each onset...")
+    # 5) Process each onset
+    print("🎵 Analyzing each onset...")
     for i, onset in enumerate(onsets):
-        idx = min(onset + 3, len(frames)-1)
+        idx = min(onset, len(frames)-1)
         frame = frames[idx]
         
         # Convert frame index to time
-        time_seconds = float(onset * HOP_SIZE / SAMPLE_RATE)
+        time_seconds = onset * HOP_SIZE / SAMPLE_RATE
         
         print(f"\n=== ONSET {i+1}/{len(onsets)} at frame {onset} ({time_seconds:.2f}s) ===")
-        
-        # Method 1: FFT-based detection
-        fft_note, freqs, fft_mag = detect_fundamental_from_fft(frame)
-        if fft_note:
-            print(f"  FFT method: {midi_to_name(fft_note)} (MIDI {fft_note})")
-        
-        # Method 2: CQT-based detection
-        cqt_mag = compute_cqt(frame)
-        
-        # Method 3: Simple CQT method
-        simple_note = detect_fundamental_simple(cqt_mag)
-        if simple_note:
-            print(f"  Simple method: {midi_to_name(simple_note)}")
-        
-        # Method 4: HPS method
-        hps_notes = pick_pitches_HPS(cqt_mag, max_voices=1)
-        if hps_notes:
-            print(f"  HPS method: {midi_to_name(hps_notes[0])}")
-        
-        # Method 5: Robust detection with octave correction
-        robust_note, robust_method = detect_pitch_robust(frame, cqt_mag, fft_mag, freqs, debug=False)
-        if robust_note:
-            print(f"  Robust method: {midi_to_name(robust_note)} (via {robust_method})")
-        
-        # Choose the best method (prefer robust method if available)
-        if robust_note:
-            final_note = robust_note
-            method_used = f"Robust ({robust_method})"
-            confidence = 0.9
-        elif simple_note and hps_notes and simple_note == hps_notes[0]:
-            # Both CQT methods agree
-            final_note = simple_note
-            method_used = "CQT (consensus)"
-            confidence = 0.8
-        elif simple_note:
-            # Use simple CQT method as primary
-            final_note = simple_note
-            method_used = "CQT (simple)"
-            confidence = 0.7
-        elif hps_notes:
-            # Fall back to HPS
-            final_note = hps_notes[0]
-            method_used = "CQT (HPS)"
-            confidence = 0.6
-        elif fft_note:
-            # FFT as last resort
-            final_note = fft_note
-            method_used = "FFT"
-            confidence = 0.5
-        else:
-            final_note = None
-            method_used = "None"
-            confidence = 0.0
         
         # Add onset information
         onset_info = {
@@ -1311,27 +1697,144 @@ def analyze_audio_cmdline(wav_path_or_array):
         }
         results["onsets"].append(onset_info)
         
-        # Add note information if detected
-        if final_note:
-            note_info = {
-                "time_seconds": round(time_seconds, 3),
-                "frame_index": int(onset),
-                "midi_note": int(final_note),
-                "note_name": midi_to_name(final_note),
-                "frequency_hz": round(440.0 * 2**((final_note - 69)/12), 2),
-                "method": method_used,
-                "confidence": confidence
-            }
-            results["notes"].append(note_info)
-            
-            print(f"  ➤ DETECTED: {midi_to_name(final_note)} (method: {method_used}, confidence: {confidence:.1f})")
+        # 1) Build a tiny onset-centered spectrum (average 2 frames ahead for stability)
+        print(f"  🔬 Building onset-centered spectrum...")
+        fft_mag_center = compute_magnitude(frames[idx])
+        if 1 <= idx < len(frames)-1:
+            fft_mag_prev   = compute_magnitude(frames[idx-1])
+            fft_mag_next   = compute_magnitude(frames[idx+1])
+            mag_window = (fft_mag_prev + fft_mag_center + fft_mag_next) / 3.0
+            print(f"     Using 3-frame average (frames {idx-1}-{idx+1}) for stability")
         else:
-            print(f"  ➤ No note detected")
+            mag_window = fft_mag_center
+            print(f"     Using single frame {idx} (edge case)")
+        
+        spectrum_energy = np.sum(mag_window)
+        max_magnitude = np.max(mag_window)
+        print(f"     Spectrum energy: {spectrum_energy:.2f}, max magnitude: {max_magnitude:.4f}")
+
+        # ringing cancellation
+        freqs = np.fft.rfftfreq(FFT_SIZE, 1.0/SAMPLE_RATE)
+        resid, updated = cancel_ringing(mag_window, freqs)
+        # 2) Explain it with K harmonic sources chosen by BIC
+        print(f"  🎼 Performing BIC harmonic mixture analysis...")
+        bic_est = estimate_voices_bic(resid, max_K=3, H=8)
+        K = bic_est['K']
+        midi_set = bic_est['midis']
+        bic_value = bic_est['bic']
+        fit_error = bic_est['err']
+
+        is_chord_final = (K >= 2)
+        
+        print(f"     BIC Analysis Results:")
+        print(f"     - Optimal voices (K): {K}")
+        print(f"     - Detected MIDI notes: {midi_set}")
+        print(f"     - Fit error: {fit_error:.4f}")
+        print(f"     - BIC score: {bic_value:.2f}")
+        print(f"     - Classification: {'CHORD' if is_chord_final else 'SINGLE NOTE'}")
+        
+        # Convert MIDI notes to note names for better readability
+        if midi_set:
+            note_names = [note_to_name(int(m)) for m in midi_set]
+            print(f"     - Note names: {note_names}")
+
+        if is_chord_final:
+            print(f"  🎹 Analyzing as CHORD...")
+            print(f"     Detected {K} simultaneous voices: {note_names}")
+            
+            # Convert to pitch classes for chord identification
+            pcs = sorted([(m % 12) for m in midi_set])
+            print(f"     Pitch classes: {pcs}")
+            
+            # Use existing chord detection for labeling and inversion analysis
+            res = detect_chord_multiframe(chroma, C_full, onset, num_frames=1, debug=True)
+            if res is not None:
+                res.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                results["chords"].append(res)
+                print(f"     ✓ Added chord: {res['label']} ({res['inversion']} inversion)")
+            else:
+                print(f"     ✗ Chord detection failed despite BIC indicating polyphony")
+                # go to single note detection
+                print(f"  🎵 Analyzing as SINGLE NOTE instead of CHORD...")
+            
+                # Single note → use the MIDI from BIC analysis
+                m = midi_set[0] if midi_set else None
+                if m is None:
+                    print(f"     BIC didn't detect any notes, falling back to robust detection...")
+                    res_note = detect_single_note_frame(frame, debug=False)
+                    if res_note:
+                        res_note.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                        print(f"     ✓ Fallback detection: {res_note['note_name']} ({res_note['method']})")
+                    else:
+                        print(f"     ✗ No note detected by any method")
+                else:
+                    note_name = note_to_name(m)
+                    frequency = _midi_to_hz(m)
+                    print(f"     BIC detected: {note_name} (MIDI {m}, {frequency:.1f}Hz)")
+                    
+                    res_note = {
+                        "time_seconds": round(time_seconds, 3),
+                        "frame_index": int(onset),
+                        "midi_note": int(m),
+                        "note_name": note_name,
+                        "frequency_hz": round(frequency, 2),
+                        "method": "HarmonicMixture(BIC)",
+                        "confidence": 0.9
+                    }
+                    print(f"     ✓ Added note with high confidence")
+
+                if res_note: 
+                    results["notes"].append(res_note)
+
+        else:
+            print(f"  🎵 Analyzing as SINGLE NOTE...")
+            
+            # Single note → use the MIDI from BIC analysis
+            m = midi_set[0] if midi_set else None
+            if m is None:
+                print(f"     BIC didn't detect any notes, falling back to robust detection...")
+                res_note = detect_single_note_frame(frame, debug=False)
+                if res_note:
+                    res_note.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                    print(f"     ✓ Fallback detection: {res_note['note_name']} ({res_note['method']})")
+                else:
+                    print(f"     ✗ No note detected by any method")
+            else:
+                note_name = note_to_name(m)
+                frequency = _midi_to_hz(m)
+                print(f"     BIC detected: {note_name} (MIDI {m}, {frequency:.1f}Hz)")
+                
+                res_note = {
+                    "time_seconds": round(time_seconds, 3),
+                    "frame_index": int(onset),
+                    "midi_note": int(m),
+                    "note_name": note_name,
+                    "frequency_hz": round(frequency, 2),
+                    "method": "HarmonicMixture(BIC)",
+                    "confidence": 0.9
+                }
+                print(f"     ✓ Added note with high confidence")
+
+            if res_note: 
+                results["notes"].append(res_note)
+        
+        print(f"   🎯 FINAL DECISION: {'CHORD' if is_chord_final else 'SINGLE NOTE'}")
+        print(f"      Method: BIC Harmonic Mixture Analysis (K={K})")
+        if midi_set:
+            print(f"      Detected: {note_names}")
+        else:
+            print(f"      No clear musical content detected")
+
+    # Update analysis summary
+    results["analysis_summary"].update({
+        "total_notes": len(results["notes"]),
+        "total_chords": len(results["chords"])
+    })
     
-    print(f"\n🎼 Analysis complete!")
+    print(f"\n🎼 Analysis Complete!")
     print(f"   Total onsets: {len(results['onsets'])}")
     print(f"   Notes detected: {len(results['notes'])}")
-    print(f"   Detection rate: {len(results['notes'])/len(results['onsets'])*100:.1f}%")
+    print(f"   Chords detected: {len(results['chords'])}")
     
     return results
 
@@ -1346,14 +1849,25 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Failed to open audio file: {e}")
         exit()
-
+ 
     results = analyze_audio_cmdline(audio)
-    
+
     if "error" not in results:
         print("\n" + "="*50)
         print("FINAL RESULTS:")
         print("="*50)
-        for note in results["notes"]:
-            print(f"{note['time_seconds']:6.2f}s: {note['note_name']:>4} ({note['frequency_hz']:6.1f}Hz) - {note['method']}")
-    else:
-        print(f"Analysis failed: {results['error']}")
+        
+        # Print notes
+        if results["notes"]:
+            print("NOTES:")
+            for note in results["notes"]:
+                print(f"  {note['time_seconds']:6.2f}s: {note['note_name']:>4} ({note['frequency_hz']:6.1f}Hz) - {note['method']}")
+        
+        # Print chords
+        if results["chords"]:
+            print("\nCHORDS:")
+            for chord in results["chords"]:
+                print(f"  {chord['time_seconds']:6.2f}s: {chord['label']:>8} octave {chord['octave']} ({chord['inversion']} inversion) - confidence: {chord['confidence']:.3f}")
+        
+        if not results["notes"] and not results["chords"]:
+            print("  No notes or chords detected")

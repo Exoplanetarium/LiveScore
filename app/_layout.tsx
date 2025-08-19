@@ -12,18 +12,18 @@ export default function RootLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Analyze',
+          title: 'Piano Analysis',
           tabBarIcon: ({ color, focused }) => (
             <Ionicons name={focused ? 'musical-notes' : 'musical-notes-outline'} color={color} size={28} />
           ),
         }}
       />
       <Tabs.Screen
-        name="record"
+        name="explore"
         options={{
-          title: 'Record',
+          title: 'Explore',
           tabBarIcon: ({ color, focused }) => (
-            <Ionicons name={focused ? 'mic' : 'mic-outline'} color={color} size={28} />
+            <Ionicons name={focused ? 'code-slash' : 'code-slash-outline'} color={color} size={28} />
           ),
         }}
       />

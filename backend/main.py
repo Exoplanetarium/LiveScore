@@ -1,15 +1,27 @@
-from io import BytesIO
+import logging
 import os
+from io import BytesIO
+from typing import List, Optional
 
-from fastapi.concurrency import run_in_threadpool
+import librosa
 import numpy as np
 import soundfile as sf
 import uvicorn
-import librosa
 from detect_note import analyze_audio
 from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Pydantic models for streaming requests
+class AudioStreamRequest(BaseModel):
+    audio_data: List[float]
+    sample_rate: int = 44100
 
 # Create FastAPI instance
 app = FastAPI(
@@ -72,7 +84,8 @@ async def analyze_audio_file(
             raise HTTPException(413, "File too large")
         
         #! DEBUG
-        import binascii, tempfile
+        import binascii
+        import tempfile
 
         # 1) Log filename, content-type, and size
         print(f"[DEBUG] upload filename={file.filename!r}, content_type={file.content_type!r}, size={len(data)} bytes")
@@ -179,6 +192,102 @@ async def analyze_raw_audio(
             status_code=500,
             detail=f"Raw audio analysis failed: {str(e)}"
         )
+
+@app.post("/analyze-stream")
+async def analyze_audio_stream(request: AudioStreamRequest):
+    """
+    Analyze streaming audio data for real-time piano detection
+    """
+    try:
+        logger.info(f"Received audio stream: {len(request.audio_data)} samples at {request.sample_rate}Hz")
+        
+        # Validate input
+        if not request.audio_data:
+            raise HTTPException(status_code=400, detail="No audio data provided")
+        
+        if len(request.audio_data) < 1024:
+            raise HTTPException(status_code=400, detail="Audio data too short for analysis")
+        
+        # Convert to numpy array
+        audio_array = np.array(request.audio_data, dtype=np.float32)
+        
+        # Ensure audio is in correct range [-1, 1]
+        if np.max(np.abs(audio_array)) > 1.0:
+            audio_array = audio_array / np.max(np.abs(audio_array))
+        
+        logger.info(f"Processing audio array: shape={audio_array.shape}, range=[{np.min(audio_array):.3f}, {np.max(audio_array):.3f}]")
+        
+        # Additional audio analysis for debugging
+        duration_sec = len(audio_array) / request.sample_rate
+        logger.info(f"Audio duration: {duration_sec:.3f} seconds")
+        
+        # Check for silence
+        rms_energy = np.sqrt(np.mean(audio_array**2))
+        logger.info(f"RMS energy: {rms_energy:.6f}")
+        
+        if rms_energy < 0.001:
+            logger.warning("Audio appears to be very quiet or silent")
+        
+        # Check for clipping
+        clipped_samples = np.sum(np.abs(audio_array) >= 0.99)
+        if clipped_samples > 0:
+            logger.warning(f"Audio may be clipped: {clipped_samples} samples at max level")
+        
+        # Analyze the audio using our detection system
+        results = await run_in_threadpool(analyze_audio, audio_array, False)
+        
+        # Detailed logging of what was detected
+        detected_notes = results.get('notes', [])
+        detected_chords = results.get('chords', [])
+        detected_onsets = results.get('onsets', [])
+        
+        logger.info(f"Analysis complete: {len(detected_onsets)} onsets, {len(detected_notes)} notes, {len(detected_chords)} chords")
+        
+        # Log individual detections for debugging
+        if detected_notes:
+            logger.info("Detected notes:")
+            for note in detected_notes:
+                logger.info(f"  {note['time_seconds']:.3f}s: {note['note_name']} ({note['method']}, conf={note['confidence']:.2f})")
+        
+        if detected_chords:
+            logger.info("Detected chords:")
+            for chord in detected_chords:
+                logger.info(f"  {chord['time_seconds']:.3f}s: {chord['label']} {chord['inversion']} (conf={chord['confidence']:.2f})")
+        
+        if not detected_notes and not detected_chords:
+            logger.warning("No notes or chords detected in this audio chunk")
+        
+        # Ensure all numeric values are JSON serializable
+        def make_json_serializable(obj):
+            if isinstance(obj, dict):
+                return {k: make_json_serializable(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [make_json_serializable(item) for item in obj]
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            else:
+                return obj
+        
+        # Clean results for JSON serialization
+        clean_results = make_json_serializable(results)
+        
+        # Add streaming metadata
+        clean_results["stream_info"] = {
+            "samples_received": len(request.audio_data),
+            "sample_rate": request.sample_rate,
+            "duration_seconds": len(request.audio_data) / request.sample_rate,
+            "analysis_type": "real_time_stream"
+        }
+        
+        return JSONResponse(content=clean_results)
+        
+    except Exception as e:
+        logger.error(f"Streaming analysis error: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Streaming analysis failed: {str(e)}")
 
 if __name__ == "__main__":
     # Get port from environment variable (Railway sets this) or default to 8000
