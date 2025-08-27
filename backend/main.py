@@ -1,7 +1,20 @@
 import logging
 import os
+import hashlib
+import json
+import math
 from io import BytesIO
 from typing import List, Optional
+
+# consistency between local and server
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+os.environ["BLIS_NUM_THREADS"] = "1"
+# Force the same OpenBLAS micro-kernel on both boxes (avoid AVX-512 vs AVX2 drift)
+os.environ["OPENBLAS_CORETYPE"] = "HASWELL"   # works on AVX2/AVX-512 machines
+os.environ["PYTHONHASHSEED"] = "0"
 
 import librosa
 import numpy as np
@@ -13,6 +26,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from scipy.signal import resample_poly
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -38,6 +52,49 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Helper: make results JSON serializable (convert numpy types/arrays)
+def make_json_serializable(obj):
+    if isinstance(obj, dict):
+        return {k: make_json_serializable(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    else:
+        return obj
+
+def load_audio_deterministic(path, target_sr=44100):
+    # Read raw PCM deterministically
+    y, sr = sf.read(path, dtype="float32", always_2d=True)  # shape (N, ch)
+    y = y.mean(axis=1).astype(np.float32, copy=False)       # force mono by ourselves
+
+    if sr != target_sr:
+        g = math.gcd(sr, target_sr)
+        up, down = target_sr // g, sr // g
+        y = resample_poly(y, up, down).astype(np.float32, copy=False)  # deterministic polyphase
+    return y, target_sr
+
+def read_wav(path):
+    audio, sr = sf.read(path)
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+    if sr != 44100:
+        raise ValueError(f"Expected {44100} Hz, got {sr}")
+    # simple one‐pole HPF: y[n] = x[n] - x[n-1] + alpha y[n-1]
+    alpha = 0.95
+    y = np.empty_like(audio)
+    prev_x, prev_y = audio[0], audio[0]
+    y[0] = prev_y
+    for i in range(1, len(audio)):
+        y[i] = audio[i] - prev_x + alpha * prev_y
+        prev_x, prev_y = audio[i], y[i]
+    return y
 
 @app.get("/")
 async def root():
@@ -101,35 +158,28 @@ async def analyze_audio_file(
         print(f"[DEBUG] data upload written to {tmp.name}")
         #! END DEBUG
 
-        bio = BytesIO(data)
-        audio, sr = librosa.load(bio, sr=44100, mono=True)
+        tmp.close()
+
+        audio = read_wav(tmp.name)
+        os.unlink(tmp.name)
 
         try:
-            
-            # Convert to mono if stereo
-            if audio.ndim > 1:
-                audio = np.mean(audio, axis=1)
-            
-            # Resample to 44.1kHz if needed
-            if sr != 44100:
-                from scipy.signal import resample
-                target_length = int(len(audio) * 44100 / sr)
-                audio = resample(audio, target_length)
-            
-            # Analyze the audio
+            # Analyze the audio in a threadpool (blocking CPU work)
             results = await run_in_threadpool(analyze_audio, audio, debug)
-            
+
             # Add metadata about the uploaded file
             results["file_info"] = {
                 "filename": file.filename,
                 "content_type": file.content_type,
-                "original_sample_rate": sr,
                 "processed_sample_rate": 44100,
-                "channels": 1 if audio.ndim == 1 else audio.shape[1]
+                "channels": 1 if (isinstance(audio, np.ndarray) and audio.ndim == 1) else (audio.shape[1] if isinstance(audio, np.ndarray) and audio.ndim > 1 else 1)
             }
-            
-            return JSONResponse(content=results)
-            
+
+            # Ensure JSON serializable
+            clean_results = make_json_serializable(results)
+
+            return JSONResponse(content=clean_results)
+
         except Exception as e:
             raise HTTPException(
                 status_code=500,
@@ -173,19 +223,21 @@ async def analyze_raw_audio(
             target_length = int(len(audio) * 44100 / sample_rate)
             audio = resample(audio, target_length)
         
-        # Analyze the audio
-        results = analyze_audio(audio, debug=debug)
-        
+        # Analyze the audio in a threadpool
+        results = await run_in_threadpool(analyze_audio, audio, debug)
+
         # Add metadata
         results["file_info"] = {
             "filename": "recorded_audio",
             "content_type": "audio/raw",
-            "original_sample_rate": sample_rate,
+            "original_sample_rate": int(sample_rate) if hasattr(sample_rate, '__int__') else sample_rate,
             "processed_sample_rate": 44100,
             "channels": 1
         }
-        
-        return JSONResponse(content=results)
+
+        clean_results = make_json_serializable(results)
+
+        return JSONResponse(content=clean_results)
         
     except Exception as e:
         raise HTTPException(
@@ -256,25 +308,10 @@ async def analyze_audio_stream(request: AudioStreamRequest):
         
         if not detected_notes and not detected_chords:
             logger.warning("No notes or chords detected in this audio chunk")
-        
-        # Ensure all numeric values are JSON serializable
-        def make_json_serializable(obj):
-            if isinstance(obj, dict):
-                return {k: make_json_serializable(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [make_json_serializable(item) for item in obj]
-            elif isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            elif isinstance(obj, np.ndarray):
-                return obj.tolist()
-            else:
-                return obj
-        
+
         # Clean results for JSON serialization
         clean_results = make_json_serializable(results)
-        
+
         # Add streaming metadata
         clean_results["stream_info"] = {
             "samples_received": len(request.audio_data),
@@ -282,9 +319,9 @@ async def analyze_audio_stream(request: AudioStreamRequest):
             "duration_seconds": len(request.audio_data) / request.sample_rate,
             "analysis_type": "real_time_stream"
         }
-        
+
         return JSONResponse(content=clean_results)
-        
+
     except Exception as e:
         logger.error(f"Streaming analysis error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Streaming analysis failed: {str(e)}")

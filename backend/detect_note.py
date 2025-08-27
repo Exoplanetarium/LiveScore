@@ -3,12 +3,37 @@ import warnings
 
 warnings.filterwarnings('ignore', module='librosa.*')
 
+# consistency between local and server
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MKL_NUM_THREADS", "1")
+os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", "1")  # macOS, harmless elsewhere
+os.environ.setdefault("BLIS_NUM_THREADS", "1")
+os.environ.setdefault("PYTHONHASHSEED", "0")
+os.environ["OPENBLAS_CORETYPE"] = "HASWELL" 
+
+#! DIAGNOSTICS
+import math
+
 import librosa
 import numpy as np
 import soundfile as sf
 from numba import njit
 from scipy.optimize import nnls
-from scipy.signal import get_window, medfilt
+from scipy.signal import get_window, medfilt, resample_poly
+
+
+def load_audio_deterministic(path, target_sr=44100):
+    # Read raw PCM deterministically
+    y, sr = sf.read(path, dtype="float32", always_2d=True)  # shape (N, ch)
+    y = y.mean(axis=1).astype(np.float32, copy=False)       # force mono by ourselves
+
+    if sr != target_sr:
+        g = math.gcd(sr, target_sr)
+        up, down = target_sr // g, sr // g
+        y = resample_poly(y, up, down).astype(np.float32, copy=False)  # deterministic polyphase
+    return y, target_sr
 
 #* ─── Constants ────────────────────────────────────────────────────────────────
 SAMPLE_RATE = 44100
@@ -46,6 +71,10 @@ def note_to_name(note):
     pitch_classes = ['C', 'C#', 'D', 'D#', 'E', 'F',
                         'F#', 'G', 'G#', 'A', 'A#', 'B']
     return f"{pitch_classes[pitch_class]}{octave}"
+
+def frames_to_seconds(frames, sr, hop_length):
+    """Convert frame indices to time in seconds."""
+    return (np.asarray(frames) * hop_length) / float(sr)
 
 #* ─── Read + High-Pass Filter ────────────────────────────────────────────────
 def read_wav(path):
@@ -1237,6 +1266,75 @@ def cancel_ringing(mag_window, freqs, onset_midi_seeds=None):
 
     return resid, updated
 
+#* ─── Offset Estimation ────────────────────────────────────────────────────────
+def _event_energy_series(chroma, pcs, start_f, end_f):
+    """Energy track for this note/chord = max chroma of its pitch classes."""
+    pcs = list({p % 12 for p in pcs})
+    return np.max(chroma[pcs, start_f:end_f], axis=0)
+
+def estimate_offsets_from_chroma(
+    onsets_frames,         # e.g. np.array of onset frame indices
+    event_midis,           # list same length as onsets; each item int or list[int]
+    chroma,                # shape (12, T) float
+    lookahead_frames=2048//512 * 128,  # search up to ~128 beats (tweak)
+    decay_ratio=0.20,                # end when energy < decay_ratio * local_peak
+    abs_floor=0.06,                  # and also below an absolute floor
+    hysteresis_L=3,                  # require L consecutive low frames
+    guard_next_onset=True            # don’t cross strongly into next onset
+):
+    """
+    Returns list of (onset_f, offset_f) per event (offset_f is exclusive).
+    Works for single notes or chords (we track max energy across chord tones).
+    """
+    T = chroma.shape[1]
+    onsets = np.asarray(onsets_frames, dtype=int)
+    results = []
+
+    for i, f0 in enumerate(onsets):
+        pcs = event_midis[i]
+        if not isinstance(pcs, (list, tuple, np.ndarray)):
+            pcs = [int(pcs)]
+        pcs = [int(m) % 12 for m in pcs]
+
+        # define search window
+        f1_limit = min(T, f0 + lookahead_frames)
+        if guard_next_onset and i + 1 < len(onsets):
+            f1_limit = min(f1_limit, onsets[i + 1])
+
+        if f0 >= f1_limit - 1:
+            results.append((f0, f0 + 1))
+            continue
+
+        e = _event_energy_series(chroma, pcs, f0, f1_limit)  # length W
+        if not np.any(e):
+            results.append((f0, min(f0 + 1, T)))
+            continue
+
+        # local peak over a short growth window to be robust at onset
+        grow_win = min(6, e.size)  # ~ few frames
+        local_peak = float(np.max(e[:grow_win]))
+        thr = max(decay_ratio * local_peak, abs_floor)
+
+        low_run = 0
+        off_rel = e.size  # default to end of window
+        for t_rel in range(grow_win, e.size):
+            if e[t_rel] < thr:
+                low_run += 1
+                if low_run >= hysteresis_L:
+                    off_rel = t_rel - hysteresis_L + 1
+                    break
+            else:
+                # reset if energy resurges (legato/sustain)
+                low_run = 0
+
+        onset_f = int(f0)
+        offset_f = int(min(f0 + off_rel, f1_limit))
+        # never zero duration
+        if offset_f <= onset_f:
+            offset_f = min(onset_f + 1, T)
+        results.append((onset_f, offset_f))
+
+    return results
 
 #* ─── Main Analysis Function ──────────────────────────────────────────────────
 def detect_single_note_frame(frame, debug=False):
@@ -1473,26 +1571,18 @@ def analyze_audio(wav_path_or_array, debug=False):
         bins_per_octave=12,
         fmin=librosa.note_to_hz('C1')
     ))
-    
-    # 4) Compute gating features for chord/note classification
-    T = chroma.shape[1]
-    peak_ratios = np.zeros(T)
-    score_ratios = np.zeros(T)
-    spec_entropy = np.zeros(T)
-    spec_flatness = np.zeros(T)
-    
-    for i in range(T):
-        bins = np.sort(chroma[:, i])[::-1]
-        peak_ratios[i] = bins[1] / (bins[0] + 1e-9)
-        note_sc = NOTE_TEMPLATES.dot(chroma[:,i]).max()
-        chord_sc = CH_TEMPLATES.dot(chroma[:,i]).max()
-        score_ratios[i] = chord_sc / (note_sc + 1e-9)
-        mf = C_full[:, i]
-        p = mf / (mf.sum() + 1e-9)
-        spec_entropy[i] = -np.sum(p * np.log(p + 1e-9))
-        geo = np.exp(np.mean(np.log(mf + 1e-9)))
-        arith = np.mean(mf + 1e-9)
-        spec_flatness[i] = geo / arith
+    # estimate offsets from chroma (fast pre-pass) — no console logs in API path
+    try:
+        event_midis = []
+        for f in onsets:
+            if 0 <= f < chroma.shape[1]:
+                pc = int(np.argmax(chroma[:, f]))
+                event_midis.append(pc)
+            else:
+                event_midis.append(0)
+        offsets_frames = estimate_offsets_from_chroma(onsets, event_midis, chroma)
+    except Exception:
+        offsets_frames = [(f, f+1) for f in onsets]
 
     # Results structure
     results = {
@@ -1515,9 +1605,21 @@ def analyze_audio(wav_path_or_array, debug=False):
         time_seconds = onset * HOP_SIZE / SAMPLE_RATE
                 
         # Add onset information
+        # attach estimated offset and duration (from chroma analysis)
+        try:
+            oframe = int(offsets_frames[i][1])
+            osec = round(oframe * HOP_SIZE / SAMPLE_RATE, 3)
+            dur = round(osec - time_seconds, 3)
+        except Exception:
+            oframe = int(onset + 1)
+            osec = round((onset + 1) * HOP_SIZE / SAMPLE_RATE, 3)
+            dur = round(osec - time_seconds, 3)
         onset_info = {
             "time_seconds": round(time_seconds, 3),
-            "frame_index": int(onset)
+            "frame_index": int(onset),
+            "offset_frame": oframe,
+            "offset_seconds": osec,
+            "duration_seconds": dur
         }
         results["onsets"].append(onset_info)
         
@@ -1545,6 +1647,9 @@ def analyze_audio(wav_path_or_array, debug=False):
             res = detect_chord_multiframe(chroma, C_full, onset, num_frames=1, debug=True)
             if res is not None:
                 res.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                # copy onset offset metadata
+                ofmeta = results["onsets"][i]
+                res.update({"offset_seconds": ofmeta.get("offset_seconds"), "duration_seconds": ofmeta.get("duration_seconds"), "offset_frame": ofmeta.get("offset_frame")})
                 results["chords"].append(res)
             else:
                 # Single note → use the MIDI from BIC analysis
@@ -1553,10 +1658,12 @@ def analyze_audio(wav_path_or_array, debug=False):
                     res_note = detect_single_note_frame(frame, debug=False)
                     if res_note:
                         res_note.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                        # attach onset offset metadata
+                        ofmeta = results["onsets"][i]
+                        res_note.update({"offset_seconds": ofmeta.get("offset_seconds"), "duration_seconds": ofmeta.get("duration_seconds"), "offset_frame": ofmeta.get("offset_frame")})
                 else:
                     note_name = note_to_name(m)
                     frequency = _midi_to_hz(m)
-                    
                     res_note = {
                         "time_seconds": round(time_seconds, 3),
                         "frame_index": int(onset),
@@ -1566,6 +1673,9 @@ def analyze_audio(wav_path_or_array, debug=False):
                         "method": "HarmonicMixture(BIC)",
                         "confidence": 0.9
                     }
+                    # attach onset offset metadata
+                    ofmeta = results["onsets"][i]
+                    res_note.update({"offset_seconds": ofmeta.get("offset_seconds"), "duration_seconds": ofmeta.get("duration_seconds"), "offset_frame": ofmeta.get("offset_frame")})
 
                 if res_note: 
                     results["notes"].append(res_note)
@@ -1590,7 +1700,7 @@ def analyze_audio(wav_path_or_array, debug=False):
                     "confidence": 0.9
                 }
 
-            if res_note: 
+            if res_note:
                 results["notes"].append(res_note)
 
     # Update analysis summary
@@ -1598,7 +1708,8 @@ def analyze_audio(wav_path_or_array, debug=False):
         "total_notes": len(results["notes"]),
         "total_chords": len(results["chords"])
     })
-    
+
+
     return results
 
 #* ─── Command-line Analysis Function ───────────────────────────────────────────
@@ -1645,27 +1756,20 @@ def analyze_audio_cmdline(wav_path_or_array):
         fmin=librosa.note_to_hz('C1')
     ))
     print(f"✓ Chroma shape: {chroma.shape}, CQT shape: {C_full.shape}")
-    
-    # 4) Compute gating features for chord/note classification
-    print("📊 Computing dynamic thresholds for chord/note gating...")
-    T = chroma.shape[1]
-    peak_ratios = np.zeros(T)
-    score_ratios = np.zeros(T)
-    spec_entropy = np.zeros(T)
-    spec_flatness = np.zeros(T)
-    
-    for i in range(T):
-        bins = np.sort(chroma[:, i])[::-1]
-        peak_ratios[i] = bins[1] / (bins[0] + 1e-9)
-        note_sc = NOTE_TEMPLATES.dot(chroma[:,i]).max()
-        chord_sc = CH_TEMPLATES.dot(chroma[:,i]).max()
-        score_ratios[i] = chord_sc / (note_sc + 1e-9)
-        mf = C_full[:, i]
-        p = mf / (mf.sum() + 1e-9)
-        spec_entropy[i] = -np.sum(p * np.log(p + 1e-9))
-        geo = np.exp(np.mean(np.log(mf + 1e-9)))
-        arith = np.mean(mf + 1e-9)
-        spec_flatness[i] = geo / arith
+    # --- estimate offsets from chroma for each onset (fast pre-pass)
+    try:
+        event_midis = []
+        for f in onsets:
+            if 0 <= f < chroma.shape[1]:
+                # representative pitch-class for this event: strongest chroma bin
+                pc = int(np.argmax(chroma[:, f]))
+                event_midis.append(pc)
+            else:
+                event_midis.append(0)
+        offsets_frames = estimate_offsets_from_chroma(onsets, event_midis, chroma)
+    except Exception as e:
+        print(f"[OFFSETS] estimate_offsets_from_chroma failed: {e}")
+        offsets_frames = [(f, f+1) for f in onsets]
     
     # Results structure
     results = {
@@ -1695,7 +1799,18 @@ def analyze_audio_cmdline(wav_path_or_array):
             "time_seconds": round(time_seconds, 3),
             "frame_index": int(onset)
         }
+        # attach estimated offset and duration (from chroma analysis)
+        try:
+            oframe = int(offsets_frames[i][1])
+            osec = round(oframe * HOP_SIZE / SAMPLE_RATE, 3)
+            dur = round(osec - time_seconds, 3)
+        except Exception:
+            oframe = int(onset + 1)
+            osec = round((onset + 1) * HOP_SIZE / SAMPLE_RATE, 3)
+            dur = round(osec - time_seconds, 3)
+        onset_info.update({"offset_frame": oframe, "offset_seconds": osec, "duration_seconds": dur})
         results["onsets"].append(onset_info)
+        print(f"  [OFFSETS] estimated offset={osec}s (frame {oframe}), duration={dur}s")
         
         # 1) Build a tiny onset-centered spectrum (average 2 frames ahead for stability)
         print(f"  🔬 Building onset-centered spectrum...")
@@ -1750,6 +1865,9 @@ def analyze_audio_cmdline(wav_path_or_array):
             res = detect_chord_multiframe(chroma, C_full, onset, num_frames=1, debug=True)
             if res is not None:
                 res.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                # copy onset offset metadata
+                ofmeta = results["onsets"][i]
+                res.update({"offset_seconds": ofmeta.get("offset_seconds"), "duration_seconds": ofmeta.get("duration_seconds"), "offset_frame": ofmeta.get("offset_frame")})
                 results["chords"].append(res)
                 print(f"     ✓ Added chord: {res['label']} ({res['inversion']} inversion)")
             else:
@@ -1764,6 +1882,9 @@ def analyze_audio_cmdline(wav_path_or_array):
                     res_note = detect_single_note_frame(frame, debug=False)
                     if res_note:
                         res_note.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
+                        # copy onset offset metadata
+                        ofmeta = results["onsets"][i]
+                        res_note.update({"offset_seconds": ofmeta.get("offset_seconds"), "duration_seconds": ofmeta.get("duration_seconds"), "offset_frame": ofmeta.get("offset_frame")})
                         print(f"     ✓ Fallback detection: {res_note['note_name']} ({res_note['method']})")
                     else:
                         print(f"     ✗ No note detected by any method")
@@ -1783,7 +1904,10 @@ def analyze_audio_cmdline(wav_path_or_array):
                     }
                     print(f"     ✓ Added note with high confidence")
 
-                if res_note: 
+                if res_note:
+                    # attach onset offset metadata
+                    ofmeta = results["onsets"][i]
+                    res_note.update({"offset_seconds": ofmeta.get("offset_seconds"), "duration_seconds": ofmeta.get("duration_seconds"), "offset_frame": ofmeta.get("offset_frame")})
                     results["notes"].append(res_note)
 
         else:
@@ -1816,6 +1940,12 @@ def analyze_audio_cmdline(wav_path_or_array):
                 print(f"     ✓ Added note with high confidence")
 
             if res_note: 
+                ofmeta = results["onsets"][i]
+                res_note.update({
+                    "offset_seconds": ofmeta.get("offset_seconds"),
+                    "duration_seconds": ofmeta.get("duration_seconds"),
+                    "offset_frame": ofmeta.get("offset_frame")
+                })
                 results["notes"].append(res_note)
         
         print(f"   🎯 FINAL DECISION: {'CHORD' if is_chord_final else 'SINGLE NOTE'}")
@@ -1835,13 +1965,17 @@ def analyze_audio_cmdline(wav_path_or_array):
     print(f"   Total onsets: {len(results['onsets'])}")
     print(f"   Notes detected: {len(results['notes'])}")
     print(f"   Chords detected: {len(results['chords'])}")
+    # Display offsets summary
+    print("\nOffsets summary (first 10 onsets):")
+    for o in results['onsets'][:10]:
+        print(f"  onset {o['time_seconds']:6.3f}s -> offset {o.get('offset_seconds')}s (dur {o.get('duration_seconds')}s)")
     
     return results
 
 #* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Use absolute path to audio file
-    wav_path = os.path.join(os.path.dirname(__file__), 'audio', 'test_chromatic.wav')
+    wav_path = os.path.join(os.path.dirname(__file__), 'audio', test_benchmark)
     print(f"🎹 Piano Note Detection - Command Line")
     print(f"Reading audio from: {wav_path}")
     try:
@@ -1849,7 +1983,7 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"Failed to open audio file: {e}")
         exit()
- 
+    
     results = analyze_audio_cmdline(audio)
 
     if "error" not in results:
@@ -1861,13 +1995,21 @@ if __name__ == "__main__":
         if results["notes"]:
             print("NOTES:")
             for note in results["notes"]:
-                print(f"  {note['time_seconds']:6.2f}s: {note['note_name']:>4} ({note['frequency_hz']:6.1f}Hz) - {note['method']}")
+                off = note.get("offset_seconds")
+                dur = note.get("duration_seconds")
+                off_str = f"{off:.2f}s" if off is not None else "N/A"
+                dur_str = f"{dur:.2f}s" if dur is not None else "N/A"
+                print(f"  {note['time_seconds']:6.2f}s -> {off_str} (dur {dur_str}): {note['note_name']:>4} ({note['frequency_hz']:6.1f}Hz) - {note['method']}")
         
         # Print chords
         if results["chords"]:
             print("\nCHORDS:")
             for chord in results["chords"]:
-                print(f"  {chord['time_seconds']:6.2f}s: {chord['label']:>8} octave {chord['octave']} ({chord['inversion']} inversion) - confidence: {chord['confidence']:.3f}")
+                off = chord.get("offset_seconds")
+                dur = chord.get("duration_seconds")
+                off_str = f"{off:.2f}s" if off is not None else "N/A"
+                dur_str = f"{dur:.2f}s" if dur is not None else "N/A"
+                print(f"  {chord['time_seconds']:6.2f}s -> {off_str} (dur {dur_str}): {chord['label']:>8} octave {chord['octave']} ({chord['inversion']} inversion) - confidence: {chord['confidence']:.3f}")
         
         if not results["notes"] and not results["chords"]:
             print("  No notes or chords detected")
