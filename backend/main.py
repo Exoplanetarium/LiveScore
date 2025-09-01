@@ -1,8 +1,8 @@
-import logging
-import os
 import hashlib
 import json
+import logging
 import math
+import os
 from io import BytesIO
 from typing import List, Optional
 
@@ -16,7 +16,7 @@ os.environ["BLIS_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_CORETYPE"] = "HASWELL"   # works on AVX2/AVX-512 machines
 os.environ["PYTHONHASHSEED"] = "0"
 
-import librosa
+import tempfile
 import numpy as np
 import soundfile as sf
 import uvicorn
@@ -285,8 +285,39 @@ async def analyze_audio_stream(request: AudioStreamRequest):
         if clipped_samples > 0:
             logger.warning(f"Audio may be clipped: {clipped_samples} samples at max level")
         
-        # Analyze the audio using our detection system
-        results = await run_in_threadpool(analyze_audio, audio_array, False)
+        logger.info(f"Original audio stats: samples={len(audio_array)}, sample_rate={request.sample_rate}, duration={duration_sec:.3f}s")
+
+        # Create temporary WAV file
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp_file:
+            # Write audio data as WAV file
+            sf.write(tmp_file.name, audio_array, request.sample_rate)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Use read_wav() function for consistent processing
+            logger.info(f"Processing audio through read_wav() function")
+            processed_audio = read_wav(tmp_file_path)
+            logger.info(f"Audio processed: shape={processed_audio.shape}, range=[{np.min(processed_audio):.3f}, {np.max(processed_audio):.3f}]")
+            
+            # Log comparison between original and processed audio
+            logger.info(f"Audio processing comparison:")
+            logger.info(f"  Original: {len(audio_array)} samples, range=[{np.min(audio_array):.3f}, {np.max(audio_array):.3f}]")
+            logger.info(f"  Processed: {len(processed_audio)} samples, range=[{np.min(processed_audio):.3f}, {np.max(processed_audio):.3f}]")
+            logger.info(f"  Sample rate conversion: {request.sample_rate}Hz -> 44100Hz")
+            
+            # Clean up temporary file
+            os.unlink(tmp_file_path)
+            
+            # Analyze the processed audio using our detection system
+            results = await run_in_threadpool(analyze_audio, processed_audio, False)
+        except Exception as e:
+            # Clean up temporary file in case of error
+            if 'tmp_file_path' in locals():
+                try:
+                    os.unlink(tmp_file_path)
+                except:
+                    pass
+            raise e
         
         # Detailed logging of what was detected
         detected_notes = results.get('notes', [])
@@ -315,9 +346,11 @@ async def analyze_audio_stream(request: AudioStreamRequest):
         # Add streaming metadata
         clean_results["stream_info"] = {
             "samples_received": len(request.audio_data),
-            "sample_rate": request.sample_rate,
+            "original_sample_rate": request.sample_rate,
+            "processed_sample_rate": 44100,  # read_wav() always outputs 44.1kHz
             "duration_seconds": len(request.audio_data) / request.sample_rate,
-            "analysis_type": "real_time_stream"
+            "analysis_type": "real_time_stream",
+            "processing_method": "read_wav_function"
         }
 
         return JSONResponse(content=clean_results)

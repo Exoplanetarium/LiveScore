@@ -1965,10 +1965,6 @@ def analyze_audio_cmdline(wav_path_or_array):
     print(f"   Total onsets: {len(results['onsets'])}")
     print(f"   Notes detected: {len(results['notes'])}")
     print(f"   Chords detected: {len(results['chords'])}")
-    # Display offsets summary
-    print("\nOffsets summary (first 10 onsets):")
-    for o in results['onsets'][:10]:
-        print(f"  onset {o['time_seconds']:6.3f}s -> offset {o.get('offset_seconds')}s (dur {o.get('duration_seconds')}s)")
     
     return results
 

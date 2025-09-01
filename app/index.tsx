@@ -4,6 +4,7 @@ import * as FileSystem from 'expo-file-system';
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, PermissionsAndroid, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import AudioRecord from 'react-native-audio-record';
+import AdvancedVexFlowMusic from '../components/AdvancedVexFlowMusic';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 
@@ -50,7 +51,13 @@ export default function AnalyzeScreen() {
   
   // File upload states
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [analysisResults, setAnalysisResults] = useState<any>(null);
+  const [analysisResults, setAnalysisResults] = useState<{
+    onsets: number[];
+    notes: string[];
+    confidence: number;
+    method: string;
+    details: AnalysisResult | null;
+  } | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // Real-time recording states
@@ -67,15 +74,19 @@ export default function AnalyzeScreen() {
 
   useEffect(() => {
     // Initialize AudioRecord when component mounts
-    const options = {
-      sampleRate: 44100,
-      channels: 1,
-      bitsPerSample: 16,
-      audioSource: 6, // VOICE_RECOGNITION
-      wavFile: 'temp_audio.wav'
-    };
-    
-    AudioRecord.init(options);
+    try {
+      const options = {
+        sampleRate: 44100,
+        channels: 1,
+        bitsPerSample: 16,
+        audioSource: 6, // VOICE_RECOGNITION
+        wavFile: 'temp_audio.wav'
+      };
+      
+      AudioRecord.init(options);
+    } catch (error) {
+      console.warn('Failed to initialize AudioRecord:', error);
+    }
     
     return () => {
       if (intervalRef.current) {
@@ -84,7 +95,11 @@ export default function AnalyzeScreen() {
       if (analysisTimeoutRef.current) {
         clearTimeout(analysisTimeoutRef.current);
       }
-      AudioRecord.stop();
+      try {
+        AudioRecord.stop();
+      } catch (error) {
+        console.warn('Failed to stop AudioRecord:', error);
+      }
     };
   }, []);
 
@@ -593,19 +608,12 @@ export default function AnalyzeScreen() {
                     </ThemedText>
                   </View>
                   
-                  {analysisResults.details.analysis_summary.detected_fundamental && (
-                    <View style={styles.resultItem}>
-                      <ThemedText style={styles.resultLabel}>Fundamental:</ThemedText>
-                      <ThemedText style={styles.resultValue}>
-                        {analysisResults.details.analysis_summary.detected_fundamental.note_name}
-                      </ThemedText>
-                    </View>
-                  )}
+                  {/* Note: detected_fundamental property removed as it's not in the AnalysisResult type */}
                 </>
               )}
 
               {/* Show individual note timings */}
-              {analysisResults.details?.notes && analysisResults.details.notes.length > 0 && (
+              {analysisResults?.details?.notes && analysisResults.details.notes.length > 0 && (
                 <View style={styles.noteTimings}>
                   <ThemedText style={styles.resultLabel}>Note Timings:</ThemedText>
                   {analysisResults.details.notes.map((note: any, index: number) => (
@@ -618,6 +626,15 @@ export default function AnalyzeScreen() {
                 </View>
               )}
             </ScrollView>
+          )}
+
+          {/* Sheet Music Display for File Analysis */}
+          {analysisResults?.details?.notes && analysisResults.details.notes.length > 0 && (
+            <AdvancedVexFlowMusic
+              detectedNotes={analysisResults.details.notes}
+              detectedChords={analysisResults.details.chords || []}
+              isRecording={false}
+            />
           )}
         </>
       )}
@@ -668,6 +685,13 @@ export default function AnalyzeScreen() {
               </View>
             )}
           </View>
+
+          {/* Live Sheet Music Display */}
+          <AdvancedVexFlowMusic
+            detectedNotes={detectedNotes}
+            detectedChords={detectedChords}
+            isRecording={isRecording}
+          />
 
           {/* Real-time Results Display */}
           {(detectedNotes.length > 0 || detectedChords.length > 0) && (
