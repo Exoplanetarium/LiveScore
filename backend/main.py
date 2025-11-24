@@ -4,7 +4,7 @@ import logging
 import math
 import os
 from io import BytesIO
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 # consistency between local and server
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -17,11 +17,12 @@ os.environ["OPENBLAS_CORETYPE"] = "HASWELL"   # works on AVX2/AVX-512 machines
 os.environ["PYTHONHASHSEED"] = "0"
 
 import tempfile
+
 import numpy as np
 import soundfile as sf
 import uvicorn
-from detect_note import analyze_audio
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from detect_note import analyze_audio, analyze_audio_optimized, read_wav
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -36,6 +37,17 @@ logger = logging.getLogger(__name__)
 class AudioStreamRequest(BaseModel):
     audio_data: List[float]
     sample_rate: int = 44100
+
+# Streaming session models
+class StreamReset(BaseModel):
+    session_id: str
+
+OVERLAP_SAMPLES = 4096  # ~93ms @ 44.1kHz, > n_fft for continuity
+_stream_sessions: Dict[str, Dict] = {}
+
+# A/B test flag: set to True to use optimized pipeline (4x faster)
+# Once verified accurate, you can remove this and always use analyze_audio_optimized
+USE_OPTIMIZED_PIPELINE = True
 
 # Create FastAPI instance
 app = FastAPI(
@@ -80,21 +92,27 @@ def load_audio_deterministic(path, target_sr=44100):
         y = resample_poly(y, up, down).astype(np.float32, copy=False)  # deterministic polyphase
     return y, target_sr
 
-def read_wav(path):
-    audio, sr = sf.read(path)
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
-    if sr != 44100:
-        raise ValueError(f"Expected {44100} Hz, got {sr}")
-    # simple one‐pole HPF: y[n] = x[n] - x[n-1] + alpha y[n-1]
-    alpha = 0.95
-    y = np.empty_like(audio)
-    prev_x, prev_y = audio[0], audio[0]
-    y[0] = prev_y
-    for i in range(1, len(audio)):
-        y[i] = audio[i] - prev_x + alpha * prev_y
-        prev_x, prev_y = audio[i], y[i]
+def _load_bytes_to_pcm(data: bytes, target_sr: int = 44100) -> np.ndarray:
+    """Decode uploaded audio bytes to mono float32 PCM at target_sr."""
+    with sf.SoundFile(BytesIO(data)) as f:
+        y = f.read(always_2d=True, dtype='float32')  # (N, ch)
+        sr = f.samplerate
+    y = y.mean(axis=1).astype(np.float32, copy=False)
+    if sr != target_sr:
+        g = math.gcd(sr, target_sr)
+        up, down = target_sr // g, sr // g
+        y = resample_poly(y, up, down).astype(np.float32, copy=False)
     return y
+
+def _get_session(session_id: str) -> Dict:
+    s = _stream_sessions.get(session_id)
+    if s is None:
+        s = {
+            "tail": np.zeros(0, dtype=np.float32),
+            "sample_cursor": 0,  # samples processed (without overlap)
+        }
+        _stream_sessions[session_id] = s
+    return s
 
 @app.get("/")
 async def root():
@@ -358,6 +376,84 @@ async def analyze_audio_stream(request: AudioStreamRequest):
     except Exception as e:
         logger.error(f"Streaming analysis error: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Streaming analysis failed: {str(e)}")
+
+@app.post("/stream/reset")
+async def stream_reset(payload: StreamReset):
+    """Reset a streaming session so state (tail, cursors) clears."""
+    sid = payload.session_id
+    if sid in _stream_sessions:
+        del _stream_sessions[sid]
+    return {"status": "reset", "session_id": sid}
+
+@app.post("/stream/chunk")
+async def stream_chunk(
+    session_id: str = Form(...),
+    file: UploadFile = File(...),
+    debug: bool = False,
+):
+    """Analyze one recorded chunk while preserving overlap/state per session.
+    Client should send each chunk file with the same session_id for a recording session.
+    """
+    try:
+        # Read and decode to PCM float32 mono 44.1k
+        data = await file.read()
+        x_chunk = _load_bytes_to_pcm(data, target_sr=44100)
+
+        # Get session and build analysis buffer with previous tail for overlap continuity
+        sess = _get_session(session_id)
+        tail = sess["tail"]
+        if tail.size > 0:
+            x_full = np.concatenate([tail, x_chunk])
+        else:
+            x_full = x_chunk
+
+        overlap_sec = float(tail.size) / 44100.0
+
+        # Run the main analyzer on the combined buffer (use optimized if flag is set)
+        analyzer = analyze_audio_optimized if USE_OPTIMIZED_PIPELINE else analyze_audio
+        results = await run_in_threadpool(analyzer, x_full, debug)
+
+        # Filter out detections that lie within the leading overlap region
+        def _shift_and_filter_events(evts):
+            out = []
+            for e in evts or []:
+                t = float(e.get("time_seconds", 0.0))
+                if t >= overlap_sec:  # keep only beyond overlap
+                    # Convert to absolute time based on cursor (exclude overlap)
+                    abs_t = (sess["sample_cursor"] / 44100.0) + (t - overlap_sec)
+                    e2 = dict(e)
+                    e2["time_seconds"] = round(abs_t, 6)
+                    out.append(e2)
+            return out
+
+        results_filtered = {
+            "onsets": _shift_and_filter_events(results.get("onsets")),
+            "notes": _shift_and_filter_events(results.get("notes")),
+            "chords": _shift_and_filter_events(results.get("chords")),
+            "analysis_summary": results.get("analysis_summary", {}),
+        }
+
+        # Update session state: advance cursor by the NON-overlap chunk length
+        sess["sample_cursor"] += int(x_chunk.size)
+
+        # Keep new tail from the end of the combined buffer
+        take = min(OVERLAP_SAMPLES, x_full.size)
+        sess["tail"] = x_full[-take:].astype(np.float32, copy=False)
+
+        # Pack stream metadata
+        results_filtered["stream_info"] = {
+            "session_id": session_id,
+            "chunk_samples": int(x_chunk.size),
+            "overlap_samples": int(tail.size),
+            "sample_cursor": int(sess["sample_cursor"]),
+            "processed_sample_rate": 44100,
+        }
+
+        return JSONResponse(content=make_json_serializable(results_filtered))
+
+    except Exception as e:
+        logger.error(f"stream_chunk error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"stream_chunk failed: {str(e)}")
 
 if __name__ == "__main__":
     # Get port from environment variable (Railway sets this) or default to 8000
