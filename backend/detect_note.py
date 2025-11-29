@@ -22,9 +22,9 @@ import numpy as np
 import soundfile as sf
 from numba import njit
 from scipy.optimize import nnls
-from scipy.signal import get_window
+from scipy.signal import butter, get_window
 from scipy.signal import istft as scipy_istft
-from scipy.signal import medfilt, resample_poly
+from scipy.signal import medfilt, resample_poly, sosfiltfilt
 from scipy.signal import stft as scipy_stft
 
 
@@ -201,6 +201,124 @@ def spectral_gate_filter(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512,
     
     return filtered_audio.astype(np.float32)
 
+
+#* ─── Improved Multi-Band Spectral Gate ───────────────────────────────────────
+def multiband_spectral_gate(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512,
+                            noise_estimation_seconds=0.1, gate_threshold_db=-12,
+                            min_gate_threshold_db=-40):
+    """
+    Multi-band spectral gate with improved noise estimation.
+    
+    Key improvements over basic spectral gate:
+    1. Estimates noise from quietest frames (not just percentile)
+    2. Uses different thresholds for different frequency bands
+    3. Preserves transients better with attack-aware gating
+    4. Sub-bass and ultra-high suppression to remove rumble and hiss
+    
+    Args:
+        audio: Input audio signal
+        sr: Sample rate
+        n_fft: FFT size for STFT
+        hop_length: Hop size for STFT
+        noise_estimation_seconds: Duration to use for noise floor estimation
+        gate_threshold_db: Threshold above noise floor in dB (main band)
+        min_gate_threshold_db: Minimum absolute threshold to prevent over-gating
+    
+    Returns:
+        Filtered audio signal, noise_removed_db (for logging)
+    """
+    # Compute STFT
+    window = get_window('hann', n_fft, fftbins=True)
+    _, _, stft_data = scipy_stft(audio, fs=sr, window=window, nperseg=n_fft, 
+                                  noverlap=n_fft-hop_length, return_onesided=True)
+    
+    magnitude = np.abs(stft_data).astype(np.float32)
+    n_bins, n_frames = magnitude.shape
+    freqs = np.fft.rfftfreq(n_fft, 1.0/sr)
+    
+    # --- IMPROVED NOISE ESTIMATION ---
+    # Find the quietest frames (lowest RMS) to estimate noise floor
+    frame_rms = np.sqrt(np.mean(magnitude**2, axis=0))
+    n_noise_frames = max(5, int(noise_estimation_seconds * sr / hop_length))
+    quietest_frame_indices = np.argsort(frame_rms)[:n_noise_frames]
+    
+    # Noise floor = mean magnitude of quietest frames per frequency bin
+    noise_floor = np.mean(magnitude[:, quietest_frame_indices], axis=1, keepdims=True)
+    noise_floor = np.maximum(noise_floor, 1e-10)  # Prevent division by zero
+    
+    # --- MULTI-BAND THRESHOLDS ---
+    # Different frequency regions need different treatment
+    # Sub-bass (<40Hz): Aggressive gating - mostly room rumble
+    # Bass (40-200Hz): Moderate gating - musical content
+    # Mid (200-2000Hz): Conservative gating - most musical content
+    # High (2000-8000Hz): Moderate gating - harmonics
+    # Ultra-high (>8000Hz): Aggressive gating - mostly hiss
+    
+    band_thresholds = np.ones(n_bins) * gate_threshold_db
+    
+    for i, f in enumerate(freqs):
+        if f < 40:
+            band_thresholds[i] = gate_threshold_db - 10  # More aggressive (lower threshold = more gating)
+        elif f < 200:
+            band_thresholds[i] = gate_threshold_db - 3
+        elif f < 2000:
+            band_thresholds[i] = gate_threshold_db  # Most conservative for musical content
+        elif f < 8000:
+            band_thresholds[i] = gate_threshold_db - 3
+        else:
+            band_thresholds[i] = gate_threshold_db - 8  # Aggressive for high-frequency hiss
+    
+    band_thresholds = band_thresholds.reshape(-1, 1)
+    
+    # Convert thresholds to linear scale
+    threshold_linear = 10.0 ** (band_thresholds / 20.0)
+    min_threshold_linear = 10.0 ** (min_gate_threshold_db / 20.0)
+    
+    # Compute adaptive threshold per bin
+    threshold = np.maximum(noise_floor * threshold_linear, min_threshold_linear)
+    
+    # --- SOFT GATING WITH ATTACK PRESERVATION ---
+    # Compute signal-to-noise ratio
+    snr = magnitude / threshold
+    
+    # Detect transients (sudden increases in energy)
+    frame_energy = np.sum(magnitude**2, axis=0)
+    energy_diff = np.diff(frame_energy, prepend=frame_energy[0])
+    transient_mask = energy_diff > np.percentile(energy_diff, 90)
+    
+    # Soft gate with sigmoid (softer transition = less artifacts)
+    softness = 4.0
+    gate_mask = 1.0 / (1.0 + np.exp(-softness * (snr - 1.0)))
+    
+    # Preserve transients - reduce gating during attacks
+    for i, is_transient in enumerate(transient_mask):
+        if is_transient:
+            # Blend toward unity (less gating) during transients
+            gate_mask[:, i] = gate_mask[:, i] * 0.5 + 0.5
+    
+    # --- APPLY GATE ---
+    filtered_magnitude = magnitude * gate_mask
+    
+    # Compute noise removal stats
+    original_power = np.sum(magnitude**2)
+    filtered_power = np.sum(filtered_magnitude**2)
+    noise_removed_db = 10 * np.log10(original_power / (filtered_power + 1e-10))
+    
+    # Reconstruct signal
+    phase = np.angle(stft_data)
+    filtered_stft = filtered_magnitude * np.exp(1j * phase)
+    
+    _, filtered_audio = scipy_istft(filtered_stft, fs=sr, window=window, nperseg=n_fft, 
+                                     noverlap=n_fft-hop_length, input_onesided=True)
+    
+    # Match output length
+    if len(filtered_audio) > len(audio):
+        filtered_audio = filtered_audio[:len(audio)]
+    elif len(filtered_audio) < len(audio):
+        filtered_audio = np.pad(filtered_audio, (0, len(audio) - len(filtered_audio)), mode='constant')
+    
+    return filtered_audio.astype(np.float32), float(noise_removed_db)
+
 #* ─── Wiener Filter (Second Layer) ───────────────────────────────────────────
 def wiener_filter(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512,
                   noise_estimation_frames=10, oversubtraction_factor=1.5):
@@ -348,8 +466,6 @@ def split_frequency_ranges(audio, sr=SAMPLE_RATE, split_midi=60):
     Returns:
         (bass_audio, treble_audio): Two filtered versions of the input
     """
-    from scipy.signal import butter, sosfiltfilt
-    
     split_freq = 440.0 * 2**((split_midi - 69) / 12)  # Convert MIDI to Hz
     
     # Design filters (4th order Butterworth)
@@ -366,7 +482,7 @@ def split_frequency_ranges(audio, sr=SAMPLE_RATE, split_midi=60):
     
     return bass_audio, treble_audio
 
-#* ─── Read + High-Pass Filter ────────────────────────────────────────────────
+#* ─── Read + Noise Reduction Pipeline ────────────────────────────────────────
 def read_wav(path):
     audio, sr = sf.read(path)
     if audio.ndim > 1:
@@ -374,23 +490,42 @@ def read_wav(path):
     if sr != SAMPLE_RATE:
         raise ValueError(f"Expected {SAMPLE_RATE} Hz, got {sr}")
     
-    print(f"[Noise Pipeline] Input audio: {len(audio)} samples, RMS: {np.sqrt(np.mean(audio**2)):.4f}")
+    input_rms = np.sqrt(np.mean(audio**2))
+    print(f"[Noise Pipeline] Input audio: {len(audio)} samples, RMS: {input_rms:.4f}")
     
-    # Apply noisereduce for non-stationary noise reduction
+    # Step 1: Multi-band spectral gate (our improved implementation)
+    # This handles frequency-specific noise (rumble, hiss) with transient preservation
+    audio, noise_removed_db = multiband_spectral_gate(
+        audio, sr=sr, n_fft=FFT_SIZE, hop_length=HOP_SIZE,
+        noise_estimation_seconds=0.15,  # Use 150ms for noise estimation
+        gate_threshold_db=-10,  # dB above noise floor to keep
+        min_gate_threshold_db=-50  # Absolute minimum threshold
+    )
+    print(f"[Noise Pipeline] After multiband spectral gate: {noise_removed_db:.2f} dB noise removed")
+    
+    # Step 2: noisereduce for residual non-stationary noise
+    # Use less aggressive settings since spectral gate already did heavy lifting
     audio_before = audio.copy()
-    audio = nr.reduce_noise(y=audio, sr=sr, stationary=False, n_fft=FFT_SIZE, hop_length=HOP_SIZE, prop_decrease=0.8)
+    audio = nr.reduce_noise(
+        y=audio, sr=sr, 
+        stationary=False, 
+        n_fft=FFT_SIZE, 
+        hop_length=HOP_SIZE, 
+        prop_decrease=0.6  # Less aggressive (was 0.8)
+    )
     rms_reduction = np.sqrt(np.mean(audio_before**2)) - np.sqrt(np.mean(audio**2))
     print(f"[Noise Pipeline] After noisereduce: RMS reduction = {rms_reduction:.4f}")
-       
-    # simple one‐pole HPF: y[n] = x[n] - x[n-1] + alpha y[n-1]
-    alpha = 0.95
-    y = np.empty_like(audio)
-    prev_x, prev_y = audio[0], audio[0]
-    y[0] = prev_y
-    for i in range(1, len(audio)):
-        y[i] = audio[i] - prev_x + alpha * prev_y
-        prev_x, prev_y = audio[i], y[i]
-    return y
+    
+    # Step 3: High-pass filter to remove any remaining sub-bass rumble
+    # Use a proper Butterworth HPF instead of simple one-pole
+    sos = butter(2, 30, btype='high', fs=sr, output='sos')  # 30 Hz cutoff
+    audio = sosfiltfilt(sos, audio)
+    
+    final_rms = np.sqrt(np.mean(audio**2))
+    total_reduction_db = 20 * np.log10(input_rms / (final_rms + 1e-10))
+    print(f"[Noise Pipeline] Final RMS: {final_rms:.4f}, Total reduction: {total_reduction_db:.2f} dB")
+    
+    return audio.astype(np.float32)
 
 #* ─── Frame Audio ───────────────────────────────────────────────────────────
 def frame_audio(audio):
@@ -429,6 +564,85 @@ def find_onsets(flux, window=50, K=2.0):
         if flux[t]>flux[t-1] and flux[t]>flux[t+1] and flux[t]>thresh:
             onsets.append(t)
     return onsets
+
+
+def find_onsets_with_slope_validation(flux, window=50, K=2.0, min_slope_ratio=0.3, 
+                                       slope_window=3, debug=False):
+    """
+    Find onsets with additional slope/sharpness validation.
+    
+    Real piano attacks have sharp transients - the energy rises very quickly.
+    Noise-induced false onsets tend to have gradual energy buildup.
+    
+    Args:
+        flux: Spectral flux array (normalized)
+        window: Window size for adaptive threshold
+        K: Number of std devs above mean for threshold
+        min_slope_ratio: Minimum ratio of onset slope to peak value (0-1)
+                        Higher = stricter (requires sharper attacks)
+        slope_window: Number of frames before onset to measure slope
+        debug: Print debug info
+    
+    Returns:
+        List of validated onset frame indices
+    """
+    # First, find candidate onsets using standard method
+    candidates = []
+    buf = []
+    for t in range(1, len(flux)-1):
+        buf.append(flux[t])
+        if len(buf) > window: 
+            buf.pop(0)
+        μ = np.mean(buf)
+        s = np.std(buf)
+        thresh = μ + K * s
+        if flux[t] > flux[t-1] and flux[t] > flux[t+1] and flux[t] > thresh:
+            candidates.append(t)
+    
+    if debug:
+        print(f"[Slope] Found {len(candidates)} candidate onsets")
+    
+    # Validate each candidate by checking attack slope
+    validated = []
+    for onset_frame in candidates:
+        # Get the pre-onset frames (before the peak)
+        start_frame = max(0, onset_frame - slope_window)
+        
+        if start_frame >= onset_frame:
+            # Not enough frames before onset, accept it
+            validated.append(onset_frame)
+            continue
+        
+        # Measure the slope: how much did flux increase leading up to onset?
+        pre_onset_values = flux[start_frame:onset_frame + 1]
+        
+        if len(pre_onset_values) < 2:
+            validated.append(onset_frame)
+            continue
+        
+        # Calculate slope as (peak - baseline) / peak
+        # This gives us a ratio: 1.0 = came from silence, 0.0 = no change
+        baseline = np.min(pre_onset_values[:-1])  # Min value before peak
+        peak = flux[onset_frame]
+        
+        if peak < 1e-6:
+            # Very weak onset, skip
+            continue
+        
+        slope_ratio = (peak - baseline) / peak
+        
+        if slope_ratio >= min_slope_ratio:
+            validated.append(onset_frame)
+            if debug:
+                print(f"[Slope] ✓ Onset at frame {onset_frame}: slope_ratio={slope_ratio:.3f} >= {min_slope_ratio}")
+        else:
+            if debug:
+                print(f"[Slope] ✗ Rejected frame {onset_frame}: slope_ratio={slope_ratio:.3f} < {min_slope_ratio}")
+    
+    if debug:
+        print(f"[Slope] Validated {len(validated)}/{len(candidates)} onsets")
+    
+    return validated
 
 #* ─── CQT & HPS Pitch Picker ────────────────────────────────────────────────
 def compute_cqt(frame):
@@ -572,8 +786,8 @@ def _bic(err, B, dof):
 
 def _salience_candidates_from_fft(mag, top=8, H=6):
     """Cheap salience: score each MIDI by aligning harmonics on FFT (no CQT)."""
-    # restrict to piano range
-    midi_lo, midi_hi = 24, 108
+    # Full piano range: A0 (MIDI 21) to C8 (MIDI 108)
+    midi_lo, midi_hi = 21, 108
     scores = []
     for m in range(midi_lo, midi_hi+1):
         t = get_template(m)
@@ -2010,10 +2224,329 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
     
     return results
 
+
+#* ─── Independent Two-Hands Analysis ─────────────────────────────────────────
+def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=60):
+    """
+    Analyze audio with INDEPENDENT onset detection for bass and treble hands.
+    
+    This enables detecting rhythmically independent parts, such as:
+    - A held bass chord while treble plays a melody
+    - Different rhythmic patterns in left and right hands
+    - Sustained bass notes with staccato treble notes
+    
+    The process:
+    1. Load and preprocess audio (noise reduction, etc.)
+    2. Split into bass and treble frequency bands
+    3. Detect onsets INDEPENDENTLY in each band
+    4. Analyze each band's onsets using filtered audio
+    5. Merge results with proper hand labeling
+    
+    Args:
+        wav_path_or_array: Audio file path or numpy array
+        debug: Enable debug output
+        split_midi: MIDI note to split at (default 60 = middle C)
+    
+    Returns:
+        Results with independently detected bass and treble notes/chords
+    """
+    print(f"\n{'='*70}")
+    print("🎹 INDEPENDENT TWO-HANDS ANALYSIS")
+    print(f"   Split point: MIDI {split_midi} ({440.0 * 2**((split_midi - 69) / 12):.1f} Hz)")
+    print(f"   Bass and treble will have INDEPENDENT rhythm detection")
+    print(f"{'='*70}\n")
+    
+    try:
+        # 1) Load and prepare audio
+        if isinstance(wav_path_or_array, str):
+            audio = read_wav(wav_path_or_array)
+        else:
+            audio = wav_path_or_array.copy()
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+    except Exception as e:
+        return {"error": f"Failed to read audio: {str(e)}"}
+    
+    # 2) Split audio into bass and treble frequency bands
+    split_freq = 440.0 * 2**((split_midi - 69) / 12)
+    
+    # Design crossover filters (4th order Linkwitz-Riley style for flat sum)
+    sos_bass = butter(4, split_freq, btype='low', fs=SAMPLE_RATE, output='sos')
+    sos_treble = butter(4, split_freq, btype='high', fs=SAMPLE_RATE, output='sos')
+    
+    bass_audio = sosfiltfilt(sos_bass, audio).astype(np.float32)
+    treble_audio = sosfiltfilt(sos_treble, audio).astype(np.float32)
+    
+    bass_rms = np.sqrt(np.mean(bass_audio**2))
+    treble_rms = np.sqrt(np.mean(treble_audio**2))
+    print(f"[Split] Bass RMS: {bass_rms:.4f}, Treble RMS: {treble_rms:.4f}")
+    
+    # 2b) Apply per-band noise reduction
+    # After splitting, band-specific noise becomes more visible and can be targeted
+    print(f"[Noise] Applying per-band noise reduction...")
+    
+    # Bass band: Focus on low-frequency rumble
+    bass_audio, bass_nr_db = multiband_spectral_gate(
+        bass_audio, sr=SAMPLE_RATE, n_fft=FFT_SIZE, hop_length=HOP_SIZE,
+        noise_estimation_seconds=0.15,
+        gate_threshold_db=-8,  # Less aggressive - bass notes are sustained
+        min_gate_threshold_db=-45
+    )
+    bass_audio = nr.reduce_noise(
+        y=bass_audio, sr=SAMPLE_RATE, stationary=False,
+        n_fft=FFT_SIZE, hop_length=HOP_SIZE, prop_decrease=0.5
+    ).astype(np.float32)
+    
+    # Treble band: Focus on high-frequency hiss and transient noise
+    treble_audio, treble_nr_db = multiband_spectral_gate(
+        treble_audio, sr=SAMPLE_RATE, n_fft=FFT_SIZE, hop_length=HOP_SIZE,
+        noise_estimation_seconds=0.15,
+        gate_threshold_db=-10,  # Slightly more aggressive for hiss
+        min_gate_threshold_db=-50
+    )
+    treble_audio = nr.reduce_noise(
+        y=treble_audio, sr=SAMPLE_RATE, stationary=False,
+        n_fft=FFT_SIZE, hop_length=HOP_SIZE, prop_decrease=0.6
+    ).astype(np.float32)
+    
+    bass_rms_after = np.sqrt(np.mean(bass_audio**2))
+    treble_rms_after = np.sqrt(np.mean(treble_audio**2))
+    print(f"[Noise] After per-band NR - Bass RMS: {bass_rms_after:.4f} (gate: {bass_nr_db:.1f}dB), Treble RMS: {treble_rms_after:.4f} (gate: {treble_nr_db:.1f}dB)")
+    
+    # 3) Detect onsets INDEPENDENTLY for each band
+    print(f"\n[Bass] Detecting onsets in bass band (with slope validation)...")
+    bass_frames = frame_audio(bass_audio)
+    bass_mags = np.array([compute_magnitude(f) for f in bass_frames])
+    bass_flux = normalize(compute_flux(bass_mags))
+    # Use slope validation for bass - helps filter noise-induced false onsets
+    # min_slope_ratio=0.3 means the onset must rise to at least 30% above baseline
+    bass_onsets = find_onsets_with_slope_validation(
+        bass_flux, K=2.5, min_slope_ratio=0.3, slope_window=3, debug=debug
+    )
+    print(f"[Bass] Found {len(bass_onsets)} validated onsets")
+    
+    print(f"\n[Treble] Detecting onsets in treble band...")
+    treble_frames = frame_audio(treble_audio)
+    treble_mags = np.array([compute_magnitude(f) for f in treble_frames])
+    treble_flux = normalize(compute_flux(treble_mags))
+    treble_onsets = find_onsets(treble_flux, K=2.0)  # Standard threshold for treble
+    print(f"[Treble] Found {len(treble_onsets)} onsets")
+    
+    # 4) Compute shared resources for analysis
+    # Full audio chroma for chord quality detection
+    chroma_full = extract_chroma(audio, SAMPLE_RATE, hop_length=HOP_SIZE)
+    
+    # CQT on full audio for pitch detection
+    C_full = np.abs(librosa.cqt(
+        y=audio, sr=SAMPLE_RATE, hop_length=HOP_SIZE,
+        n_bins=CQT_BINS, bins_per_octave=12,
+        fmin=librosa.note_to_hz('C1')
+    ))
+    
+    # IMPORTANT: Use FULL AUDIO STFT for pitch detection (BIC needs full harmonic spectrum)
+    # Band-filtered audio loses harmonics which causes pitch errors
+    _, full_magnitude, _, full_freqs = compute_stft_once(audio)
+    
+    # Estimate offsets for each band using band-specific chroma
+    bass_chroma = extract_chroma(bass_audio, SAMPLE_RATE, hop_length=HOP_SIZE)
+    treble_chroma = extract_chroma(treble_audio, SAMPLE_RATE, hop_length=HOP_SIZE)
+    
+    # Results structure
+    results = {
+        "onsets": [],
+        "notes": [],
+        "chords": [],
+        "analysis_summary": {
+            "duration_seconds": float(len(audio) / SAMPLE_RATE),
+            "sample_rate": int(SAMPLE_RATE),
+            "bass_onsets": len(bass_onsets),
+            "treble_onsets": len(treble_onsets),
+            "split_midi": split_midi,
+            "independent_hands": True
+        }
+    }
+    
+    def process_onset(onset_frame, magnitude, chroma, freqs, hand_label, midi_filter_fn):
+        """Process a single onset for a specific hand."""
+        time_seconds = onset_frame * HOP_SIZE / SAMPLE_RATE
+        
+        # Get magnitude window around onset
+        if 1 <= onset_frame < magnitude.shape[1] - 1:
+            mag_window = np.mean(magnitude[:, onset_frame-1:onset_frame+2], axis=1)
+        else:
+            mag_window = magnitude[:, min(onset_frame, magnitude.shape[1]-1)]
+        
+        # Ringing cancellation + BIC voice estimation
+        resid, _ = cancel_ringing(mag_window, freqs)
+        bic_est = estimate_voices_bic(resid, max_K=6, H=8)  # Allow more voices for chords
+        
+        K = bic_est['K']
+        midi_set = bic_est['midis']
+        
+        # Filter MIDI notes to only include those in the correct range
+        midi_set = [m for m in midi_set if midi_filter_fn(m)]
+        K = len(midi_set)
+        
+        if K == 0:
+            return None, None  # No valid notes in this range
+        
+        # Estimate offset using band-specific chroma
+        try:
+            pc = int(np.argmax(chroma[:, onset_frame])) if onset_frame < chroma.shape[1] else 0
+            offsets = estimate_offsets_from_chroma([onset_frame], [pc], chroma)
+            oframe = int(offsets[0][1])
+            osec = round(oframe * HOP_SIZE / SAMPLE_RATE, 3)
+            dur = round(osec - time_seconds, 3)
+        except Exception:
+            oframe = onset_frame + 10  # Default ~0.1s duration
+            osec = round(oframe * HOP_SIZE / SAMPLE_RATE, 3)
+            dur = round(osec - time_seconds, 3)
+        
+        dur = max(dur, 0.05)  # Minimum duration
+        note_val = duration_to_note_value(dur)
+        
+        is_chord = (K >= 2)
+        
+        if is_chord:
+            # Try detect_chord_multiframe for chord quality/label detection
+            res = detect_chord_multiframe(chroma_full, C_full, onset_frame, num_frames=1, debug=False)
+            
+            if res:
+                # Chord confirmed by chroma-based detection
+                # Calculate octave from lowest MIDI note
+                lowest_midi = int(min(midi_set))
+                octave = (lowest_midi // 12) - 1  # MIDI octave calculation
+                
+                # Build chord from BIC-detected MIDI notes (which are already filtered to correct range)
+                chord = {
+                    "type": "chord",
+                    "time_seconds": round(time_seconds, 3),
+                    "frame_index": int(onset_frame),
+                    "midi_notes": [int(m) for m in sorted(midi_set)],
+                    "note_names": [note_to_name(int(m)) for m in sorted(midi_set)],
+                    "root": note_to_name(int(lowest_midi)),
+                    "octave": res.get("octave", octave),
+                    "frequencies_hz": [round(_midi_to_hz(int(m)), 2) for m in sorted(midi_set)],
+                    "method": f"BIC ({hand_label})",
+                    "label": res.get("label", f"{note_to_name(lowest_midi)}:?"),
+                    "chord_quality": res.get("chord_quality", "unknown"),
+                    "inversion": res.get("inversion", "root"),
+                    "confidence": res.get("confidence", 0.8),
+                    "offset_seconds": osec,
+                    "duration_seconds": dur,
+                    "hand": hand_label,
+                    "note_value": note_val["type"],
+                    "note_divisions": note_val["divisions"],
+                    "dotted": note_val["dotted"]
+                }
+                return None, chord
+            
+            # detect_chord_multiframe returned None - not a confirmed chord
+            # Fall back to single note (use the strongest/first MIDI from BIC)
+        
+        # Single note (either K==1, or chord detection failed)
+        m = midi_set[0]
+        note = {
+            "time_seconds": round(time_seconds, 3),
+            "frame_index": int(onset_frame),
+            "midi_note": int(m),
+            "note_name": note_to_name(int(m)),
+            "frequency_hz": round(_midi_to_hz(int(m)), 2),
+            "method": f"BIC ({hand_label})",
+            "confidence": 0.9,
+            "offset_seconds": osec,
+            "duration_seconds": dur,
+            "hand": hand_label,
+            "note_value": note_val["type"],
+            "note_divisions": note_val["divisions"],
+            "dotted": note_val["dotted"]
+        }
+        return note, None
+    
+    # 5) Process bass onsets - use FULL magnitude for pitch, but filter by MIDI range
+    print(f"\n[Bass] Processing {len(bass_onsets)} bass onsets...")
+    bass_notes = []
+    bass_chords = []
+    
+    for onset in bass_onsets:
+        note, chord = process_onset(
+            onset, full_magnitude, bass_chroma, full_freqs,
+            "bass", lambda m: m < split_midi
+        )
+        if note:
+            bass_notes.append(note)
+        if chord:
+            bass_chords.append(chord)
+    
+    print(f"[Bass] Detected {len(bass_notes)} notes, {len(bass_chords)} chords")
+    
+    # 6) Process treble onsets - use FULL magnitude for pitch, but filter by MIDI range
+    print(f"\n[Treble] Processing {len(treble_onsets)} treble onsets...")
+    treble_notes = []
+    treble_chords = []
+    
+    for onset in treble_onsets:
+        note, chord = process_onset(
+            onset, full_magnitude, treble_chroma, full_freqs,
+            "treble", lambda m: m >= split_midi
+        )
+        if note:
+            treble_notes.append(note)
+        if chord:
+            treble_chords.append(chord)
+    
+    print(f"[Treble] Detected {len(treble_notes)} notes, {len(treble_chords)} chords")
+    
+    # 7) Merge results (sorted by time)
+    all_notes = bass_notes + treble_notes
+    all_notes.sort(key=lambda x: x["time_seconds"])
+    
+    all_chords = bass_chords + treble_chords
+    all_chords.sort(key=lambda x: x["time_seconds"])
+    
+    results["notes"] = all_notes
+    results["chords"] = all_chords
+    
+    # Filter out notes/chords that are too short
+    results["notes"] = [n for n in results["notes"] if n.get("duration_seconds", 0) > 0.05]
+    results["chords"] = [c for c in results["chords"] if c.get("duration_seconds", 0) > 0.05]
+    
+    # Add note values to chords
+    for chord in results["chords"]:
+        if "note_value" not in chord:
+            note_val = duration_to_note_value(chord.get("duration_seconds", 0.5))
+            chord["note_value"] = note_val["type"]
+            chord["note_divisions"] = note_val["divisions"]
+            chord["dotted"] = note_val["dotted"]
+    
+    # Update summary
+    results["analysis_summary"].update({
+        "total_onsets": len(bass_onsets) + len(treble_onsets),
+        "total_notes": len(results["notes"]),
+        "total_chords": len(results["chords"]),
+        "bass_notes": len([n for n in results["notes"] if n.get("hand") == "bass"]),
+        "treble_notes": len([n for n in results["notes"] if n.get("hand") == "treble"]),
+        "bass_chords": len([c for c in results["chords"] if c.get("hand") == "bass"]),
+        "treble_chords": len([c for c in results["chords"] if c.get("hand") == "treble"])
+    })
+    
+    print(f"\n{'='*70}")
+    print(f"✓ Independent hands analysis complete:")
+    print(f"   Bass:   {results['analysis_summary']['bass_notes']} notes, {results['analysis_summary']['bass_chords']} chords")
+    print(f"   Treble: {results['analysis_summary']['treble_notes']} notes, {results['analysis_summary']['treble_chords']} chords")
+    print(f"{'='*70}\n")
+    
+    return results
+
+
 def analyze_audio_split_ranges(wav_path_or_array, debug=False, split_midi=60):
     """
     Analyze audio with harmonic subtraction first, then categorize notes into bass/treble.
     This performs harmonic cancellation on the full spectrum, then splits results by MIDI range.
+    
+    NOTE: This method uses shared onset detection, so bass and treble share the same rhythm.
+    For independent rhythm detection (e.g., held bass chord with moving treble melody),
+    use analyze_audio_independent_hands() instead.
     
     Args:
         wav_path_or_array: Audio file path or numpy array
@@ -2061,7 +2594,7 @@ def analyze_audio_split_ranges(wav_path_or_array, debug=False, split_midi=60):
     
     return results
 
-def analyze_audio(wav_path_or_array, debug=False, use_split=True):
+def analyze_audio(wav_path_or_array, debug=False, use_split=True, independent_hands=True):
     """
     Main audio analysis function.
     
@@ -2069,11 +2602,17 @@ def analyze_audio(wav_path_or_array, debug=False, use_split=True):
         wav_path_or_array: Audio file path or numpy array
         debug: Enable debug output
         use_split: If True, use frequency range splitting to separate left/right hand (default: True)
+        independent_hands: If True and use_split is True, detect bass and treble rhythms 
+                          independently (enables held bass chord + moving treble melody).
+                          If False, uses shared onset detection (default: True)
     
     For the legacy frame-by-frame pipeline, use analyze_audio_legacy().
     """
     if use_split:
-        return analyze_audio_split_ranges(wav_path_or_array, debug=debug)
+        if independent_hands:
+            return analyze_audio_independent_hands(wav_path_or_array, debug=debug)
+        else:
+            return analyze_audio_split_ranges(wav_path_or_array, debug=debug)
     else:
         return analyze_audio_optimized(wav_path_or_array, debug=debug)
 
@@ -2252,7 +2791,7 @@ def analyze_audio_legacy(wav_path_or_array, debug=False):
     return results
 
 #* ─── Command-line Analysis Function ───────────────────────────────────────────
-def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, split_midi=60):
+def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, split_midi=60, independent_hands=True):
     """
     Command-line focused audio analysis with both single note and chord detection.
     Includes detailed console logging of the analysis process and thresholds.
@@ -2262,11 +2801,17 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
         use_legacy: Use old frame-by-frame pipeline (default: False)
         use_split: Use frequency range splitting to separate left/right hand (default: True)
         split_midi: MIDI note to split at when use_split=True (default: 60 = middle C)
+        independent_hands: If True, detect bass/treble rhythms independently (default: True)
     """
     if not use_legacy:
         if use_split:
+            if independent_hands:
+                # Use independent hands analysis - bass and treble have separate onset detection
+                return analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=split_midi)
+            
+            # Shared onset detection with categorization
             print("\n" + "="*70)
-            print("🎹 BASS/TREBLE CATEGORIZATION ENABLED")
+            print("🎹 BASS/TREBLE CATEGORIZATION ENABLED (SHARED RHYTHM)")
             print(f"   Split point: MIDI {split_midi} ({440.0 * 2**((split_midi - 69) / 12):.1f} Hz)")
             print("   Bass (left hand) < split point, Treble (right hand) >= split point")
             print("   Analysis: Full spectrum with harmonic subtraction, then categorize")
@@ -2594,7 +3139,7 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
 #* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Use absolute path to audio file
-    wav_path = os.path.join(os.path.dirname(__file__), 'audio', test_benchmark)
+    wav_path = os.path.join(os.path.dirname(__file__), 'audio', 'test_chromatic.wav')
     print(f"🎹 Piano Note Detection - Command Line")
     print(f"Reading audio from: {wav_path}")
     try:

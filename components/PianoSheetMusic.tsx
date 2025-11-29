@@ -77,46 +77,31 @@ function midiToStepOctave(midi: number): { step: string; octave: number } {
 // Function to generate MusicXML from notes
 // tempoMultiplier: 0.5 = double note values (slower), 1 = normal, 2 = half note values (faster)
 function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMultiplier: number = 1): string[] {
-  // Merge notes and chords into a single event sequence by time
-  type Event = { time: number; kind: 'note' | 'chord'; note?: NoteResult; chord?: ChordResult };
-  const events: Event[] = [];
-  for (const n of notes) events.push({ time: n.time_seconds ?? 0, kind: 'note', note: n });
-  for (const c of chords) events.push({ time: c.time_seconds ?? 0, kind: 'chord', chord: c });
-  events.sort((a, b) => a.time - b.time);
-
   const measures: string[] = [];
-  let currentMeasureContents: string[] = [];
   let measureNumber = 1;
-  let currentBeatCount = 0; // Track beats in current measure (4/4 time = 4 beats per measure)
+  const BEATS_PER_MEASURE = 4;
 
   // Note type order for tempo adjustments
   const noteTypeOrder = ['32nd', '16th', 'eighth', 'quarter', 'half', 'whole'];
   
   // Adjust note type based on tempo multiplier
-  // tempoMultiplier > 1 = faster tempo = shorter notes (move down the order)
-  // tempoMultiplier < 1 = slower tempo = longer notes (move up the order)
   const adjustNoteType = (noteType?: string): string => {
     if (!noteType || tempoMultiplier === 1) return noteType || 'quarter';
-    
     const currentIndex = noteTypeOrder.indexOf(noteType);
     if (currentIndex === -1) return noteType;
-    
     let newIndex = currentIndex;
     if (tempoMultiplier === 2) {
-      // Double tempo = half the note value (quarter -> eighth)
       newIndex = Math.max(0, currentIndex - 1);
     } else if (tempoMultiplier === 0.5) {
-      // Half tempo = double the note value (quarter -> half)
       newIndex = Math.min(noteTypeOrder.length - 1, currentIndex + 1);
     }
-    
     return noteTypeOrder[newIndex];
   };
 
-  // Helper to get beat value for a note type (with optional dotted flag)
+  // Helper to get beat value for a note type
   const getNoteBeats = (noteType?: string, dotted?: boolean): number => {
     const adjustedType = adjustNoteType(noteType);
-    let beats = 1; // default quarter note
+    let beats = 1;
     switch (adjustedType) {
       case 'whole': beats = 4; break;
       case 'half': beats = 2; break;
@@ -126,17 +111,14 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       case '32nd': beats = 0.125; break;
       default: beats = 1; break;
     }
-    // Dotted notes add half their value
     if (dotted) beats *= 1.5;
     return beats;
   };
 
-  // Helper to get MusicXML duration based on note type and dotted flag
-  // divisions=8, so: whole=32, half=16, quarter=8, eighth=4, 16th=2, 32nd=1
-  // dotted adds half the value
+  // Helper to get MusicXML duration (divisions=8)
   const getNoteDuration = (noteType?: string, dotted?: boolean): number => {
     const adjustedType = adjustNoteType(noteType);
-    let duration = 8; // default quarter note
+    let duration = 8;
     switch (adjustedType) {
       case 'whole': duration = 32; break;
       case 'half': duration = 16; break;
@@ -146,87 +128,73 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       case '32nd': duration = 1; break;
       default: duration = 8; break;
     }
-    // Dotted notes add half their value
     if (dotted) duration = Math.floor(duration * 1.5);
     return duration;
   };
   
-  // Helper to get the adjusted note type string for MusicXML
-  const getAdjustedNoteType = (noteType?: string): string => {
-    return adjustNoteType(noteType);
-  };
+  const getAdjustedNoteType = (noteType?: string): string => adjustNoteType(noteType);
 
-  // Track note count per measure for width calculation
-  let currentMeasureNoteCount = 0;
-  
-  // Calculate measure width based on note count and note types
-  // More notes = wider measure, shorter notes = wider measure
-  const calculateMeasureWidth = (noteCount: number): number => {
-    // Base width of 150 + 30 per note, minimum 150, cap at 800
-    // This ensures measures with many 32nd notes get proper width
-    const width = Math.min(800, Math.max(150, 100 + noteCount * 30));
-    return width;
-  };
-
-  const pushMeasureIfFull = (beatsToAdd: number = 0, noteCountToAdd: number = 1) => {
-    currentBeatCount += beatsToAdd;
-    currentMeasureNoteCount += noteCountToAdd;
-    
-    if (currentBeatCount >= 4) {
-      const measureWidth = calculateMeasureWidth(currentMeasureNoteCount);
-      const printElement = `<print><measure-layout><measure-distance>${measureWidth}</measure-distance></measure-layout></print>`;
-      const attributes = measureNumber === 1 ? '<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>' : '';
-      const measureXml = `<measure number="${measureNumber}" width="${measureWidth}">${attributes}${printElement}${currentMeasureContents.join('')}</measure>`;
-      measures.push(measureXml);
-      currentMeasureContents = [];
-      currentBeatCount = currentBeatCount - 4; // Carry over excess beats
-      currentMeasureNoteCount = 0; // Reset note count for next measure
-      measureNumber++;
+  // Generate rest XML for a given number of beats
+  const generateRestXml = (beats: number, staff: number): string[] => {
+    const rests: string[] = [];
+    let remaining = beats;
+    const restValues = [
+      { beats: 4, type: 'whole', duration: 32 },
+      { beats: 2, type: 'half', duration: 16 },
+      { beats: 1, type: 'quarter', duration: 8 },
+      { beats: 0.5, type: 'eighth', duration: 4 },
+      { beats: 0.25, type: '16th', duration: 2 },
+      { beats: 0.125, type: '32nd', duration: 1 },
+    ];
+    while (remaining > 0.001) {
+      let found = false;
+      for (const rv of restValues) {
+        if (remaining >= rv.beats - 0.001) {
+          rests.push(`<note><rest/><duration>${rv.duration}</duration><type>${rv.type}</type><staff>${staff}</staff><voice>${staff}</voice></note>`);
+          remaining -= rv.beats;
+          found = true;
+          break;
+        }
+      }
+      if (!found) break;
     }
+    return rests;
   };
 
-  const noteToXml = (n: NoteResult) => {
+  // Determine staff for a MIDI note
+  const getStaff = (midi: number): number => {
+    const octave = Math.floor(midi / 12) - 1;
+    return octave < 4 ? 2 : 1;
+  };
+
+  // Convert note to XML with voice
+  const noteToXmlWithVoice = (n: NoteResult, isChordNote: boolean = false): string => {
     const { step, octave } = midiToStepOctave(n.midi_note);
-    const staff = octave < 4 ? 2 : 1;
+    const staff = getStaff(n.midi_note);
     let baseStep = step;
     let alter = 0;
     if (step.includes('#')) { baseStep = step[0]; alter = 1; }
     else if (step.includes('b') || step.includes('♭')) { baseStep = step[0]; alter = -1; }
     const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : '';
     const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
-    
-    // Get note value and duration from the note object, default to quarter
     const noteType = n.note_value || 'quarter';
     const adjustedNoteType = getAdjustedNoteType(noteType);
     const dotted = n.dotted || false;
     const duration = getNoteDuration(noteType, dotted);
     const dotXml = dotted ? '<dot/>' : '';
-    
-    return `<note>${pitchXml}<duration>${duration}</duration><type>${adjustedNoteType}</type>${dotXml}<staff>${staff}</staff></note>`;
+    const chordTag = isChordNote ? '<chord/>' : '';
+    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}<staff>${staff}</staff></note>`;
   };
 
-  // Helper to construct chord note MIDI list from ChordResult.
-  // Behavior:
-  // - If explicit `midi_notes` provided, use them.
-  // - Else if `root_midi` provided, build chord from that root.
-  // - Else try to parse `label` and `octave` to compute root MIDI and build chord.
+  // Helper to construct chord note MIDI list from ChordResult
   const chordToMidiList = (c: ChordResult): number[] => {
     if (c.midi_notes && c.midi_notes.length) return c.midi_notes.slice();
-
-    // Map note names to semitone offsets
     const nameToSemitone: Record<string, number> = {
-      C: 0, 'C#': 1, DB: 1,
-      D: 2, 'D#': 3, EB: 3,
-      E: 4, FB: 4,
-      F: 5, 'F#': 6, GB: 6,
-      G: 7, 'G#': 8, AB: 8,
-      A: 9, 'A#': 10, BB: 10,
-      B: 11, CB: 11,
+      C: 0, 'C#': 1, DB: 1, D: 2, 'D#': 3, EB: 3, E: 4, FB: 4,
+      F: 5, 'F#': 6, GB: 6, G: 7, 'G#': 8, AB: 8, A: 9, 'A#': 10, BB: 10, B: 11, CB: 11,
     };
-
     const buildFromRoot = (root: number, quality?: string): number[] => {
       const q = (quality || '').toLowerCase();
-      // common quality patterns
       if (q.includes('maj7') || q === 'maj7') return [root, root + 4, root + 7, root + 11];
       if (q === '7' || q.includes('dom7') || q === 'dom') return [root, root + 4, root + 7, root + 10];
       if (q === 'm7' || q === 'min7') return [root, root + 3, root + 7, root + 10];
@@ -235,97 +203,240 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       if (q === 'aug') return [root, root + 4, root + 8];
       if (q === 'sus2') return [root, root + 2, root + 7];
       if (q === 'sus4') return [root, root + 5, root + 7];
-      // fallback: major triad
       return [root, root + 4, root + 7];
     };
-
-    // If explicit root MIDI exists, use it
     if (typeof c.root_midi === 'number') return buildFromRoot(c.root_midi, c.chord_quality);
-
-    // Try to parse label like 'F#:maj' or 'C:min'
     if (c.label) {
       const m = String(c.label).toUpperCase().match(/^([A-G][#B]?)/);
       if (m) {
         const rootName = m[1].replace('B', 'B');
         const semitone = nameToSemitone[rootName] ?? 0;
-        const octave = typeof c.octave === 'number' ? c.octave : 4; // default octave if missing
-        const rootMidi = (octave + 1) * 12 + semitone; // align with midiToStepOctave
+        const octave = typeof c.octave === 'number' ? c.octave : 4;
+        const rootMidi = (octave + 1) * 12 + semitone;
         return buildFromRoot(rootMidi, c.chord_quality);
       }
     }
-
     return [];
   };
 
-  for (const ev of events) {
-    if (ev.kind === 'note' && ev.note) {
-      const noteBeats = getNoteBeats(ev.note.note_value, ev.note.dotted);
-      currentMeasureContents.push(noteToXml(ev.note));
-      pushMeasureIfFull(noteBeats, 1);
-      continue;
+  // Convert chord MIDI notes to XML, grouped by staff
+  const chordMidiToXml = (midiList: number[], noteType: string, dotted: boolean, staff: number): string[] => {
+    const adjustedNoteType = getAdjustedNoteType(noteType);
+    const duration = getNoteDuration(noteType, dotted);
+    const dotXml = dotted ? '<dot/>' : '';
+    
+    // Filter to only notes on this staff
+    const staffNotes = midiList.filter(m => getStaff(m) === staff);
+    if (staffNotes.length === 0) return [];
+    
+    const xmlParts: string[] = [];
+    let first = true;
+    for (const midi of staffNotes) {
+      const { step, octave } = midiToStepOctave(midi);
+      let baseStep = step;
+      let alter = 0;
+      if (step.includes('#')) { baseStep = step[0]; alter = 1; }
+      else if (step.includes('b') || step.includes('♭')) { baseStep = step[0]; alter = -1; }
+      const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : '';
+      const pitchInner = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
+      const chordTag = first ? '' : '<chord/>';
+      const noteXml = `<note>${chordTag}${pitchInner}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}<staff>${staff}</staff></note>`;
+      xmlParts.push(noteXml);
+      first = false;
     }
-    if (ev.kind === 'chord' && ev.chord) {
-      const midiList = chordToMidiList(ev.chord);
-      if (midiList.length === 0) {
-        // nothing to render
-        continue;
-      }
-      // apply inversion: accept numeric or textual inversions
-      const inversionToIndex = (inv: any, chordLen: number) => {
-        if (typeof inv === 'number') return Math.max(0, Math.floor(inv));
-        if (!inv) return 0;
-        const s = String(inv).toLowerCase();
-        if (s === 'root') return 0;
-        if (s === 'first') return 1;
-        if (s === 'second') return 2;
-        if (s === 'third') return 3;
-        // 'slash' commonly indicates a different bass than root; per your rule treat as 3rd inversion for sevenths
-        if (s === 'slash') return (chordLen >= 4 ? 3 : 1);
-        return 0;
-      };
+    return xmlParts;
+  };
 
-      const inversion = inversionToIndex(ev.chord.inversion, midiList.length);
-      const notesOrdered = midiList.slice();
-      for (let i = 0; i < inversion; i++) {
-        const n = notesOrdered.shift();
-        if (typeof n === 'number') notesOrdered.push(n + 12);
-      }
+  // Build a timeline of events per staff
+  type TimelineEvent = {
+    time: number;
+    staff: number;
+    beats: number;
+    xml: string[];
+  };
 
-      // Get note value and duration from the chord object, default to quarter
-      // Apply tempo multiplier to chord note value
-      const baseNoteType = ev.chord.note_value || 'quarter';
-      const adjustedNoteType = getAdjustedNoteType(baseNoteType);
-      const dotted = ev.chord.dotted || false;
-      const duration = getNoteDuration(adjustedNoteType, dotted);
-      const chordBeats = getNoteBeats(adjustedNoteType, dotted);
-      const dotXml = dotted ? '<dot/>' : '';
+  const timeline: TimelineEvent[] = [];
 
-      // Create MusicXML for chord: first note without <chord/>, others with <chord/>
-      let first = true;
-      for (const midi of notesOrdered) {
-        const { step, octave } = midiToStepOctave(midi);
-        const staff = octave < 4 ? 2 : 1;
-        let baseStep = step;
-        let alter = 0;
-        if (step.includes('#')) { baseStep = step[0]; alter = 1; }
-        else if (step.includes('b') || step.includes('♭')) { baseStep = step[0]; alter = -1; }
-        const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : '';
-        const pitchInner = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
-        const noteXml = `<note>${first ? '' : '<chord/>'}${pitchInner}<duration>${duration}</duration><type>${adjustedNoteType}</type>${dotXml}<staff>${staff}</staff></note>`;
-        currentMeasureContents.push(noteXml);
-        first = false;
-      }
-      pushMeasureIfFull(chordBeats, notesOrdered.length);
-      continue;
+  // Process all notes
+  for (const n of notes) {
+    const time = n.time_seconds ?? 0;
+    const staff = getStaff(n.midi_note);
+    const beats = getNoteBeats(n.note_value, n.dotted);
+    const xml = [noteToXmlWithVoice(n, false)];
+    timeline.push({ time, staff, beats, xml });
+  }
+
+  // Process all chords - split across staves if needed
+  for (const c of chords) {
+    const time = c.time_seconds ?? 0;
+    let midiList = chordToMidiList(c);
+    if (midiList.length === 0) continue;
+
+    // Apply inversion
+    const inversionToIndex = (inv: any, chordLen: number) => {
+      if (typeof inv === 'number') return Math.max(0, Math.floor(inv));
+      if (!inv) return 0;
+      const s = String(inv).toLowerCase();
+      if (s === 'root') return 0;
+      if (s === 'first') return 1;
+      if (s === 'second') return 2;
+      if (s === 'third') return 3;
+      if (s === 'slash') return (chordLen >= 4 ? 3 : 1);
+      return 0;
+    };
+    const inversion = inversionToIndex(c.inversion, midiList.length);
+    for (let i = 0; i < inversion; i++) {
+      const n = midiList.shift();
+      if (typeof n === 'number') midiList.push(n + 12);
+    }
+
+    const noteType = c.note_value || 'quarter';
+    const dotted = c.dotted || false;
+    const beats = getNoteBeats(noteType, dotted);
+
+    // Split chord by staff
+    const trebleXml = chordMidiToXml(midiList, noteType, dotted, 1);
+    const bassXml = chordMidiToXml(midiList, noteType, dotted, 2);
+
+    if (trebleXml.length > 0) {
+      timeline.push({ time, staff: 1, beats, xml: trebleXml });
+    }
+    if (bassXml.length > 0) {
+      timeline.push({ time, staff: 2, beats, xml: bassXml });
     }
   }
 
-  // flush remaining
-  if (currentMeasureContents.length > 0) {
-    const measureWidth = calculateMeasureWidth(currentMeasureNoteCount);
-    const printElement = `<print><measure-layout><measure-distance>${measureWidth}</measure-distance></measure-layout></print>`;
-    const measureXml = `<measure number="${measureNumber}" width="${measureWidth}">${printElement}${currentMeasureContents.join('')}</measure>`;
+  // Sort timeline by time
+  timeline.sort((a, b) => a.time - b.time);
+
+  // Group events by time (events within 0.05s are considered simultaneous)
+  type TimeGroup = { time: number; treble: TimelineEvent[]; bass: TimelineEvent[] };
+  const timeGroups: TimeGroup[] = [];
+  const TIME_TOLERANCE = 0.05;
+
+  for (const ev of timeline) {
+    let group = timeGroups.find(g => Math.abs(g.time - ev.time) < TIME_TOLERANCE);
+    if (!group) {
+      group = { time: ev.time, treble: [], bass: [] };
+      timeGroups.push(group);
+    }
+    if (ev.staff === 1) {
+      group.treble.push(ev);
+    } else {
+      group.bass.push(ev);
+    }
+  }
+
+  // Sort groups by time
+  timeGroups.sort((a, b) => a.time - b.time);
+
+  // Now build measures - process each time group
+  // Track beat position for each staff independently
+  let trebleBeatPos = 0;
+  let bassBeatPos = 0;
+  let currentMeasureContents: string[] = [];
+
+  const finalizeMeasure = (padTreble: boolean, padBass: boolean) => {
+    // Pad treble staff if needed
+    if (padTreble && trebleBeatPos < BEATS_PER_MEASURE - 0.001) {
+      const restBeats = BEATS_PER_MEASURE - trebleBeatPos;
+      currentMeasureContents.push(...generateRestXml(restBeats, 1));
+    }
+    // If we added treble content and need bass, add backup
+    if (padBass && bassBeatPos < BEATS_PER_MEASURE - 0.001) {
+      // Backup to start of measure for bass staff
+      const backupDuration = Math.round((trebleBeatPos > 0 ? BEATS_PER_MEASURE : bassBeatPos) * 8);
+      if (backupDuration > 0) {
+        currentMeasureContents.push(`<backup><duration>${backupDuration}</duration></backup>`);
+      }
+      const restBeats = BEATS_PER_MEASURE - bassBeatPos;
+      currentMeasureContents.push(...generateRestXml(restBeats, 2));
+    }
+    
+    const attributes = measureNumber === 1 
+      ? '<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>' 
+      : '';
+    const measureXml = `<measure number="${measureNumber}">${attributes}${currentMeasureContents.join('')}</measure>`;
     measures.push(measureXml);
+    currentMeasureContents = [];
+    trebleBeatPos = 0;
+    bassBeatPos = 0;
+    measureNumber++;
+  };
+
+  // Process time groups - write treble first, then backup and write bass
+  for (const group of timeGroups) {
+    // Check if we need to start a new measure
+    const maxBeats = Math.max(
+      ...group.treble.map(e => e.beats),
+      ...group.bass.map(e => e.beats),
+      0
+    );
+    
+    if (trebleBeatPos + maxBeats > BEATS_PER_MEASURE + 0.001 || 
+        bassBeatPos + maxBeats > BEATS_PER_MEASURE + 0.001) {
+      finalizeMeasure(true, true);
+    }
+
+    // Write treble events
+    let trebleBeatsAdded = 0;
+    for (const ev of group.treble) {
+      // If multiple treble events at same time, only first advances position
+      if (trebleBeatsAdded === 0) {
+        currentMeasureContents.push(...ev.xml);
+        trebleBeatsAdded = ev.beats;
+      } else {
+        // Mark as chord with first note
+        for (const xml of ev.xml) {
+          // These are already marked as chords within themselves
+          currentMeasureContents.push(xml);
+        }
+      }
+    }
+    trebleBeatPos += trebleBeatsAdded;
+
+    // Write bass events using backup if we wrote treble
+    if (group.bass.length > 0) {
+      if (trebleBeatsAdded > 0) {
+        // Backup by the treble duration we just wrote
+        const backupDuration = Math.round(trebleBeatsAdded * 8);
+        currentMeasureContents.push(`<backup><duration>${backupDuration}</duration></backup>`);
+      }
+      
+      let bassBeatsAdded = 0;
+      for (const ev of group.bass) {
+        if (bassBeatsAdded === 0) {
+          currentMeasureContents.push(...ev.xml);
+          bassBeatsAdded = ev.beats;
+        } else {
+          for (const xml of ev.xml) {
+            currentMeasureContents.push(xml);
+          }
+        }
+      }
+      bassBeatPos += bassBeatsAdded;
+      
+      // Forward to sync with treble if treble advanced more
+      if (trebleBeatsAdded > bassBeatsAdded) {
+        const forwardDuration = Math.round((trebleBeatsAdded - bassBeatsAdded) * 8);
+        currentMeasureContents.push(`<forward><duration>${forwardDuration}</duration></forward>`);
+        bassBeatPos += (trebleBeatsAdded - bassBeatsAdded);
+      } else if (bassBeatsAdded > trebleBeatsAdded) {
+        // Need to adjust treble position
+        trebleBeatPos += (bassBeatsAdded - trebleBeatsAdded);
+      }
+    }
+
+    // Check if measure is full
+    if (Math.abs(trebleBeatPos - BEATS_PER_MEASURE) < 0.001 && 
+        Math.abs(bassBeatPos - BEATS_PER_MEASURE) < 0.001) {
+      finalizeMeasure(false, false);
+    }
+  }
+
+  // Flush remaining measure
+  if (currentMeasureContents.length > 0 || trebleBeatPos > 0 || bassBeatPos > 0) {
+    finalizeMeasure(true, true);
   }
 
   return measures;
