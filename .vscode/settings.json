@@ -5,5 +5,5 @@
     "source.sortMembers": "explicit"
   },
   "git.ignoreLimitWarning": true,
-  "python-envs.pythonProjects": []
+  "python-envs.pythonProjects": [],
 }

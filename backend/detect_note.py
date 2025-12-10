@@ -142,6 +142,419 @@ def duration_to_note_value(duration_seconds, bpm=120):
     # Fallback to 32nd note for very short durations
     return {'type': '32nd', 'divisions': 0.125, 'beats': 0.125, 'dotted': False}
 
+
+def detect_tempo_from_onsets(onset_times, min_bpm=50, max_bpm=200):
+    """
+    Detect tempo from onset times using Inter-Onset Interval (IOI) analysis.
+    
+    This uses a histogram-based approach to find the most common beat interval.
+    Since the user can adjust by 2x or 0.5x, we only need to get within that range.
+    
+    Args:
+        onset_times: List/array of onset times in seconds
+        min_bpm: Minimum BPM to consider (default 50)
+        max_bpm: Maximum BPM to consider (default 200)
+    
+    Returns:
+        dict with 'bpm' (detected tempo), 'confidence' (0-1), 'beat_interval' (seconds)
+    """
+    if len(onset_times) < 3:
+        # Not enough onsets to detect tempo
+        return {'bpm': 120, 'confidence': 0.0, 'beat_interval': 0.5}
+    
+    onset_times = np.sort(np.array(onset_times))
+    
+    # Calculate Inter-Onset Intervals (IOIs)
+    iois = np.diff(onset_times)
+    
+    # Filter out very short intervals (likely grace notes or detection errors)
+    # and very long intervals (likely rests or held notes)
+    min_interval = 60.0 / max_bpm  # e.g., 0.3s at 200 BPM
+    max_interval = 60.0 / min_bpm  # e.g., 1.2s at 50 BPM
+    
+    valid_iois = iois[(iois >= min_interval * 0.5) & (iois <= max_interval * 2)]
+    
+    if len(valid_iois) < 2:
+        return {'bpm': 120, 'confidence': 0.0, 'beat_interval': 0.5}
+    
+    # Use histogram to find the most common interval
+    # Bin width of ~25ms gives good resolution while clustering similar intervals
+    bin_width = 0.025
+    bins = np.arange(min_interval * 0.5, max_interval * 2 + bin_width, bin_width)
+    hist, bin_edges = np.histogram(valid_iois, bins=bins)
+    
+    # Also consider half and double intervals (for eighth notes / half notes)
+    # This helps when the piece uses mostly eighth notes or half notes
+    half_iois = valid_iois / 2
+    double_iois = valid_iois * 2
+    
+    # Filter extended IOIs to valid range
+    half_iois = half_iois[(half_iois >= min_interval) & (half_iois <= max_interval)]
+    double_iois = double_iois[(double_iois >= min_interval) & (double_iois <= max_interval)]
+    
+    # Create weighted histogram including half/double intervals
+    all_candidate_iois = np.concatenate([
+        valid_iois[(valid_iois >= min_interval) & (valid_iois <= max_interval)],
+        half_iois,
+        double_iois
+    ])
+    
+    if len(all_candidate_iois) < 2:
+        # Fallback: use median of valid IOIs
+        beat_interval = float(np.median(valid_iois))
+        bpm = 60.0 / beat_interval
+        bpm = np.clip(bpm, min_bpm, max_bpm)
+        return {'bpm': round(bpm), 'confidence': 0.3, 'beat_interval': beat_interval}
+    
+    # Histogram on all candidates
+    hist_all, _ = np.histogram(all_candidate_iois, bins=bins)
+    
+    # Find the peak (most common interval)
+    peak_idx = np.argmax(hist_all)
+    peak_interval = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
+    
+    # Refine by taking weighted average around the peak
+    peak_start = max(0, peak_idx - 2)
+    peak_end = min(len(hist_all), peak_idx + 3)
+    weights = hist_all[peak_start:peak_end]
+    intervals = (bin_edges[peak_start:peak_end] + bin_edges[peak_start+1:peak_end+1]) / 2
+    
+    if np.sum(weights) > 0:
+        refined_interval = np.average(intervals, weights=weights)
+    else:
+        refined_interval = peak_interval
+    
+    # Calculate BPM
+    bpm = 60.0 / refined_interval
+    
+    # Snap to "nice" BPM values (multiples of 2 or 5)
+    # Common tempos: 60, 72, 80, 90, 100, 108, 120, 132, 140, 160, 180
+    nice_bpms = [50, 54, 58, 60, 63, 66, 69, 72, 76, 80, 84, 88, 92, 96, 
+                 100, 104, 108, 112, 116, 120, 126, 132, 138, 144, 150, 
+                 156, 160, 168, 176, 184, 192, 200]
+    
+    # Find closest nice BPM
+    closest_bpm = min(nice_bpms, key=lambda x: abs(x - bpm))
+    
+    # Only snap if we're close (within 5%)
+    if abs(closest_bpm - bpm) / bpm < 0.05:
+        bpm = closest_bpm
+    else:
+        bpm = round(bpm)
+    
+    # Ensure BPM is in valid range
+    bpm = int(np.clip(bpm, min_bpm, max_bpm))
+    
+    # Calculate confidence based on how concentrated the histogram peak is
+    peak_count = hist_all[peak_idx]
+    total_count = np.sum(hist_all)
+    confidence = min(1.0, (peak_count / total_count) * 3)  # Scale so 33% concentration = 1.0
+    
+    # Boost confidence if half/double intervals also cluster at the same beat
+    beat_interval = 60.0 / bpm
+    
+    print(f"[Tempo] Detected {bpm} BPM (beat = {beat_interval:.3f}s, confidence = {confidence:.2f})")
+    print(f"[Tempo] IOI stats: {len(valid_iois)} intervals, median={np.median(valid_iois):.3f}s, mean={np.mean(valid_iois):.3f}s")
+    
+    return {
+        'bpm': bpm,
+        'confidence': round(confidence, 2),
+        'beat_interval': round(beat_interval, 4)
+    }
+
+
+def detect_triplets(notes, bpm=120, tolerance=0.15):
+    """
+    Detect triplet patterns in a sequence of notes.
+    Triplets are EXACTLY 3 notes played in the time of 2 regular notes.
+    
+    STRICT REQUIREMENTS:
+    1. Must have exactly 3 consecutive notes
+    2. Both inter-note spacings must be nearly equal to each other
+    3. Both spacings must match a known triplet pattern for the tempo
+    4. The note before (if any) must NOT have the same spacing
+    5. The note after (if any) must NOT have the same spacing
+    6. All 3 notes must be valid (have time_seconds)
+    
+    Args:
+        notes: List of note dictionaries with 'time_seconds' field
+        bpm: Beats per minute
+        tolerance: Timing tolerance as fraction (0.15 = 15% tolerance)
+    
+    Returns:
+        List of notes with triplet information added
+    """
+    if len(notes) < 3:
+        return notes
+    
+    beat_duration = 60.0 / bpm
+    
+    # Triplet patterns: (type, expected_spacing_between_notes)
+    triplet_patterns = [
+        ('half', beat_duration * 4 / 3),      # 3 in time of 2 half notes
+        ('quarter', beat_duration * 2 / 3),   # 3 in time of 2 quarters
+        ('eighth', beat_duration / 3),         # 3 in time of 2 eighths
+        ('16th', beat_duration / 6),           # 3 in time of 2 16ths
+        ('32nd', beat_duration / 12),          # 3 in time of 2 32nds
+    ]
+    
+    # Track which note indices are part of a triplet
+    triplet_assigned = set()
+    
+    i = 0
+    while i <= len(notes) - 3:  # Need at least 3 notes from position i
+        if i in triplet_assigned:
+            i += 1
+            continue
+        
+        # Get all 3 notes
+        note0 = notes[i]
+        note1 = notes[i + 1]
+        note2 = notes[i + 2]
+        
+        # VALIDATION: All notes must have valid time_seconds
+        t0 = note0.get('time_seconds')
+        t1 = note1.get('time_seconds')
+        t2 = note2.get('time_seconds')
+        
+        if t0 is None or t1 is None or t2 is None:
+            i += 1
+            continue
+        
+        # Calculate spacings between consecutive notes
+        spacing1 = t1 - t0
+        spacing2 = t2 - t1
+        
+        # VALIDATION: Spacings must be positive
+        if spacing1 <= 0 or spacing2 <= 0:
+            i += 1
+            continue
+        
+        # VALIDATION: The two spacings must be very close to each other
+        avg_spacing = (spacing1 + spacing2) / 2
+        if avg_spacing < 0.02:  # Too fast to be meaningful
+            i += 1
+            continue
+        
+        spacing_diff = abs(spacing1 - spacing2) / avg_spacing
+        if spacing_diff > tolerance:
+            # Spacings are too different - not a triplet
+            i += 1
+            continue
+        
+        # Try to match a triplet pattern
+        matched = False
+        for triplet_type, expected_spacing in triplet_patterns:
+            tol = expected_spacing * tolerance
+            
+            # VALIDATION: Both spacings must match expected triplet spacing
+            if abs(spacing1 - expected_spacing) > tol:
+                continue
+            if abs(spacing2 - expected_spacing) > tol:
+                continue
+            
+            # VALIDATION: Note BEFORE must NOT have the same spacing (ensures start of triplet)
+            if i > 0:
+                t_prev = notes[i - 1].get('time_seconds')
+                if t_prev is not None:
+                    spacing_before = t0 - t_prev
+                    if spacing_before > 0 and abs(spacing_before - expected_spacing) <= tol:
+                        # Previous note has same spacing - we're in the middle of something
+                        continue
+            
+            # VALIDATION: Note AFTER must NOT have the same spacing (ensures end of triplet)
+            if i + 3 < len(notes):
+                t_next = notes[i + 3].get('time_seconds')
+                if t_next is not None:
+                    spacing_after = t_next - t2
+                    if spacing_after > 0 and abs(spacing_after - expected_spacing) <= tol:
+                        # Next note has same spacing - this is more than 3 notes
+                        continue
+            
+            # ALL VALIDATIONS PASSED - This is a valid triplet of exactly 3 notes
+            triplet_assigned.add(i)
+            triplet_assigned.add(i + 1)
+            triplet_assigned.add(i + 2)
+            
+            triplet_beats = {
+                'half': 4/3,
+                'quarter': 2/3,
+                'eighth': 1/3,
+                '16th': 1/6,
+                '32nd': 1/12,
+            }[triplet_type]
+            
+            # Mark all 3 notes
+            note0.update({
+                'triplet': True,
+                'triplet_position': 'start',
+                'triplet_type': triplet_type,
+                'actual_notes': 3,
+                'normal_notes': 2,
+                'note_value': triplet_type,
+                'note_divisions': triplet_beats,
+                'dotted': False
+            })
+            note1.update({
+                'triplet': True,
+                'triplet_position': 'middle',
+                'triplet_type': triplet_type,
+                'actual_notes': 3,
+                'normal_notes': 2,
+                'note_value': triplet_type,
+                'note_divisions': triplet_beats,
+                'dotted': False
+            })
+            note2.update({
+                'triplet': True,
+                'triplet_position': 'end',
+                'triplet_type': triplet_type,
+                'actual_notes': 3,
+                'normal_notes': 2,
+                'note_value': triplet_type,
+                'note_divisions': triplet_beats,
+                'dotted': False
+            })
+            
+            matched = True
+            i += 3  # Skip past the triplet
+            break
+        
+        if not matched:
+            i += 1
+    
+    return notes
+
+
+def detect_triplets_in_chords(chords, bpm=120, tolerance=0.15):
+    """
+    Detect triplet patterns in a sequence of chords.
+    
+    STRICT REQUIREMENTS (same as detect_triplets):
+    1. Must have exactly 3 consecutive chords
+    2. Both inter-chord spacings must be nearly equal to each other
+    3. Both spacings must match a known triplet pattern for the tempo
+    4. The chord before (if any) must NOT have the same spacing
+    5. The chord after (if any) must NOT have the same spacing
+    6. All 3 chords must have valid time_seconds
+    """
+    if len(chords) < 3:
+        return chords
+    
+    beat_duration = 60.0 / bpm
+    
+    triplet_patterns = [
+        ('half', beat_duration * 4 / 3),
+        ('quarter', beat_duration * 2 / 3),
+        ('eighth', beat_duration / 3),
+        ('16th', beat_duration / 6),
+        ('32nd', beat_duration / 12),
+    ]
+    
+    triplet_assigned = set()
+    
+    i = 0
+    while i <= len(chords) - 3:
+        if i in triplet_assigned:
+            i += 1
+            continue
+        
+        chord0 = chords[i]
+        chord1 = chords[i + 1]
+        chord2 = chords[i + 2]
+        
+        # VALIDATION: All chords must have valid time_seconds
+        t0 = chord0.get('time_seconds')
+        t1 = chord1.get('time_seconds')
+        t2 = chord2.get('time_seconds')
+        
+        if t0 is None or t1 is None or t2 is None:
+            i += 1
+            continue
+        
+        # Calculate spacings
+        spacing1 = t1 - t0
+        spacing2 = t2 - t1
+        
+        # VALIDATION: Spacings must be positive
+        if spacing1 <= 0 or spacing2 <= 0:
+            i += 1
+            continue
+        
+        # VALIDATION: The two spacings must be very close to each other
+        avg_spacing = (spacing1 + spacing2) / 2
+        if avg_spacing < 0.02:  # Too fast
+            i += 1
+            continue
+        
+        spacing_diff = abs(spacing1 - spacing2) / avg_spacing
+        if spacing_diff > tolerance:
+            i += 1
+            continue
+        
+        # Try to match a triplet pattern
+        matched = False
+        for triplet_type, expected_spacing in triplet_patterns:
+            tol = expected_spacing * tolerance
+            
+            # VALIDATION: Both spacings must match expected triplet spacing
+            if abs(spacing1 - expected_spacing) > tol:
+                continue
+            if abs(spacing2 - expected_spacing) > tol:
+                continue
+            
+            # VALIDATION: Chord BEFORE must NOT have the same spacing (ensures start of triplet)
+            if i > 0:
+                t_prev = chords[i - 1].get('time_seconds')
+                if t_prev is not None:
+                    spacing_before = t0 - t_prev
+                    if spacing_before > 0 and abs(spacing_before - expected_spacing) <= tol:
+                        # Previous chord has same spacing - not start of triplet
+                        continue
+            
+            # VALIDATION: Chord AFTER must NOT have the same spacing (ensures end of triplet)
+            if i + 3 < len(chords):
+                t_next = chords[i + 3].get('time_seconds')
+                if t_next is not None:
+                    spacing_after = t_next - t2
+                    if spacing_after > 0 and abs(spacing_after - expected_spacing) <= tol:
+                        # Next chord has same spacing - more than 3 notes
+                        continue
+            
+            # ALL VALIDATIONS PASSED - This is a valid triplet of exactly 3 chords
+            triplet_assigned.add(i)
+            triplet_assigned.add(i + 1)
+            triplet_assigned.add(i + 2)
+            
+            triplet_beats = {
+                'half': 4/3,
+                'quarter': 2/3,
+                'eighth': 1/3,
+                '16th': 1/6,
+                '32nd': 1/12,
+            }[triplet_type]
+            
+            for idx, pos in [(i, 'start'), (i + 1, 'middle'), (i + 2, 'end')]:
+                chords[idx].update({
+                    'triplet': True,
+                    'triplet_position': pos,
+                    'triplet_type': triplet_type,
+                    'actual_notes': 3,
+                    'normal_notes': 2,
+                    'note_value': triplet_type,
+                    'note_divisions': triplet_beats,
+                    'dotted': False
+                })
+            
+            matched = True
+            i += 3
+            break
+        
+        if not matched:
+            i += 1
+    
+    return chords
+
 #* ─── Spectral Gate Noise Filter ──────────────────────────────────────────────
 def spectral_gate_filter(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512, 
                          noise_floor_percentile=15, gate_threshold_db=-15, 
@@ -319,6 +732,116 @@ def multiband_spectral_gate(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512,
     
     return filtered_audio.astype(np.float32), float(noise_removed_db)
 
+#* ─── Persistent Tone Removal ────────────────────────────────────────────────
+def remove_persistent_tones(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512,
+                            persistence_percentile=10, subtraction_strength=0.8,
+                            min_freq=30, max_freq=4000):
+    """
+    Remove background tones that persist throughout the recording.
+    
+    Background noise like HVAC, electrical hum (60Hz), room resonance, etc. stays
+    at roughly constant levels throughout the recording. Real music has
+    varying dynamics.
+    
+    Approach: Use the LOW percentile (e.g. 10th) of each frequency bin as the
+    "floor" that's always there. Only consider frequencies in the musical range
+    where persistent noise actually matters.
+    
+    Args:
+        audio: Input audio signal
+        sr: Sample rate  
+        n_fft: FFT size
+        hop_length: Hop size
+        persistence_percentile: LOW percentile to use as noise floor (10 = 10th percentile)
+        subtraction_strength: How aggressively to remove (0-1)
+        min_freq: Minimum frequency to consider (Hz)
+        max_freq: Maximum frequency to consider (Hz) - above this is less relevant
+    
+    Returns:
+        Filtered audio, noise_reduction_db
+    """
+    window = get_window('hann', n_fft, fftbins=True)
+    _, _, stft_data = scipy_stft(audio, fs=sr, window=window, nperseg=n_fft, 
+                                  noverlap=n_fft-hop_length, return_onesided=True)
+    
+    magnitude = np.abs(stft_data).astype(np.float32)
+    phase = np.angle(stft_data)
+    freqs = np.fft.rfftfreq(n_fft, 1/sr)
+    
+    # Use low percentile as the "persistent floor" for each frequency bin
+    persistent_floor = np.percentile(magnitude, persistence_percentile, axis=1, keepdims=True)
+    
+    # Get median and max for analysis
+    median_magnitude = np.median(magnitude, axis=1, keepdims=True)
+    max_magnitude = np.max(magnitude, axis=1, keepdims=True)
+    
+    # Overall signal level for threshold
+    overall_median = np.median(magnitude)
+    overall_max = np.max(magnitude)
+    
+    # Persistence score: how close is the floor to the median?
+    persistence_score = persistent_floor / (median_magnitude + 1e-10)
+    
+    # Create frequency mask - only consider musical range
+    freq_mask = (freqs >= min_freq) & (freqs <= max_freq)
+    
+    # Require MINIMUM ABSOLUTE ENERGY to be considered persistent
+    # Must be at least 5% of overall median - this filters out near-silent bins
+    min_energy_threshold = 0.05 * overall_median
+    has_energy = (persistent_floor[:, 0] > min_energy_threshold)
+    
+    # Combined mask: in frequency range AND has real energy AND high persistence
+    high_persistence = (persistence_score[:, 0] > 0.2) & freq_mask & has_energy
+    n_persistent = np.sum(high_persistence)
+    
+    print(f"[Persistent Tone] Analyzing {np.sum(freq_mask)} bins in {min_freq}-{max_freq} Hz range...")
+    print(f"[Persistent Tone] Overall magnitude: median={overall_median:.6f}, max={overall_max:.6f}")
+    print(f"[Persistent Tone] Min energy threshold: {min_energy_threshold:.6f}")
+    print(f"[Persistent Tone] Found {n_persistent} bins with persistence > 0.2 AND sufficient energy")
+    
+    # Check if the recording is very clean (low persistent noise)
+    total_persistent_energy = np.sum(persistent_floor[high_persistence, 0])
+    total_signal_energy = np.sum(median_magnitude[:, 0])
+    persistent_ratio = total_persistent_energy / (total_signal_energy + 1e-10)
+    print(f"[Persistent Tone] Persistent energy ratio: {persistent_ratio:.4f} ({persistent_ratio*100:.2f}% of signal)")
+    
+    if n_persistent > 0:
+        persistent_indices = np.where(high_persistence)[0]
+        persistent_freqs = freqs[persistent_indices]
+        scores = persistence_score[persistent_indices, 0]
+        floors = persistent_floor[persistent_indices, 0]
+        sorted_idx = np.argsort(-scores)[:10]
+        print(f"[Persistent Tone] Top persistent frequencies:")
+        for i in sorted_idx:
+            print(f"  {persistent_freqs[i]:.1f} Hz: score={scores[i]:.3f}, floor={floors[i]:.6f}")
+    
+    # Build subtraction mask - only subtract from identified persistent bins
+    subtraction_mask = np.zeros_like(persistent_floor)
+    subtraction_mask[high_persistence, :] = subtraction_strength * persistence_score[high_persistence, :]
+    
+    magnitude_cleaned = np.maximum(
+        magnitude - subtraction_mask * persistent_floor,
+        magnitude * 0.01  # Floor at 1% to prevent complete nulling
+    )
+    
+    # Compute reduction stats
+    original_power = np.sum(magnitude**2)
+    cleaned_power = np.sum(magnitude_cleaned**2)
+    noise_reduction_db = 10 * np.log10(original_power / (cleaned_power + 1e-10))
+    
+    # Reconstruct
+    filtered_stft = magnitude_cleaned * np.exp(1j * phase)
+    _, filtered_audio = scipy_istft(filtered_stft, fs=sr, window=window, nperseg=n_fft, 
+                                     noverlap=n_fft-hop_length, input_onesided=True)
+    
+    # Match output length
+    if len(filtered_audio) > len(audio):
+        filtered_audio = filtered_audio[:len(audio)]
+    elif len(filtered_audio) < len(audio):
+        filtered_audio = np.pad(filtered_audio, (0, len(audio) - len(filtered_audio)), mode='constant')
+    
+    return filtered_audio.astype(np.float32), float(noise_reduction_db)
+
 #* ─── Wiener Filter (Second Layer) ───────────────────────────────────────────
 def wiener_filter(audio, sr=SAMPLE_RATE, n_fft=2048, hop_length=512,
                   noise_estimation_frames=10, oversubtraction_factor=1.5):
@@ -492,6 +1015,15 @@ def read_wav(path):
     
     input_rms = np.sqrt(np.mean(audio**2))
     print(f"[Noise Pipeline] Input audio: {len(audio)} samples, RMS: {input_rms:.4f}")
+    
+    # Step 0: Remove persistent background tones (HVAC, 60Hz hum, room resonance)
+    # These are constant-pitch noise sources that stay on throughout the recording
+    audio, persistent_db = remove_persistent_tones(
+        audio, sr=sr, n_fft=FFT_SIZE, hop_length=HOP_SIZE,
+        persistence_percentile=10,  # 10th percentile = floor present in 90% of frames
+        subtraction_strength=0.8  # Subtract 80% of persistent floor
+    )
+    print(f"[Noise Pipeline] After persistent tone removal: {persistent_db:.2f} dB removed")
     
     # Step 1: Multi-band spectral gate (our improved implementation)
     # This handles frequency-specific noise (rumble, hiss) with transient preservation
@@ -785,19 +1317,101 @@ def _bic(err, B, dof):
     return B * np.log(max(err, 1e-18) / B) + dof * np.log(B)
 
 def _salience_candidates_from_fft(mag, top=8, H=6):
-    """Cheap salience: score each MIDI by aligning harmonics on FFT (no CQT)."""
-    # Full piano range: A0 (MIDI 21) to C8 (MIDI 108)
+    """
+    Improved salience: score each MIDI by fundamental strength + harmonic support.
+    Uses peak detection with parabolic interpolation for sub-bin accuracy.
+    """
     midi_lo, midi_hi = 21, 108
+    freqs = _FFT_FREQS
+    
+    # Find actual peaks in the spectrum with parabolic interpolation
+    # This gives us sub-bin frequency accuracy
+    peaks = []  # List of (bin_index, interpolated_freq, magnitude)
+    mag_thresh = 0.1 * np.max(mag)
+    for i in range(1, len(mag) - 1):
+        if mag[i] > mag[i-1] and mag[i] > mag[i+1] and mag[i] > mag_thresh:
+            # Parabolic interpolation for sub-bin accuracy
+            y1, y2, y3 = mag[i-1], mag[i], mag[i+1]
+            # Fit parabola: offset from center bin
+            denom = y1 - 2*y2 + y3
+            if abs(denom) > 1e-10:
+                delta = 0.5 * (y1 - y3) / denom
+                delta = np.clip(delta, -0.5, 0.5)  # Sanity check
+            else:
+                delta = 0.0
+            
+            interp_bin = i + delta
+            interp_freq = interp_bin * (freqs[1] - freqs[0])  # bin_width * bin_index
+            interp_mag = y2 - 0.25 * (y1 - y3) * delta  # Interpolated magnitude
+            peaks.append((i, interp_freq, interp_mag))
+    
     scores = []
-    for m in range(midi_lo, midi_hi+1):
-        t = get_template(m)
-        # dot with log-magnitude to reduce dominance of a few bins
-        s = float((t * np.log1p(mag)).sum())
-        scores.append((s, m))
-    scores.sort(reverse=True)
-    return [m for s,m in scores[:top]]
+    for m in range(midi_lo, midi_hi + 1):
+        f0 = _midi_to_hz(m)
+        
+        # Find the closest peak to this MIDI's fundamental frequency
+        # Use interpolated frequencies for better accuracy
+        closest_peak = None
+        min_freq_diff = float('inf')
+        for bin_idx, peak_freq, peak_mag in peaks:
+            freq_diff = abs(peak_freq - f0)
+            if freq_diff < min_freq_diff:
+                min_freq_diff = freq_diff
+                closest_peak = (bin_idx, peak_freq, peak_mag)
+        
+        # Tolerance: half a semitone = f0 * (2^(1/24) - 1) ≈ 2.9% of f0
+        semitone_tolerance = f0 * 0.029  # Half semitone
+        has_fund_peak = closest_peak is not None and min_freq_diff < semitone_tolerance
+        
+        # Score based on energy at fundamental frequency
+        f0_bin = np.argmin(np.abs(freqs - f0))
+        fund_energy = 0.0
+        for offset in range(-2, 3):  # ±2 bins around f0
+            bin_idx = f0_bin + offset
+            if 0 <= bin_idx < len(mag):
+                weight = 1.0 - 0.3 * abs(offset)  # Center weighted
+                fund_energy += mag[bin_idx] * weight
+        
+        # Bonus if we found an interpolated peak very close to expected f0
+        peak_bonus = 0.0
+        if has_fund_peak:
+            # Stronger bonus for closer match (linear falloff)
+            closeness = 1.0 - (min_freq_diff / semitone_tolerance)
+            peak_bonus = closest_peak[2] * closeness * 0.5  # Use peak magnitude
+        
+        # Add harmonic support (but less weight than fundamental)
+        harmonic_support = 0.0
+        for h in range(2, H + 1):
+            fh = f0 * h
+            if fh >= freqs[-1]:
+                break
+            h_bin = np.argmin(np.abs(freqs - fh))
+            # Less weight for higher harmonics
+            h_weight = 0.4 / h
+            for offset in range(-1, 2):  # ±1 bin around harmonic
+                bin_idx = h_bin + offset
+                if 0 <= bin_idx < len(mag):
+                    harmonic_support += mag[bin_idx] * h_weight * (1.0 - 0.3 * abs(offset))
+        
+        # Check for subharmonic evidence (is this note actually a harmonic of a lower note?)
+        subharmonic_penalty = 0.0
+        for sub_h in [2, 3]:
+            sub_f0 = f0 / sub_h
+            if sub_f0 >= freqs[1]:  # Above DC
+                sub_bin = np.argmin(np.abs(freqs - sub_f0))
+                # Check if there's significant energy at the potential fundamental
+                sub_energy = sum(mag[max(0, sub_bin-1):min(len(mag), sub_bin+2)])
+                if sub_energy > fund_energy * 0.3:  # If subharmonic is reasonably strong
+                    subharmonic_penalty += sub_energy * 0.5 / sub_h
+        
+        # Final score: fund energy + peak bonus + harmonic support - subharmonic penalty
+        score = fund_energy * (1.5 if has_fund_peak else 0.8) + peak_bonus + harmonic_support - subharmonic_penalty
+        scores.append((score, m, fund_energy, peak_bonus, harmonic_support, subharmonic_penalty, has_fund_peak))
+    
+    scores.sort(reverse=True, key=lambda x: x[0])
+    return [(s[1], s[0], s[2], s[3], s[4], s[5], s[6]) for s in scores[:top]]  # (midi, score, fund, peak_bonus, harm, subharm, has_peak)
 
-def estimate_voices_bic(mag_window, max_K=3, H=8):
+def estimate_voices_bic(mag_window, max_K=3, H=8, debug=False):
     """
     mag_window: 1D FFT magnitude you'd like to explain (ideally averaged over ±1 frame around the onset).
     Returns: dict with {'K', 'midis', 'gains', 'bic', 'err'}
@@ -809,7 +1423,23 @@ def estimate_voices_bic(mag_window, max_K=3, H=8):
     B = len(x)
 
     # Propose ~8 MIDI candidates via FFT salience (fast, no thresholds)
-    cand_midis = _salience_candidates_from_fft(x, top=8, H=H)
+    cand_results = _salience_candidates_from_fft(x, top=12, H=H)  # Get more candidates for filtering
+    
+    # Build salience info dict for CQT validation: MIDI -> (score, has_peak)
+    salience_info = {midi: (score, has_peak) for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results}
+    
+    if debug:
+        print(f"\n  [Salience] Top candidates from FFT:")
+        for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results[:8]:
+            note_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
+            f0 = 440.0 * 2**((midi - 69)/12)
+            print(f"    {note_name:4s} (MIDI {midi:3d}, {f0:6.1f}Hz): score={score:.4f} "
+                  f"[fund={fund:.4f}, peak_bonus={peak_bonus:.4f}, harm={harm:.4f}, subharm_penalty={subharm:.4f}, has_peak={has_peak}]")
+    
+    cand_midis = [r[0] for r in cand_results]  # Extract just MIDI numbers
+    
+    # Keep top 8 candidates (no octave filtering - let CQT validation handle it)
+    cand_midis = cand_midis[:8]
 
     best = {'K': 0, 'midis': [], 'gains': np.array([]), 'bic': _bic(np.sum(x*x), B, 0), 'err': float(np.sum(x*x))}
     # Try K=1..max_K by taking top-K candidates; refine by pruning tiny gains
@@ -817,17 +1447,113 @@ def estimate_voices_bic(mag_window, max_K=3, H=8):
         midis = cand_midis[:K]
         gains, err = _fit_nonneg_mixture(x, midis, iters=6)
         # prune near-zero components and recompute (optional)
-        keep = gains > (0.02 * gains.max())
+        keep = gains > (0.05 * gains.max())  # Increased from 0.02 to 0.05 for stricter pruning
         if keep.any() and keep.sum() < K:
             midis = [m for m, k in zip(midis, keep) if k]
             gains, err = _fit_nonneg_mixture(x, midis, iters=4)
             K_eff = len(midis)
         else:
             K_eff = K
-        bic = _bic(err, B, dof=K_eff*1.8)  # mild penalty; tweak 1.3–2.0 if needed
+        bic = _bic(err, B, dof=K_eff*2.0)  # Slightly higher penalty for more notes
+        
+        if debug:
+            midi_names = [['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m in midis]
+            print(f"  [BIC] K={K_eff}: midis={midi_names}, gains={gains[:K_eff]}, err={err:.6f}, bic={bic:.2f} {'← BEST' if bic < best['bic'] else ''}")
+        
         if bic < best['bic']:
             best = {'K': K_eff, 'midis': midis, 'gains': gains[:K_eff], 'bic': bic, 'err': float(err)}
+    
+    if debug:
+        best_names = [['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m in best['midis']]
+        print(f"  [BIC] Final selection: K={best['K']}, midis={best_names}")
+    
+    # Include salience_info so CQT validation can trust FFT peaks
+    best['salience_info'] = salience_info
     return best
+
+def validate_midi_with_cqt(midi_candidates, cqt_mag, tolerance_semitones=1, debug=False, salience_info=None, cqt_prev=None):
+    """
+    Cross-validate MIDI candidates against CQT peaks.
+    
+    Strategy: BIC tells us WHAT notes are playing (onset detection), CQT tells us 
+    the EXACT pitch. When BIC and CQT disagree by 1 semitone, trust CQT's pitch.
+    
+    1. For each BIC candidate, find the nearest CQT peak
+    2. If within tolerance, use the CQT peak's MIDI (more accurate pitch)
+    3. If no CQT support and no harmonic evidence, reject the candidate
+    """
+    if cqt_mag is None or len(cqt_mag) == 0:
+        return midi_candidates
+    
+    # CQT starts at A0 (MIDI 21) - the lowest piano key
+    CQT_MIDI_OFFSET = 21  # A0 = MIDI 21
+    
+    # Find significant peaks in CQT with their magnitudes
+    max_cqt = np.max(cqt_mag)
+    threshold = 0.15 * max_cqt
+    cqt_peaks = []  # List of (midi, magnitude)
+    cqt_peak_bins = []
+    for i in range(1, len(cqt_mag) - 1):
+        if cqt_mag[i] > cqt_mag[i-1] and cqt_mag[i] > cqt_mag[i+1] and cqt_mag[i] > threshold:
+            cqt_peaks.append((CQT_MIDI_OFFSET + i, cqt_mag[i]))
+            cqt_peak_bins.append(i)
+    
+    cqt_peak_midis = [p[0] for p in cqt_peaks]
+    
+    if debug:
+        peak_names = [['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m in cqt_peak_midis[:10]]
+        print(f"  [CQT Validation] CQT peaks found: {peak_names} (bins: {cqt_peak_bins[:10]}, MIDI: {cqt_peak_midis[:10]})")
+    
+    validated = []
+    
+    for midi in midi_candidates:
+        # Find the nearest CQT peak to this BIC candidate
+        nearest_peak = None
+        nearest_dist = float('inf')
+        for peak_midi, peak_mag in cqt_peaks:
+            dist = abs(midi - peak_midi)
+            if dist < nearest_dist:
+                nearest_dist = dist
+                nearest_peak = (peak_midi, peak_mag)
+        
+        # Check harmonic support in CQT (for missing fundamental cases)
+        harmonic_support = 0
+        for h in [2, 3]:
+            harmonic_midi = midi + 12 * int(np.log2(h))
+            if any(abs(harmonic_midi - peak) <= tolerance_semitones for peak in cqt_peak_midis):
+                harmonic_support += 1
+        
+        if nearest_peak and nearest_dist <= tolerance_semitones:
+            # BIC candidate has CQT support - keep BIC's pitch (don't correct)
+            if midi not in validated:
+                validated.append(midi)
+                if debug:
+                    bic_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
+                    print(f"    {bic_name}: ✓ KEPT (cqt_confirmed)")
+        elif harmonic_support >= 2:
+            # Missing fundamental case - keep BIC's pitch
+            if midi not in validated:
+                validated.append(midi)
+                if debug:
+                    note_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
+                    print(f"    {note_name}: ✓ KEPT (harmonic_support={harmonic_support})")
+        else:
+            # No CQT support and no harmonic evidence - reject
+            if debug:
+                note_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
+                print(f"    {note_name}: ✗ REJECTED (no CQT support, nearest peak {nearest_dist} semitones away)")
+    
+    # Sort by MIDI number for consistent output
+    validated.sort()
+    
+    # Fallback: if nothing validated, keep the top BIC candidate
+    result = validated if validated else midi_candidates[:1] if midi_candidates else []
+    
+    if debug:
+        result_names = [['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m in result]
+        print(f"  [CQT Validation] Final validated: {result_names}")
+    
+    return result
 
 #* ─── Chord Detection ────────────────────────────────────────────────────────
 def make_templates():
@@ -861,7 +1587,7 @@ def _harmonic_bins(b0, bpo, H=3):
     offs = [0.0] + [np.log2(h) * bpo for h in range(2, H+1)]
     return [int(round(b0 + off)) for off in offs]
 
-def estimate_bass_bin(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('C1'), frames_ahead=3, lowpass_hz=220.0,
+def estimate_bass_bin(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('A0'), frames_ahead=3, lowpass_hz=220.0,
                       q_thresh=0.75, min_sep_bins=2, H=3, w=(1.0, 0.6, 0.4)):
     """
     Robust bass-bin estimator around onset frame t0 (causal average).
@@ -918,7 +1644,7 @@ def estimate_bass_bin(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('C1'), frames_
 
     return int(best)
 
-def bin_to_octave(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('C1'), a4=440.0):
+def bin_to_octave(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('A0'), a4=440.0):
     """
     Map CQT bin -> musical octave using actual CQT config.
     Octave number uses MIDI convention: C4 in octave 4, etc.
@@ -938,7 +1664,7 @@ def detect_true_bass_pc(mag_frame, floor_frac=0.1):
     # lowest active bin index modulo 12 gives the pitch class
     return int(active_bins.min().item() % 12)
 
-def _bin_to_pc(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('C1'), a4=440.0):
+def _bin_to_pc(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('A0'), a4=440.0):
     """
     Map a CQT bin index to a pitch-class (0..11) via frequency -> MIDI -> PC.
     """
@@ -946,7 +1672,7 @@ def _bin_to_pc(bin_idx, *, bpo=12, fmin=librosa.note_to_hz('C1'), a4=440.0):
     midi = 69.0 + 12.0 * np.log2(freq / float(a4))
     return int(round(midi)) % 12
 
-def detect_bass_pc_conf(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('C1'), frames_ahead=2, lowpass_hz=220.0):
+def detect_bass_pc_conf(mag, t0, *, bpo=12, fmin=librosa.note_to_hz('A0'), frames_ahead=2, lowpass_hz=220.0):
     """
     Causal, low-band bass PC + confidence.
     Returns (bass_pc, bass_rel) where bass_rel in [0,1] is bass bin energy
@@ -994,7 +1720,7 @@ def chord_tone_pcs(root_pc, quality):
     return [ (root_pc + i) % 12 for i in iv ]
 
 def compute_inversion(root_pc, quality, pc_energies, mag, 
-                      t0, *, bpo=12, fmin=librosa.note_to_hz('C1'),
+                      t0, *, bpo=12, fmin=librosa.note_to_hz('A0'),
                       min_bass_rel=0.60, bass_vs_root=0.85):
     """
     Smart inversion decision returning 'root'|'first'|'second'|'third'.
@@ -2023,7 +2749,7 @@ def detect_chord_multiframe(chroma, mag, frame_idx, num_frames=3, debug=False):
             mag=mag,
             t0=middle_frame,
             bpo=12,
-            fmin=librosa.note_to_hz('C1')
+            fmin=librosa.note_to_hz('A0')
         )
     except Exception:
         # Fallback to simple bass estimate if compute_inversion fails
@@ -2087,7 +2813,7 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
     C_full = np.abs(librosa.cqt(
         y=audio, sr=SAMPLE_RATE, hop_length=HOP_SIZE,
         n_bins=CQT_BINS, bins_per_octave=12,
-        fmin=librosa.note_to_hz('C1')
+        fmin=librosa.note_to_hz('A0')
     ))
     
     # 5) COMPUTE CHROMA - use extract_chroma to match regular pipeline exactly
@@ -2122,6 +2848,11 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
     for i, onset_frame in enumerate(onsets):
         time_seconds = onset_frame * HOP_SIZE / SAMPLE_RATE
         
+        if debug:
+            print(f"\n{'='*60}")
+            print(f"ONSET #{i+1} at {time_seconds:.3f}s (frame {onset_frame})")
+            print(f"{'='*60}")
+        
         # Get offset/duration from chroma analysis
         try:
             oframe = int(offsets_frames[i][1])
@@ -2149,16 +2880,43 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
         
         # Ringing cancellation + BIC voice estimation
         resid, _ = cancel_ringing(mag_window, freqs)
-        bic_est = estimate_voices_bic(resid, max_K=3, H=8)
+        bic_est = estimate_voices_bic(resid, max_K=3, H=8, debug=debug)
         
         K = bic_est['K']
         midi_set = bic_est['midis']
+        salience_info = bic_est.get('salience_info', {})
+        
+        # For single notes, cross-validate with CQT peaks
+        # For chords (K >= 2), trust BIC - CQT validation can incorrectly reject chord tones
+        cqt_idx = min(onset_frame + 1, C_full.shape[1] - 1)
+        if K == 1 and midi_set and cqt_idx < C_full.shape[1]:
+            cqt_frame = C_full[:, cqt_idx]
+            midi_set = validate_midi_with_cqt(midi_set, cqt_frame, tolerance_semitones=1, debug=debug)
+            K = len(midi_set)  # Update K after validation
+        
         is_chord_final = (K >= 2)
+        
+        # If NOT a chord but multiple notes detected, pick highest salience for single note
+        if not is_chord_final and K > 1 and salience_info:
+            midi_set_scored = [(m, salience_info.get(m, (0, False))[0]) for m in midi_set]
+            midi_set_scored.sort(key=lambda x: x[1], reverse=True)
+            best_midi = midi_set_scored[0][0]
+            if debug:
+                print(f"  [Single Note Selection] Picking highest salience: {['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][best_midi % 12] + str(best_midi // 12 - 1)}")
+            midi_set = [best_midi]
+            K = 1
+        
+        if debug and midi_set:
+            final_names = [['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m in midi_set]
+            print(f"  [FINAL] Detected notes: {final_names}")
         
         if is_chord_final:
             # Chord detection using pre-computed chroma and C_full
             res = detect_chord_multiframe(chroma, C_full, onset_frame, num_frames=1, debug=debug)
             if res:
+                # Add the actual MIDI notes from BIC analysis
+                # This gives us the real notes played, not just a chord template
+                res["midi_notes"] = [int(m) for m in midi_set] if midi_set else []
                 res.update({
                     "time_seconds": round(time_seconds, 3),
                     "frame_index": int(onset_frame),
@@ -2203,18 +2961,70 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
     results["notes"] = [n for n in results["notes"] if n.get("duration_seconds", 0) > 0.05]
     results["chords"] = [c for c in results["chords"] if c.get("duration_seconds", 0) > 0.05]
     
-    # Add note values based on duration
+    # Deduplicate chords at nearly the same time with same label
+    TIME_TOLERANCE = 0.02  # 20ms - tight enough to only dedupe true duplicates
+    dedupe_chords = []
+    seen_chords = set()
+    for c in results["chords"]:
+        key = (round(c["time_seconds"] / TIME_TOLERANCE), c.get("label", ""))
+        if key not in seen_chords:
+            seen_chords.add(key)
+            dedupe_chords.append(c)
+    results["chords"] = dedupe_chords
+    
+    # Deduplicate notes at nearly the same time with same MIDI value
+    dedupe_notes = []
+    seen_notes = set()
+    for n in results["notes"]:
+        key = (round(n["time_seconds"] / TIME_TOLERANCE), n["midi_note"])
+        if key not in seen_notes:
+            seen_notes.add(key)
+            dedupe_notes.append(n)
+    results["notes"] = dedupe_notes
+    
+    # Also filter out notes that are already part of chords at the same time
+    notes_in_chords = set()
+    for c in results["chords"]:
+        chord_time_key = round(c["time_seconds"] / TIME_TOLERANCE)
+        for midi in c.get("midi_notes", []):
+            notes_in_chords.add((chord_time_key, midi))
+    
+    results["notes"] = [
+        n for n in results["notes"]
+        if (round(n["time_seconds"] / TIME_TOLERANCE), n["midi_note"]) not in notes_in_chords
+    ]
+    
+    # Detect tempo from onset times
+    onset_times = [o["time_seconds"] for o in results["onsets"]]
+    tempo_info = detect_tempo_from_onsets(onset_times)
+    detected_bpm = tempo_info['bpm']
+    
+    # Add tempo info to results
+    results["analysis_summary"]["detected_bpm"] = detected_bpm
+    results["analysis_summary"]["tempo_confidence"] = tempo_info['confidence']
+    results["analysis_summary"]["beat_interval"] = tempo_info['beat_interval']
+    
+    # Add note values based on duration (using detected BPM)
     for note in results["notes"]:
-        note_val = duration_to_note_value(note.get("duration_seconds", 0.5))
+        note_val = duration_to_note_value(note.get("duration_seconds", 0.5), bpm=detected_bpm)
         note["note_value"] = note_val["type"]
         note["note_divisions"] = note_val["divisions"]
         note["dotted"] = note_val["dotted"]
     
     for chord in results["chords"]:
-        note_val = duration_to_note_value(chord.get("duration_seconds", 0.5))
+        note_val = duration_to_note_value(chord.get("duration_seconds", 0.5), bpm=detected_bpm)
         chord["note_value"] = note_val["type"]
         chord["note_divisions"] = note_val["divisions"]
         chord["dotted"] = note_val["dotted"]
+    
+    # Detect triplets (must be after regular note values are assigned)
+    # Sort by time for triplet detection
+    results["notes"] = sorted(results["notes"], key=lambda x: x.get("time_seconds", 0))
+    results["chords"] = sorted(results["chords"], key=lambda x: x.get("time_seconds", 0))
+    
+    # Apply triplet detection (modifies notes/chords in place) - use detected BPM
+    detect_triplets(results["notes"], bpm=detected_bpm, tolerance=0.20)
+    detect_triplets_in_chords(results["chords"], bpm=detected_bpm, tolerance=0.20)
     
     # Update summary
     results["analysis_summary"].update({
@@ -2332,6 +3142,17 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
     treble_onsets = find_onsets(treble_flux, K=2.0)  # Standard threshold for treble
     print(f"[Treble] Found {len(treble_onsets)} onsets")
     
+    # 3b) Detect tempo from combined onset times
+    all_onset_times = sorted(set(
+        [o * HOP_SIZE / SAMPLE_RATE for o in bass_onsets] +
+        [o * HOP_SIZE / SAMPLE_RATE for o in treble_onsets]
+    ))
+    tempo_info = detect_tempo_from_onsets(all_onset_times)
+    detected_bpm = tempo_info['bpm']
+    tempo_confidence = tempo_info['confidence']
+    beat_interval = tempo_info['beat_interval']
+    print(f"\n[Tempo] Detected BPM: {detected_bpm} (confidence: {tempo_confidence:.2f}, beat interval: {beat_interval:.3f}s)")
+    
     # 4) Compute shared resources for analysis
     # Full audio chroma for chord quality detection
     chroma_full = extract_chroma(audio, SAMPLE_RATE, hop_length=HOP_SIZE)
@@ -2340,7 +3161,7 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
     C_full = np.abs(librosa.cqt(
         y=audio, sr=SAMPLE_RATE, hop_length=HOP_SIZE,
         n_bins=CQT_BINS, bins_per_octave=12,
-        fmin=librosa.note_to_hz('C1')
+        fmin=librosa.note_to_hz('A0')
     ))
     
     # IMPORTANT: Use FULL AUDIO STFT for pitch detection (BIC needs full harmonic spectrum)
@@ -2370,6 +3191,11 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
         """Process a single onset for a specific hand."""
         time_seconds = onset_frame * HOP_SIZE / SAMPLE_RATE
         
+        if debug:
+            print(f"\n{'='*60}")
+            print(f"{hand_label} ONSET at {time_seconds:.3f}s (frame {onset_frame})")
+            print(f"{'='*60}")
+        
         # Get magnitude window around onset
         if 1 <= onset_frame < magnitude.shape[1] - 1:
             mag_window = np.mean(magnitude[:, onset_frame-1:onset_frame+2], axis=1)
@@ -2378,16 +3204,45 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
         
         # Ringing cancellation + BIC voice estimation
         resid, _ = cancel_ringing(mag_window, freqs)
-        bic_est = estimate_voices_bic(resid, max_K=6, H=8)  # Allow more voices for chords
+        bic_est = estimate_voices_bic(resid, max_K=6, H=8, debug=debug)  # Allow more voices for chords
         
         K = bic_est['K']
         midi_set = bic_est['midis']
+        salience_info = bic_est.get('salience_info', {})
+        
+        # For single notes, cross-validate with CQT peaks
+        # For chords (K >= 2), trust BIC - CQT validation can incorrectly reject chord tones
+        cqt_idx = min(onset_frame + 2, C_full.shape[1] - 1)
+        if K == 1 and midi_set and cqt_idx < C_full.shape[1]:
+            cqt_frame = C_full[:, cqt_idx]
+            midi_set = validate_midi_with_cqt(midi_set, cqt_frame, tolerance_semitones=1, debug=debug)
+            K = len(midi_set)  # Update K after validation
         
         # Filter MIDI notes to only include those in the correct range
         midi_set = [m for m in midi_set if midi_filter_fn(m)]
         K = len(midi_set)
         
+        # Check if this is a chord BEFORE any reduction
+        is_chord = (K >= 2)
+        
+        # If NOT a chord but multiple notes detected, pick the one with highest FFT salience score
+        if not is_chord and K > 1 and salience_info:
+            # Sort by salience score (descending) and keep only the top one
+            midi_set_scored = [(m, salience_info.get(m, (0, False))[0]) for m in midi_set]
+            midi_set_scored.sort(key=lambda x: x[1], reverse=True)
+            best_midi = midi_set_scored[0][0]
+            if debug:
+                print(f"  [Single Note Selection] Multiple notes detected, picking highest salience: {[['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m, s in midi_set_scored]} -> {['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][best_midi % 12] + str(best_midi // 12 - 1)}")
+            midi_set = [best_midi]
+            K = 1
+        
+        if debug and midi_set:
+            final_names = [['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][m % 12] + str(m // 12 - 1) for m in midi_set]
+            print(f"  [FINAL] {hand_label} detected notes: {final_names}")
+        
         if K == 0:
+            if debug:
+                print(f"  [FINAL] No valid notes in {hand_label} range")
             return None, None  # No valid notes in this range
         
         # Estimate offset using band-specific chroma
@@ -2404,8 +3259,6 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
         
         dur = max(dur, 0.05)  # Minimum duration
         note_val = duration_to_note_value(dur)
-        
-        is_chord = (K >= 2)
         
         if is_chord:
             # Try detect_chord_multiframe for chord quality/label detection
@@ -2511,19 +3364,77 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
     results["notes"] = [n for n in results["notes"] if n.get("duration_seconds", 0) > 0.05]
     results["chords"] = [c for c in results["chords"] if c.get("duration_seconds", 0) > 0.05]
     
-    # Add note values to chords
+    # Deduplicate chords at nearly the same time with same label
+    TIME_TOLERANCE = 0.02  # 20ms - tight enough to only dedupe true duplicates
+    dedupe_chords = []
+    seen_chords = set()
+    for c in results["chords"]:
+        key = (round(c["time_seconds"] / TIME_TOLERANCE), c.get("label", ""))
+        if key not in seen_chords:
+            seen_chords.add(key)
+            dedupe_chords.append(c)
+    results["chords"] = dedupe_chords
+    
+    # Deduplicate notes at nearly the same time with same MIDI value
+    # This prevents dissonant clumps from duplicate detections
+    dedupe_notes = []
+    seen_notes = set()  # (rounded_time, midi_note)
+    for n in results["notes"]:
+        key = (round(n["time_seconds"] / TIME_TOLERANCE), n["midi_note"])
+        if key not in seen_notes:
+            seen_notes.add(key)
+            dedupe_notes.append(n)
+    results["notes"] = dedupe_notes
+    
+    # Also filter out notes that are already part of chords at the same time
+    notes_in_chords = set()
+    for c in results["chords"]:
+        chord_time_key = round(c["time_seconds"] / TIME_TOLERANCE)
+        for midi in c.get("midi_notes", []):
+            notes_in_chords.add((chord_time_key, midi))
+    
+    results["notes"] = [
+        n for n in results["notes"]
+        if (round(n["time_seconds"] / TIME_TOLERANCE), n["midi_note"]) not in notes_in_chords
+    ]
+    
+    # Add note values to chords (using detected BPM)
     for chord in results["chords"]:
         if "note_value" not in chord:
-            note_val = duration_to_note_value(chord.get("duration_seconds", 0.5))
+            note_val = duration_to_note_value(chord.get("duration_seconds", 0.5), bpm=detected_bpm)
             chord["note_value"] = note_val["type"]
             chord["note_divisions"] = note_val["divisions"]
             chord["dotted"] = note_val["dotted"]
     
-    # Update summary
+    # Detect triplets separately for bass and treble (to avoid cross-hand triplet detection)
+    bass_notes_list = [n for n in results["notes"] if n.get("hand") == "bass"]
+    treble_notes_list = [n for n in results["notes"] if n.get("hand") == "treble"]
+    bass_chords_list = [c for c in results["chords"] if c.get("hand") == "bass"]
+    treble_chords_list = [c for c in results["chords"] if c.get("hand") == "treble"]
+    
+    # Sort by time and detect triplets (using detected BPM)
+    bass_notes_list = sorted(bass_notes_list, key=lambda x: x.get("time_seconds", 0))
+    treble_notes_list = sorted(treble_notes_list, key=lambda x: x.get("time_seconds", 0))
+    bass_chords_list = sorted(bass_chords_list, key=lambda x: x.get("time_seconds", 0))
+    treble_chords_list = sorted(treble_chords_list, key=lambda x: x.get("time_seconds", 0))
+    
+    detect_triplets(bass_notes_list, bpm=detected_bpm, tolerance=0.20)
+    detect_triplets(treble_notes_list, bpm=detected_bpm, tolerance=0.20)
+    detect_triplets_in_chords(bass_chords_list, bpm=detected_bpm, tolerance=0.20)
+    detect_triplets_in_chords(treble_chords_list, bpm=detected_bpm, tolerance=0.20)
+    
+    # Merge back (already sorted)
+    results["notes"] = sorted(bass_notes_list + treble_notes_list, key=lambda x: x.get("time_seconds", 0))
+    results["chords"] = sorted(bass_chords_list + treble_chords_list, key=lambda x: x.get("time_seconds", 0))
+    
+    # Update summary (including tempo info)
     results["analysis_summary"].update({
         "total_onsets": len(bass_onsets) + len(treble_onsets),
         "total_notes": len(results["notes"]),
         "total_chords": len(results["chords"]),
+        "detected_bpm": float(detected_bpm),
+        "tempo_confidence": float(tempo_confidence),
+        "beat_interval": float(beat_interval),
         "bass_notes": len([n for n in results["notes"] if n.get("hand") == "bass"]),
         "treble_notes": len([n for n in results["notes"] if n.get("hand") == "treble"]),
         "bass_chords": len([c for c in results["chords"] if c.get("hand") == "bass"]),
@@ -2532,6 +3443,7 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
     
     print(f"\n{'='*70}")
     print(f"✓ Independent hands analysis complete:")
+    print(f"   Tempo:  {detected_bpm:.0f} BPM (confidence: {tempo_confidence:.2f})")
     print(f"   Bass:   {results['analysis_summary']['bass_notes']} notes, {results['analysis_summary']['bass_chords']} chords")
     print(f"   Treble: {results['analysis_summary']['treble_notes']} notes, {results['analysis_summary']['treble_chords']} chords")
     print(f"{'='*70}\n")
@@ -2647,7 +3559,7 @@ def analyze_audio_legacy(wav_path_or_array, debug=False):
         hop_length=HOP_SIZE,
         n_bins=CQT_BINS,
         bins_per_octave=12,
-        fmin=librosa.note_to_hz('C1')
+        fmin=librosa.note_to_hz('A0')
     ))
     # estimate offsets from chroma (fast pre-pass) — no console logs in API path
     try:
@@ -2717,13 +3629,29 @@ def analyze_audio_legacy(wav_path_or_array, debug=False):
         bic_est = estimate_voices_bic(resid, max_K=3, H=8)
         K = bic_est['K']
         midi_set = bic_est['midis']
+        salience_info = bic_est.get('salience_info', {})  # For selecting best note when multiple detected
+        
+        # For single notes, cross-validate with CQT peaks
+        # For chords (K >= 2), trust BIC - CQT validation can incorrectly reject chord tones
+        cqt_idx = min(onset + 2, C_full.shape[1] - 1)
+        if K == 1 and midi_set and cqt_idx < C_full.shape[1]:
+            cqt_frame = C_full[:, cqt_idx]
+            midi_set = validate_midi_with_cqt(midi_set, cqt_frame)
+            K = len(midi_set)  # Update K after validation
 
         is_chord_final = (K >= 2)
+        
+        # If NOT a chord but multiple notes detected, pick highest salience for single note
+        if not is_chord_final and len(midi_set) > 1:
+            midi_set = sorted(midi_set, key=lambda m: salience_info.get(m, (0,))[0], reverse=True)[:1]
+            K = 1
 
         if is_chord_final:            
             # Use existing chord detection for labeling and inversion analysis
             res = detect_chord_multiframe(chroma, C_full, onset, num_frames=1, debug=True)
             if res is not None:
+                # Add the actual MIDI notes from BIC analysis
+                res["midi_notes"] = [int(m) for m in midi_set] if midi_set else []
                 res.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
                 # copy onset offset metadata
                 ofmeta = results["onsets"][i]
@@ -2807,7 +3735,7 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
         if use_split:
             if independent_hands:
                 # Use independent hands analysis - bass and treble have separate onset detection
-                return analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=split_midi)
+                return analyze_audio_independent_hands(wav_path_or_array, debug=True, split_midi=split_midi)
             
             # Shared onset detection with categorization
             print("\n" + "="*70)
@@ -2821,7 +3749,7 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
             print("\n" + "-"*70)
             print("🎼 ANALYZING FULL AUDIO WITH HARMONIC SUBTRACTION")
             print("-"*70)
-            results = analyze_audio_optimized(wav_path_or_array, debug=False)
+            results = analyze_audio_optimized(wav_path_or_array, debug=True)
             
             print(f"\n✓ Full audio analysis complete:")
             print(f"   Total onsets detected: {results['analysis_summary']['total_onsets']}")
@@ -2921,7 +3849,7 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
         hop_length=HOP_SIZE,
         n_bins=CQT_BINS,
         bins_per_octave=12,
-        fmin=librosa.note_to_hz('C1')
+        fmin=librosa.note_to_hz('A0')
     ))
     print(f"✓ Chroma shape: {chroma.shape}, CQT shape: {C_full.shape}")
     # --- estimate offsets from chroma for each onset (fast pre-pass)
@@ -3032,6 +3960,8 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
             # Use existing chord detection for labeling and inversion analysis
             res = detect_chord_multiframe(chroma, C_full, onset, num_frames=1, debug=True)
             if res is not None:
+                # Add the actual MIDI notes from BIC analysis
+                res["midi_notes"] = [int(m) for m in midi_set] if midi_set else []
                 res.update({"time_seconds": round(time_seconds, 3), "frame_index": int(onset)})
                 # copy onset offset metadata
                 ofmeta = results["onsets"][i]
@@ -3139,7 +4069,7 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
 #* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Use absolute path to audio file
-    wav_path = os.path.join(os.path.dirname(__file__), 'audio', 'test_chromatic.wav')
+    wav_path = os.path.join(os.path.dirname(__file__), 'audio', test_benchmark)
     print(f"🎹 Piano Note Detection - Command Line")
     print(f"Reading audio from: {wav_path}")
     try:

@@ -43,6 +43,9 @@ interface AnalysisResult {
     sample_rate: number;
     bass_notes?: number;  // Optional: number of bass notes when using split analysis
     treble_notes?: number;  // Optional: number of treble notes when using split analysis
+    detected_bpm?: number;  // Detected tempo from audio analysis
+    tempo_confidence?: number;  // Confidence of tempo detection (0-1)
+    beat_interval?: number;  // Beat interval in seconds
   };
 }
 
@@ -467,9 +470,54 @@ export default function AnalyzeScreen() {
         )}
 
         {/* Sheet Music Display */}
+        {/* Analysis Summary - Compact */}
+        {analysisResults && (
+          <View style={styles.resultsSummary}>
+            <View style={styles.statsRowCompact}>
+              <View style={styles.statBoxCompact}>
+                <Ionicons name="musical-notes" size={18} color="#4CAF50" />
+                <Text style={styles.statValueCompact}>{analysisResults.notes.length}</Text>
+                <Text style={styles.statLabelCompact}>Notes</Text>
+              </View>
+              <View style={styles.statBoxCompact}>
+                <Ionicons name="pulse" size={18} color="#2196F3" />
+                <Text style={styles.statValueCompact}>{analysisResults.details?.analysis_summary.total_onsets}</Text>
+                <Text style={styles.statLabelCompact}>Onsets</Text>
+              </View>
+              {analysisResults.details?.analysis_summary.bass_notes !== undefined && (
+                <>
+                  <View style={styles.statBoxCompact}>
+                    <Text style={styles.statValueCompact}>{analysisResults.details.analysis_summary.bass_notes}</Text>
+                    <Text style={styles.statLabelCompact}>Bass</Text>
+                  </View>
+                  <View style={styles.statBoxCompact}>
+                    <Text style={styles.statValueCompact}>{analysisResults.details.analysis_summary.treble_notes}</Text>
+                    <Text style={styles.statLabelCompact}>Treble</Text>
+                  </View>
+                </>
+              )}
+            </View>
+          </View>
+        )}
+
+        {/* Sheet Music - Main Focus */}
         {analysisResults && analysisResults.details && analysisResults.notes.length > 0 && (
           <View style={styles.sheetMusicSection}>
             <ThemedText style={styles.sectionTitle}>Sheet Music</ThemedText>
+            
+            {/* Detected Tempo Display */}
+            {analysisResults.details?.analysis_summary?.detected_bpm && (
+              <View style={styles.detectedTempoSection}>
+                <Text style={styles.detectedTempoLabel}>
+                  Detected Tempo: {Math.round(analysisResults.details.analysis_summary.detected_bpm)} BPM
+                  {analysisResults.details.analysis_summary.tempo_confidence !== undefined && (
+                    <Text style={styles.tempoConfidence}>
+                      {' '}({Math.round(analysisResults.details.analysis_summary.tempo_confidence * 100)}% confidence)
+                    </Text>
+                  )}
+                </Text>
+              </View>
+            )}
             
             {/* Tempo Control */}
             <View style={styles.tempoControlSection}>
@@ -513,66 +561,6 @@ export default function AnalyzeScreen() {
               results={analysisResults.details}
               tempoMultiplier={tempoMultiplier}
             />
-          </View>
-        )}
-
-        {/* Analysis Results */}
-        {analysisResults && (
-          <View style={styles.resultsSection}>
-            <ThemedText style={styles.sectionTitle}>Analysis Results</ThemedText>
-            
-            <View style={styles.statsRow}>
-              <View style={styles.statBox}>
-                <Ionicons name="musical-notes" size={24} color="#4CAF50" />
-                <Text style={styles.statValue}>{analysisResults.notes.length}</Text>
-                <Text style={styles.statLabel}>Notes</Text>
-              </View>
-              
-              <View style={styles.statBox}>
-                <Ionicons name="pulse" size={24} color="#2196F3" />
-                <Text style={styles.statValue}>{analysisResults.onsets.length}</Text>
-                <Text style={styles.statLabel}>Onsets</Text>
-              </View>
-            </View>
-
-            {/* Bass/Treble Split Info */}
-            {analysisResults.details?.analysis_summary.bass_notes !== undefined && (
-              <View style={styles.splitInfoRow}>
-                <View style={styles.splitInfoBox}>
-                  <Ionicons name="musical-note" size={20} color="#9C27B0" />
-                  <Text style={styles.splitInfoText}>
-                    Bass: {analysisResults.details.analysis_summary.bass_notes}
-                  </Text>
-                </View>
-                <View style={styles.splitInfoBox}>
-                  <Ionicons name="musical-note" size={20} color="#FF5722" />
-                  <Text style={styles.splitInfoText}>
-                    Treble: {analysisResults.details.analysis_summary.treble_notes}
-                  </Text>
-                </View>
-              </View>
-            )}
-
-            {/* Note List */}
-            {analysisResults.details && analysisResults.details.notes.length > 0 && (
-              <ScrollView style={styles.noteList} nestedScrollEnabled={true}>
-                {analysisResults.details.notes.map((note: NoteResult, index: number) => (
-                  <View key={index} style={styles.noteItem}>
-                    <View style={styles.noteIcon}>
-                      <Ionicons name="musical-note" size={16} color="#4CAF50" />
-                    </View>
-                    <View style={styles.noteContent}>
-                      <Text style={styles.noteText}>
-                        {note.note_name} ({note.frequency_hz.toFixed(1)}Hz)
-                      </Text>
-                      <Text style={styles.noteMeta}>
-                        {note.time_seconds.toFixed(2)}s • {note.method} • {(note.confidence * 100).toFixed(0)}%
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </ScrollView>
-            )}
           </View>
         )}
 
@@ -775,6 +763,34 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
 
+  // Compact Analysis Summary
+  resultsSummary: {
+    marginBottom: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(128, 128, 128, 0.05)',
+    borderRadius: 8,
+  },
+  statsRowCompact: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+  },
+  statBoxCompact: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  statValueCompact: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#555',
+  },
+  statLabelCompact: {
+    fontSize: 10,
+    color: '#888',
+    marginTop: 2,
+  },
+
   // Results Section
   resultsSection: {
     marginBottom: 30,
@@ -877,6 +893,24 @@ const styles = StyleSheet.create({
   },
   
   // Tempo Control
+  detectedTempoSection: {
+    marginBottom: 12,
+    padding: 10,
+    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+    borderRadius: 8,
+    borderLeftWidth: 3,
+    borderLeftColor: '#2196F3',
+  },
+  detectedTempoLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1976D2',
+  },
+  tempoConfidence: {
+    fontSize: 13,
+    fontWeight: '400',
+    color: '#666',
+  },
   tempoControlSection: {
     marginBottom: 16,
     padding: 12,

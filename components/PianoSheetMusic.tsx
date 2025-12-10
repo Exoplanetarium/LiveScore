@@ -19,6 +19,12 @@ interface NoteResult {
   note_value?: 'whole' | 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
   note_divisions?: number;
   dotted?: boolean;
+  // Triplet fields
+  triplet?: boolean;
+  triplet_position?: 'start' | 'middle' | 'end';
+  triplet_type?: 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
+  actual_notes?: number;  // 3 for triplet
+  normal_notes?: number;  // 2 for triplet
 }
 
 interface ChordResult {
@@ -38,6 +44,12 @@ interface ChordResult {
   note_value?: 'whole' | 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
   note_divisions?: number;
   dotted?: boolean;
+  // Triplet fields
+  triplet?: boolean;
+  triplet_position?: 'start' | 'middle' | 'end';
+  triplet_type?: 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
+  actual_notes?: number;
+  normal_notes?: number;
 }
 
 interface AnalysisResult {
@@ -50,6 +62,9 @@ interface AnalysisResult {
     total_chords: number;
     duration_seconds: number;
     sample_rate: number;
+    detected_bpm?: number;
+    tempo_confidence?: number;
+    beat_interval?: number;
   };
   stream_info?: {
     analysis_type?: string;
@@ -76,9 +91,9 @@ function midiToStepOctave(midi: number): { step: string; octave: number } {
 
 // Function to generate MusicXML from notes
 // tempoMultiplier: 0.5 = double note values (slower), 1 = normal, 2 = half note values (faster)
-function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMultiplier: number = 1): string[] {
+// bpm: Beats per minute for playback tempo marking
+function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMultiplier: number = 1, bpm: number = 120): string[] {
   const measures: string[] = [];
-  let measureNumber = 1;
   const BEATS_PER_MEASURE = 4;
 
   // Note type order for tempo adjustments
@@ -98,8 +113,8 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
     return noteTypeOrder[newIndex];
   };
 
-  // Helper to get beat value for a note type
-  const getNoteBeats = (noteType?: string, dotted?: boolean): number => {
+  // Helper to get beat value for a note type (considers triplets)
+  const getNoteBeats = (noteType?: string, dotted?: boolean, triplet?: boolean): number => {
     const adjustedType = adjustNoteType(noteType);
     let beats = 1;
     switch (adjustedType) {
@@ -112,11 +127,16 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       default: beats = 1; break;
     }
     if (dotted) beats *= 1.5;
+    // Triplet: 3 notes in time of 2, so each note is 2/3 of normal
+    // Round to avoid floating-point fragmentation (1.333... -> 1.375 or 1.25)
+    if (triplet) beats = Math.round(beats * (2/3) * 8) / 8;
     return beats;
   };
 
-  // Helper to get MusicXML duration (divisions=8)
-  const getNoteDuration = (noteType?: string, dotted?: boolean): number => {
+  // Helper to get MusicXML duration (divisions=8, or 24 for triplet-friendly)
+  // For triplets: duration is 2/3 of normal
+  // IMPORTANT: Use floor for triplets to avoid measure overflow (3 notes must fit in time of 2)
+  const getNoteDuration = (noteType?: string, dotted?: boolean, triplet?: boolean): number => {
     const adjustedType = adjustNoteType(noteType);
     let duration = 8;
     switch (adjustedType) {
@@ -129,15 +149,40 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       default: duration = 8; break;
     }
     if (dotted) duration = Math.floor(duration * 1.5);
+    // Triplet: 3 notes in time of 2
+    // Use floor to ensure 3 triplet notes don't exceed 2 normal notes
+    // E.g., half note triplet: floor(16 * 2/3) = 10, and 10*3 = 30 < 32 (ok)
+    if (triplet) duration = Math.floor(duration * 2 / 3);
     return duration;
   };
   
   const getAdjustedNoteType = (noteType?: string): string => adjustNoteType(noteType);
 
+  // Generate triplet notation XML elements
+  const getTripletNotations = (tripletPosition?: 'start' | 'middle' | 'end', actualNotes: number = 3, normalNotes: number = 2): string => {
+    if (!tripletPosition) return '';
+    
+    if (tripletPosition === 'start') {
+      return `<notations><tuplet type="start" bracket="yes" number="1"/></notations>`;
+    } else if (tripletPosition === 'end') {
+      return `<notations><tuplet type="stop" number="1"/></notations>`;
+    }
+    // Middle notes don't need tuplet notation
+    return '';
+  };
+
+  // Generate time-modification XML for triplets
+  const getTimeModification = (triplet?: boolean, actualNotes: number = 3, normalNotes: number = 2): string => {
+    if (!triplet) return '';
+    return `<time-modification><actual-notes>${actualNotes}</actual-notes><normal-notes>${normalNotes}</normal-notes></time-modification>`;
+  };
+
   // Generate rest XML for a given number of beats
+  // Rounds beats to nearest 32nd note (0.125) to avoid floating-point fragmentation
   const generateRestXml = (beats: number, staff: number): string[] => {
     const rests: string[] = [];
-    let remaining = beats;
+    // Round to nearest 32nd note to avoid floating-point issues
+    let remaining = Math.round(beats * 8) / 8; // Round to 1/8 beat precision
     const restValues = [
       { beats: 4, type: 'whole', duration: 32 },
       { beats: 2, type: 'half', duration: 16 },
@@ -146,12 +191,12 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       { beats: 0.25, type: '16th', duration: 2 },
       { beats: 0.125, type: '32nd', duration: 1 },
     ];
-    while (remaining > 0.001) {
+    while (remaining >= 0.125 - 0.001) {
       let found = false;
       for (const rv of restValues) {
         if (remaining >= rv.beats - 0.001) {
           rests.push(`<note><rest/><duration>${rv.duration}</duration><type>${rv.type}</type><staff>${staff}</staff><voice>${staff}</voice></note>`);
-          remaining -= rv.beats;
+          remaining = Math.round((remaining - rv.beats) * 8) / 8; // Round after each subtraction
           found = true;
           break;
         }
@@ -167,7 +212,7 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
     return octave < 4 ? 2 : 1;
   };
 
-  // Convert note to XML with voice
+  // Convert note to XML with voice (supports triplets)
   const noteToXmlWithVoice = (n: NoteResult, isChordNote: boolean = false): string => {
     const { step, octave } = midiToStepOctave(n.midi_note);
     const staff = getStaff(n.midi_note);
@@ -180,10 +225,16 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
     const noteType = n.note_value || 'quarter';
     const adjustedNoteType = getAdjustedNoteType(noteType);
     const dotted = n.dotted || false;
-    const duration = getNoteDuration(noteType, dotted);
+    const triplet = n.triplet || false;
+    const duration = getNoteDuration(noteType, dotted, triplet);
     const dotXml = dotted ? '<dot/>' : '';
     const chordTag = isChordNote ? '<chord/>' : '';
-    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}<staff>${staff}</staff></note>`;
+    
+    // Triplet-specific XML
+    const timeModXml = getTimeModification(triplet, n.actual_notes || 3, n.normal_notes || 2);
+    const tripletNotationsXml = getTripletNotations(n.triplet_position, n.actual_notes || 3, n.normal_notes || 2);
+    
+    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${timeModXml}${dotXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
   };
 
   // Helper to construct chord note MIDI list from ChordResult
@@ -219,11 +270,21 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
     return [];
   };
 
-  // Convert chord MIDI notes to XML, grouped by staff
-  const chordMidiToXml = (midiList: number[], noteType: string, dotted: boolean, staff: number): string[] => {
+  // Convert chord MIDI notes to XML, grouped by staff (supports triplets)
+  const chordMidiToXml = (
+    midiList: number[], 
+    noteType: string, 
+    dotted: boolean, 
+    staff: number,
+    triplet?: boolean,
+    tripletPosition?: 'start' | 'middle' | 'end',
+    actualNotes: number = 3,
+    normalNotes: number = 2
+  ): string[] => {
     const adjustedNoteType = getAdjustedNoteType(noteType);
-    const duration = getNoteDuration(noteType, dotted);
+    const duration = getNoteDuration(noteType, dotted, triplet);
     const dotXml = dotted ? '<dot/>' : '';
+    const timeModXml = getTimeModification(triplet, actualNotes, normalNotes);
     
     // Filter to only notes on this staff
     const staffNotes = midiList.filter(m => getStaff(m) === staff);
@@ -240,7 +301,9 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
       const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : '';
       const pitchInner = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
       const chordTag = first ? '' : '<chord/>';
-      const noteXml = `<note>${chordTag}${pitchInner}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}<staff>${staff}</staff></note>`;
+      // Only first note of chord gets triplet notations
+      const tripletNotationsXml = first ? getTripletNotations(tripletPosition, actualNotes, normalNotes) : '';
+      const noteXml = `<note>${chordTag}${pitchInner}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${timeModXml}${dotXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
       xmlParts.push(noteXml);
       first = false;
     }
@@ -253,17 +316,54 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
     staff: number;
     beats: number;
     xml: string[];
+    // Triplet metadata for cross-measure handling
+    triplet?: boolean;
+    tripletPosition?: 'start' | 'middle' | 'end';
+    tripletType?: string;
+    actualNotes?: number;
+    normalNotes?: number;
   };
 
   const timeline: TimelineEvent[] = [];
 
-  // Process all notes
+  // Build a set of notes that are already covered by chords
+  // (to avoid duplicate notes appearing alongside their chords)
+  // Use a tolerance that allows bass/treble alignment (independent onset detection may differ by ~20ms)
+  const TIME_TOLERANCE = 0.025; // 25ms - allows bass/treble to sync despite independent detection
+  const notesInChords = new Set<string>();
+  for (const c of chords) {
+    const time = c.time_seconds ?? 0;
+    const midiList = chordToMidiList(c);
+    for (const midi of midiList) {
+      // Key is rounded time + midi note
+      notesInChords.add(`${Math.round(time / TIME_TOLERANCE)}:${midi}`);
+    }
+  }
+
+  // Process all notes (filter out notes that are already in chords at same time)
   for (const n of notes) {
     const time = n.time_seconds ?? 0;
+    const noteKey = `${Math.round(time / TIME_TOLERANCE)}:${n.midi_note}`;
+    
+    // Skip notes that are part of a chord at the same time
+    if (notesInChords.has(noteKey)) {
+      continue;
+    }
+    
     const staff = getStaff(n.midi_note);
-    const beats = getNoteBeats(n.note_value, n.dotted);
+    const beats = getNoteBeats(n.note_value, n.dotted, n.triplet);
     const xml = [noteToXmlWithVoice(n, false)];
-    timeline.push({ time, staff, beats, xml });
+    timeline.push({ 
+      time, 
+      staff, 
+      beats, 
+      xml,
+      triplet: n.triplet,
+      tripletPosition: n.triplet_position,
+      tripletType: n.triplet_type || n.note_value,
+      actualNotes: n.actual_notes,
+      normalNotes: n.normal_notes
+    });
   }
 
   // Process all chords - split across staves if needed
@@ -292,27 +392,47 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
 
     const noteType = c.note_value || 'quarter';
     const dotted = c.dotted || false;
-    const beats = getNoteBeats(noteType, dotted);
+    const triplet = c.triplet || false;
+    const beats = getNoteBeats(noteType, dotted, triplet);
 
-    // Split chord by staff
-    const trebleXml = chordMidiToXml(midiList, noteType, dotted, 1);
-    const bassXml = chordMidiToXml(midiList, noteType, dotted, 2);
+    // Split chord by staff (with triplet info)
+    const trebleXml = chordMidiToXml(midiList, noteType, dotted, 1, triplet, c.triplet_position, c.actual_notes, c.normal_notes);
+    const bassXml = chordMidiToXml(midiList, noteType, dotted, 2, triplet, c.triplet_position, c.actual_notes, c.normal_notes);
 
     if (trebleXml.length > 0) {
-      timeline.push({ time, staff: 1, beats, xml: trebleXml });
+      timeline.push({ 
+        time, 
+        staff: 1, 
+        beats, 
+        xml: trebleXml,
+        triplet,
+        tripletPosition: c.triplet_position,
+        tripletType: c.triplet_type || noteType,
+        actualNotes: c.actual_notes,
+        normalNotes: c.normal_notes
+      });
     }
     if (bassXml.length > 0) {
-      timeline.push({ time, staff: 2, beats, xml: bassXml });
+      timeline.push({ 
+        time, 
+        staff: 2, 
+        beats, 
+        xml: bassXml,
+        triplet,
+        tripletPosition: c.triplet_position,
+        tripletType: c.triplet_type || noteType,
+        actualNotes: c.actual_notes,
+        normalNotes: c.normal_notes
+      });
     }
   }
 
   // Sort timeline by time
   timeline.sort((a, b) => a.time - b.time);
 
-  // Group events by time (events within 0.05s are considered simultaneous)
+  // Group events by time (events within TIME_TOLERANCE are considered simultaneous)
   type TimeGroup = { time: number; treble: TimelineEvent[]; bass: TimelineEvent[] };
   const timeGroups: TimeGroup[] = [];
-  const TIME_TOLERANCE = 0.05;
 
   for (const ev of timeline) {
     let group = timeGroups.find(g => Math.abs(g.time - ev.time) < TIME_TOLERANCE);
@@ -330,121 +450,371 @@ function generateMeasureXmls(notes: NoteResult[], chords: ChordResult[], tempoMu
   // Sort groups by time
   timeGroups.sort((a, b) => a.time - b.time);
 
-  // Now build measures - process each time group
-  // Track beat position for each staff independently
-  let trebleBeatPos = 0;
-  let bassBeatPos = 0;
-  let currentMeasureContents: string[] = [];
-
-  const finalizeMeasure = (padTreble: boolean, padBass: boolean) => {
-    // Pad treble staff if needed
-    if (padTreble && trebleBeatPos < BEATS_PER_MEASURE - 0.001) {
-      const restBeats = BEATS_PER_MEASURE - trebleBeatPos;
-      currentMeasureContents.push(...generateRestXml(restBeats, 1));
-    }
-    // If we added treble content and need bass, add backup
-    if (padBass && bassBeatPos < BEATS_PER_MEASURE - 0.001) {
-      // Backup to start of measure for bass staff
-      const backupDuration = Math.round((trebleBeatPos > 0 ? BEATS_PER_MEASURE : bassBeatPos) * 8);
-      if (backupDuration > 0) {
-        currentMeasureContents.push(`<backup><duration>${backupDuration}</duration></backup>`);
-      }
-      const restBeats = BEATS_PER_MEASURE - bassBeatPos;
-      currentMeasureContents.push(...generateRestXml(restBeats, 2));
-    }
-    
-    const attributes = measureNumber === 1 
-      ? '<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>' 
-      : '';
-    const measureXml = `<measure number="${measureNumber}">${attributes}${currentMeasureContents.join('')}</measure>`;
-    measures.push(measureXml);
-    currentMeasureContents = [];
-    trebleBeatPos = 0;
-    bassBeatPos = 0;
-    measureNumber++;
-  };
-
-  // Process time groups - write treble first, then backup and write bass
+  // MERGE simultaneous events on the same staff into chords
+  // Use the same tolerance as TIME_TOLERANCE to ensure grouped notes become chords
+  const CHORD_MERGE_TOLERANCE = TIME_TOLERANCE; // Match grouping tolerance
+  
   for (const group of timeGroups) {
-    // Check if we need to start a new measure
-    const maxBeats = Math.max(
-      ...group.treble.map(e => e.beats),
-      ...group.bass.map(e => e.beats),
-      0
-    );
-    
-    if (trebleBeatPos + maxBeats > BEATS_PER_MEASURE + 0.001 || 
-        bassBeatPos + maxBeats > BEATS_PER_MEASURE + 0.001) {
-      finalizeMeasure(true, true);
-    }
-
-    // Write treble events
-    let trebleBeatsAdded = 0;
-    for (const ev of group.treble) {
-      // If multiple treble events at same time, only first advances position
-      if (trebleBeatsAdded === 0) {
-        currentMeasureContents.push(...ev.xml);
-        trebleBeatsAdded = ev.beats;
-      } else {
-        // Mark as chord with first note
-        for (const xml of ev.xml) {
-          // These are already marked as chords within themselves
-          currentMeasureContents.push(xml);
-        }
-      }
-    }
-    trebleBeatPos += trebleBeatsAdded;
-
-    // Write bass events using backup if we wrote treble
-    if (group.bass.length > 0) {
-      if (trebleBeatsAdded > 0) {
-        // Backup by the treble duration we just wrote
-        const backupDuration = Math.round(trebleBeatsAdded * 8);
-        currentMeasureContents.push(`<backup><duration>${backupDuration}</duration></backup>`);
-      }
-      
-      let bassBeatsAdded = 0;
-      for (const ev of group.bass) {
-        if (bassBeatsAdded === 0) {
-          currentMeasureContents.push(...ev.xml);
-          bassBeatsAdded = ev.beats;
-        } else {
-          for (const xml of ev.xml) {
-            currentMeasureContents.push(xml);
+    // For treble: sub-group by actual time, only merge within each sub-group
+    if (group.treble.length > 1) {
+      // Group treble events by their actual time (stricter tolerance)
+      const subGroups: TimelineEvent[][] = [];
+      for (const ev of group.treble) {
+        let found = false;
+        for (const sg of subGroups) {
+          if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE) {
+            sg.push(ev);
+            found = true;
+            break;
           }
         }
+        if (!found) {
+          subGroups.push([ev]);
+        }
       }
-      bassBeatPos += bassBeatsAdded;
       
-      // Forward to sync with treble if treble advanced more
-      if (trebleBeatsAdded > bassBeatsAdded) {
-        const forwardDuration = Math.round((trebleBeatsAdded - bassBeatsAdded) * 8);
-        currentMeasureContents.push(`<forward><duration>${forwardDuration}</duration></forward>`);
-        bassBeatPos += (trebleBeatsAdded - bassBeatsAdded);
-      } else if (bassBeatsAdded > trebleBeatsAdded) {
-        // Need to adjust treble position
-        trebleBeatPos += (bassBeatsAdded - trebleBeatsAdded);
+      // Merge each sub-group into a chord (if > 1 event)
+      const newTreble: TimelineEvent[] = [];
+      for (const sg of subGroups) {
+        if (sg.length === 1) {
+          newTreble.push(sg[0]);
+        } else {
+          // Merge into chord
+          const mergedXml: string[] = [];
+          let maxBeats = 0;
+          let first = true;
+          for (const ev of sg) {
+            for (const xml of ev.xml) {
+              if (first) {
+                mergedXml.push(xml);
+                first = false;
+              } else {
+                const chordXml = xml.replace('<note>', '<note><chord/>');
+                mergedXml.push(chordXml);
+              }
+            }
+            maxBeats = Math.max(maxBeats, ev.beats);
+          }
+          newTreble.push({
+            time: sg[0].time,
+            staff: 1,
+            beats: maxBeats,
+            xml: mergedXml,
+            triplet: sg[0].triplet,
+            tripletPosition: sg[0].tripletPosition,
+            tripletType: sg[0].tripletType,
+            actualNotes: sg[0].actualNotes,
+            normalNotes: sg[0].normalNotes
+          });
+        }
       }
+      group.treble = newTreble;
     }
-
-    // Check if measure is full
-    if (Math.abs(trebleBeatPos - BEATS_PER_MEASURE) < 0.001 && 
-        Math.abs(bassBeatPos - BEATS_PER_MEASURE) < 0.001) {
-      finalizeMeasure(false, false);
+    
+    // For bass: same sub-grouping approach
+    if (group.bass.length > 1) {
+      const subGroups: TimelineEvent[][] = [];
+      for (const ev of group.bass) {
+        let found = false;
+        for (const sg of subGroups) {
+          if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE) {
+            sg.push(ev);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          subGroups.push([ev]);
+        }
+      }
+      
+      const newBass: TimelineEvent[] = [];
+      for (const sg of subGroups) {
+        if (sg.length === 1) {
+          newBass.push(sg[0]);
+        } else {
+          const mergedXml: string[] = [];
+          let maxBeats = 0;
+          let first = true;
+          for (const ev of sg) {
+            for (const xml of ev.xml) {
+              if (first) {
+                mergedXml.push(xml);
+                first = false;
+              } else {
+                const chordXml = xml.replace('<note>', '<note><chord/>');
+                mergedXml.push(chordXml);
+              }
+            }
+            maxBeats = Math.max(maxBeats, ev.beats);
+          }
+          newBass.push({
+            time: sg[0].time,
+            staff: 2,
+            beats: maxBeats,
+            xml: mergedXml,
+            triplet: sg[0].triplet,
+            tripletPosition: sg[0].tripletPosition,
+            tripletType: sg[0].tripletType,
+            actualNotes: sg[0].actualNotes,
+            normalNotes: sg[0].normalNotes
+          });
+        }
+      }
+      group.bass = newBass;
     }
   }
 
-  // Flush remaining measure
-  if (currentMeasureContents.length > 0 || trebleBeatPos > 0 || bassBeatPos > 0) {
-    finalizeMeasure(true, true);
+  // ============================================================================
+  // TRIPLET VALIDATION: Ensure complete triplets (3 notes) stay together
+  // If a triplet would span measures, strip the triplet markers
+  // ============================================================================
+  
+  // Helper to strip triplet markers from XML strings
+  const stripTripletFromXml = (xmlArr: string[]): string[] => {
+    return xmlArr.map(xml => 
+      xml
+        .replace(/<time-modification>.*?<\/time-modification>/g, '')
+        .replace(/<notations><tuplet[^>]*\/><\/notations>/g, '')
+        .replace(/<notations><tuplet[^>]*><\/notations>/g, '')
+    );
+  };
+
+  // Track triplet groups per staff to validate completeness
+  // A valid triplet must have: start -> middle -> end (exactly 3 notes)
+  for (const staff of [1, 2] as const) {
+    const events = staff === 1 
+      ? timeGroups.flatMap(g => g.treble)
+      : timeGroups.flatMap(g => g.bass);
+    
+    let tripletStart: TimelineEvent | null = null;
+    let tripletMiddle: TimelineEvent | null = null;
+    
+    for (const ev of events) {
+      if (ev.tripletPosition === 'start') {
+        // Start of a new triplet
+        tripletStart = ev;
+        tripletMiddle = null;
+      } else if (ev.tripletPosition === 'middle' && tripletStart) {
+        tripletMiddle = ev;
+      } else if (ev.tripletPosition === 'end') {
+        if (tripletStart && tripletMiddle) {
+          // Valid triplet - all 3 notes present, keep the markers
+          // The triplet is complete and will be rendered correctly
+        } else {
+          // Incomplete triplet - strip markers
+          if (tripletStart) {
+            tripletStart.xml = stripTripletFromXml(tripletStart.xml);
+            tripletStart.triplet = false;
+            tripletStart.tripletPosition = undefined;
+          }
+          if (tripletMiddle) {
+            tripletMiddle.xml = stripTripletFromXml(tripletMiddle.xml);
+            tripletMiddle.triplet = false;
+            tripletMiddle.tripletPosition = undefined;
+          }
+          ev.xml = stripTripletFromXml(ev.xml);
+          ev.triplet = false;
+          ev.tripletPosition = undefined;
+        }
+        tripletStart = null;
+        tripletMiddle = null;
+      }
+    }
+    
+    // Handle orphaned triplet starts/middles at the end
+    if (tripletStart) {
+      tripletStart.xml = stripTripletFromXml(tripletStart.xml);
+      tripletStart.triplet = false;
+      tripletStart.tripletPosition = undefined;
+    }
+    if (tripletMiddle) {
+      tripletMiddle.xml = stripTripletFromXml(tripletMiddle.xml);
+      tripletMiddle.triplet = false;
+      tripletMiddle.tripletPosition = undefined;
+    }
+  }
+
+  // ============================================================================
+  // NEW APPROACH: Build measures by writing ALL treble first, then backup, then ALL bass
+  // This ensures treble and bass play simultaneously (not sequentially)
+  // ============================================================================
+  
+  // Group time groups by measure
+  type MeasureData = {
+    trebleEvents: { beatPos: number; xml: string[]; beats: number }[];
+    bassEvents: { beatPos: number; xml: string[]; beats: number }[];
+  };
+  
+  const measuresData: MeasureData[] = [];
+  let currentMeasure: MeasureData = { trebleEvents: [], bassEvents: [] };
+  let currentBeatPos = 0;
+  
+  // Track active triplets per staff to detect splits
+  let activeTrebleTriplet: { events: typeof currentMeasure.trebleEvents; measureIdx: number } | null = null;
+  let activeBassTriplet: { events: typeof currentMeasure.bassEvents; measureIdx: number } | null = null;
+  
+  for (const group of timeGroups) {
+    // Get the max duration for this time group
+    const trebleBeats = group.treble.length > 0 ? Math.max(...group.treble.map(e => e.beats)) : 0;
+    const bassBeats = group.bass.length > 0 ? Math.max(...group.bass.map(e => e.beats)) : 0;
+    const maxBeats = Math.max(trebleBeats, bassBeats, 0.125); // At least a 32nd note
+    
+    // Check if this event would overflow the measure
+    if (currentBeatPos + maxBeats > BEATS_PER_MEASURE + 0.001) {
+      // Finalize current measure
+      if (currentMeasure.trebleEvents.length > 0 || currentMeasure.bassEvents.length > 0) {
+        measuresData.push(currentMeasure);
+      }
+      currentMeasure = { trebleEvents: [], bassEvents: [] };
+      currentBeatPos = 0;
+      
+      // If we have active triplets that weren't completed, they span measures - strip markers
+      if (activeTrebleTriplet) {
+        for (const ev of activeTrebleTriplet.events) {
+          // Modify the xml array in place
+          const stripped = stripTripletFromXml(ev.xml);
+          ev.xml.length = 0;
+          ev.xml.push(...stripped);
+        }
+        activeTrebleTriplet = null;
+      }
+      if (activeBassTriplet) {
+        for (const ev of activeBassTriplet.events) {
+          // Modify the xml array in place
+          const stripped = stripTripletFromXml(ev.xml);
+          ev.xml.length = 0;
+          ev.xml.push(...stripped);
+        }
+        activeBassTriplet = null;
+      }
+    }
+    
+    // Add treble events and track triplets
+    for (const ev of group.treble) {
+      const evData = {
+        beatPos: currentBeatPos,
+        xml: ev.xml,
+        beats: ev.beats
+      };
+      currentMeasure.trebleEvents.push(evData);
+      
+      // Track triplet state
+      if (ev.tripletPosition === 'start') {
+        activeTrebleTriplet = { events: [evData], measureIdx: measuresData.length };
+      } else if (ev.tripletPosition === 'middle' && activeTrebleTriplet) {
+        activeTrebleTriplet.events.push(evData);
+      } else if (ev.tripletPosition === 'end') {
+        activeTrebleTriplet = null; // Triplet completed successfully
+      }
+    }
+    
+    // Add bass events and track triplets
+    for (const ev of group.bass) {
+      const evData = {
+        beatPos: currentBeatPos,
+        xml: ev.xml,
+        beats: ev.beats
+      };
+      currentMeasure.bassEvents.push(evData);
+      
+      // Track triplet state
+      if (ev.tripletPosition === 'start') {
+        activeBassTriplet = { events: [evData], measureIdx: measuresData.length };
+      } else if (ev.tripletPosition === 'middle' && activeBassTriplet) {
+        activeBassTriplet.events.push(evData);
+      } else if (ev.tripletPosition === 'end') {
+        activeBassTriplet = null; // Triplet completed successfully
+      }
+    }
+    
+    currentBeatPos += maxBeats;
+    
+    // Check if measure is exactly full
+    if (Math.abs(currentBeatPos - BEATS_PER_MEASURE) < 0.001) {
+      measuresData.push(currentMeasure);
+      currentMeasure = { trebleEvents: [], bassEvents: [] };
+      currentBeatPos = 0;
+    }
+  }
+  
+  // Push final measure if it has content
+  if (currentMeasure.trebleEvents.length > 0 || currentMeasure.bassEvents.length > 0) {
+    measuresData.push(currentMeasure);
+  }
+  
+  // Now generate XML for each measure
+  for (let mIdx = 0; mIdx < measuresData.length; mIdx++) {
+    const mData = measuresData[mIdx];
+    const measureNum = mIdx + 1;
+    let measureContent = '';
+    
+    // Attributes only for first measure
+    if (measureNum === 1) {
+      measureContent += '<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>';
+      // Add tempo marking for playback
+      measureContent += `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${Math.round(bpm)}</per-minute></metronome></direction-type><sound tempo="${Math.round(bpm)}"/></direction>`;
+    }
+    
+    // Sort events by beat position
+    mData.trebleEvents.sort((a, b) => a.beatPos - b.beatPos);
+    mData.bassEvents.sort((a, b) => a.beatPos - b.beatPos);
+    
+    // Write ALL treble events first (with rests to fill gaps)
+    let trebleBeatPos = 0;
+    for (const ev of mData.trebleEvents) {
+      // Add rest if there's a gap
+      if (ev.beatPos > trebleBeatPos + 0.001) {
+        const restBeats = ev.beatPos - trebleBeatPos;
+        measureContent += generateRestXml(restBeats, 1).join('');
+        trebleBeatPos = ev.beatPos;
+      }
+      // Add the notes (chord tags already added during merging phase)
+      measureContent += ev.xml.join('');
+      trebleBeatPos += ev.beats;
+    }
+    
+    // Pad treble to fill measure
+    if (trebleBeatPos < BEATS_PER_MEASURE - 0.001) {
+      measureContent += generateRestXml(BEATS_PER_MEASURE - trebleBeatPos, 1).join('');
+      trebleBeatPos = BEATS_PER_MEASURE;
+    }
+    
+    // Backup to start of measure for bass staff
+    const backupDuration = Math.round(trebleBeatPos * 8);
+    if (backupDuration > 0) {
+      measureContent += `<backup><duration>${backupDuration}</duration></backup>`;
+    }
+    
+    // Write ALL bass events (with rests to fill gaps)
+    let bassBeatPos = 0;
+    for (const ev of mData.bassEvents) {
+      // Add rest if there's a gap
+      if (ev.beatPos > bassBeatPos + 0.001) {
+        const restBeats = ev.beatPos - bassBeatPos;
+        measureContent += generateRestXml(restBeats, 2).join('');
+        bassBeatPos = ev.beatPos;
+      }
+      // Add the notes (chord tags already added during merging phase)
+      measureContent += ev.xml.join('');
+      bassBeatPos += ev.beats;
+    }
+    
+    // Pad bass to fill measure
+    if (bassBeatPos < BEATS_PER_MEASURE - 0.001) {
+      measureContent += generateRestXml(BEATS_PER_MEASURE - bassBeatPos, 2).join('');
+    }
+    
+    measures.push(`<measure number="${measureNum}">${measureContent}</measure>`);
   }
 
   return measures;
 }
 
-function generateMusicXML(notes: NoteResult[], chords: ChordResult[], tempoMultiplier: number = 1): string {
-  const measures = generateMeasureXmls(notes, chords, tempoMultiplier);
+function generateMusicXML(notes: NoteResult[], chords: ChordResult[], tempoMultiplier: number = 1, bpm: number = 120): string {
+  const measures = generateMeasureXmls(notes, chords, tempoMultiplier, bpm);
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n<score-partwise version="3.1">\n  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>\n  <part id="P1">${measures.join('')}</part></score-partwise>`;
+  console.log(xml);
   return xml;
 }
 
@@ -525,10 +895,13 @@ export default function PianoSheetMusic({ results, tempoMultiplier = 1 }: PianoS
     });
   }, [results]);
 
+  // Get detected BPM from results, default to 120
+  const detectedBPM = results?.analysis_summary?.detected_bpm ?? 120;
+
   const score = useMemo(() => {
     if ((!accumulatedNotes || accumulatedNotes.length === 0) && (!accumulatedChords || accumulatedChords.length === 0)) return FALLBACK_XML;
-    return generateMusicXML(accumulatedNotes, accumulatedChords, tempoMultiplier);
-  }, [accumulatedNotes, accumulatedChords, tempoMultiplier]);
+    return generateMusicXML(accumulatedNotes, accumulatedChords, tempoMultiplier, detectedBPM);
+  }, [accumulatedNotes, accumulatedChords, tempoMultiplier, detectedBPM]);
 
   const webRef = useRef<WebView>(null);
   const source = useMemo(() => ({ html: OSMD_HTML }), []);
@@ -541,32 +914,52 @@ export default function PianoSheetMusic({ results, tempoMultiplier = 1 }: PianoS
   }, []);
 
   const [isLandscape, setIsLandscape] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  // Initialize BPM from detected tempo, default to 120
+  const [playbackBPM, setPlaybackBPM] = useState(detectedBPM);
+  const lastDetectedBPMRef = useRef<number | undefined>(undefined);
+  const webViewReadyRef = useRef<boolean>(false);
+  
+  // Update BPM when new results come in with detected tempo (only if WebView is ready)
+  useEffect(() => {
+    if (detectedBPM && detectedBPM !== lastDetectedBPMRef.current) {
+      lastDetectedBPMRef.current = detectedBPM;
+      setPlaybackBPM(detectedBPM);
+      // Only send to WebView if it's ready
+      if (webViewReadyRef.current) {
+        post({ type: 'setBPM', bpm: detectedBPM });
+      }
+    }
+  }, [detectedBPM, post]);
 
   const onWebMessage = useCallback(async (e: WebViewMessageEvent) => {
     try {
       const msg = JSON.parse(e.nativeEvent.data);
       if (msg.type === 'webview-click') {
-        // toggle orientation between landscape and portrait
-        try {
-          if (!isLandscape) {
+        // Only enter landscape mode (exit is handled by exit button)
+        if (!isLandscape) {
+          try {
             await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
             setIsLandscape(true);
-          } else {
-            await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT);
-            setIsLandscape(false);
+          } catch (err) {
+            console.warn('Orientation lock failed', err);
           }
-        } catch (err) {
-          console.warn('Orientation lock failed', err);
         }
         return;
       }
 
       if (msg.type === 'ready') {
+        // Mark WebView as ready
+        webViewReadyRef.current = true;
         // init options are already set in the HTML; you can send more here if needed
         // post initial render and mark it as pending so we can sync cache on 'rendered'
         pendingXmlRef.current = score;
         post({ type: 'renderXml', xml: score });
         post({ type: 'toggleCursor', show: true }); // show follow-along cursor (static until you drive it)
+        // Always set the BPM from detected tempo (playbackBPM has the current value)
+        post({ type: 'setBPM', bpm: playbackBPM });
+        console.log('[PianoSheetMusic] WebView ready, setting BPM to:', playbackBPM);
       }
       if (msg.type === 'rendered') {
         // initial main render completed; mark how many measures are present
@@ -584,8 +977,46 @@ export default function PianoSheetMusic({ results, tempoMultiplier = 1 }: PianoS
       if (msg.type === 'error') {
         console.warn('OSMD error:', msg.error);
       }
+      
+      // Playback events
+      if (msg.type === 'playbackStarted') {
+        setIsPlaying(true);
+        setIsPaused(false);
+        console.log('Playback started:', msg.noteCount, 'notes,', msg.duration.toFixed(1), 'seconds');
+      }
+      if (msg.type === 'playbackPaused') {
+        setIsPaused(true);
+      }
+      if (msg.type === 'playbackResumed') {
+        setIsPaused(false);
+      }
+      if (msg.type === 'playbackStopped' || msg.type === 'playbackEnded') {
+        setIsPlaying(false);
+        setIsPaused(false);
+      }
+      if (msg.type === 'playbackError') {
+        console.warn('Playback error:', msg.error);
+        setIsPlaying(false);
+        setIsPaused(false);
+      }
+      if (msg.type === 'bpmSet') {
+        setPlaybackBPM(msg.bpm);
+      }
+      // Handle exit fullscreen from WebView controls
+      if (msg.type === 'exitFullscreen') {
+        try {
+          await ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
+          setIsLandscape(false);
+        } catch (err) {
+          console.warn('Exit fullscreen failed', err);
+        }
+      }
+      // Handle BPM changes from WebView controls
+      if (msg.type === 'bpmChanged') {
+        setPlaybackBPM(msg.bpm);
+      }
     } catch (err) { console.warn('webview message parse error', err); }
-  }, [post, score, isLandscape]);
+  }, [isLandscape, score, post, playbackBPM]);
 
   // If the score changes (for example after live recording produces results), send the new XML
   // to the WebView so OSMD re-renders the updated score.
@@ -654,45 +1085,105 @@ export default function PianoSheetMusic({ results, tempoMultiplier = 1 }: PianoS
     return () => { ScreenOrientation.unlockAsync().catch(()=>{}); };
   }, []);
 
+  // Notify WebView when fullscreen mode changes
+  useEffect(() => {
+    post({ type: 'setFullscreenMode', enabled: isLandscape });
+  }, [isLandscape, post]);
+
   return (
     <ScrollView style={styles.container} horizontal scrollEnabled={!isLandscape}>
-      <View>
-      <ScrollView scrollEnabled={!isLandscape}>
+      <View style={styles.mainContainer}>
         <ThemedText type="subtitle" style={styles.title}>Piano Sheet Music</ThemedText>
 
-        {/* Quick demo controls (optional) */}
-
-        <View style={styles.toolbar}>
-          <Button title="Zoom −" onPress={() => post({ type: 'setZoom', zoom: 0.9 })} />
-          <Button title="Reset Cursor" onPress={() => post({ type: 'cursorReset' })} />
-          <Button title="Next ▶︎" onPress={() => post({ type: 'cursorNext' })} />
-          <Button title="Zoom +" onPress={() => post({ type: 'setZoom', zoom: 1.1 })} />
-          <Button title="Reset Score" onPress={() => {
-            setAccumulatedNotes([]);
-            setAccumulatedChords([]);
-            // Clear cached XML and counters, then post fallback to the webview
-            lastXmlRef.current = null;
-            measuresSentRef.current = 0;
-            post({ type: 'renderXml', xml: FALLBACK_XML });
-          }} />
+        {/* Playback Controls - Clear and Prominent */}
+        <View style={styles.playbackSection}>
+          <ThemedText style={styles.sectionLabel}>Playback</ThemedText>
+          <View style={styles.playbackControls}>
+            <View style={styles.playButtonContainer}>
+              <Button 
+                title={isPlaying ? (isPaused ? "▶ Resume" : "⏸ Pause") : "▶ Play"} 
+                color={isPlaying && !isPaused ? "#e67e22" : "#27ae60"}
+                onPress={() => {
+                  if (!isPlaying) {
+                    post({ type: 'play', bpm: playbackBPM });
+                  } else if (isPaused) {
+                    post({ type: 'play', bpm: playbackBPM });
+                  } else {
+                    post({ type: 'pause' });
+                  }
+                }} 
+              />
+            </View>
+            <View style={styles.stopButtonContainer}>
+              <Button 
+                title="⏹ Stop" 
+                color="#c0392b"
+                onPress={() => post({ type: 'stop' })} 
+              />
+            </View>
+            <View style={styles.bpmContainer}>
+              <Button 
+                title="−" 
+                color="#7f8c8d"
+                onPress={() => {
+                  const newBPM = Math.max(40, playbackBPM - 10);
+                  setPlaybackBPM(newBPM);
+                  post({ type: 'setBPM', bpm: newBPM });
+                }} 
+              />
+              <View style={styles.bpmDisplay}>
+                <ThemedText style={styles.bpmValue}>{playbackBPM}</ThemedText>
+                <ThemedText style={styles.bpmLabel}>BPM</ThemedText>
+              </View>
+              <Button 
+                title="+" 
+                color="#7f8c8d"
+                onPress={() => {
+                  const newBPM = Math.min(240, playbackBPM + 10);
+                  setPlaybackBPM(newBPM);
+                  post({ type: 'setBPM', bpm: newBPM });
+                }} 
+              />
+            </View>
+          </View>
         </View>
 
-        <WebView
-          ref={webRef}
-          originWhitelist={['*']}
-          source={source}
-          onMessage={onWebMessage}
-          javaScriptEnabled
-          allowFileAccess
-          allowUniversalAccessFromFileURLs
-          mixedContentMode="always"
-          style={isLandscape ? styles.landscapeWebview : styles.webview}
-          // allow the web content to scroll independently (Android)
-          nestedScrollEnabled={true}
-          // ensure the webview itself can scroll
-          scrollEnabled={true}
-        />
-        </ScrollView>
+        {/* Score Display */}
+        <View style={styles.scoreSection}>
+          <ScrollView scrollEnabled={!isLandscape}>
+            <WebView
+              ref={webRef}
+              originWhitelist={['*']}
+              source={source}
+              onMessage={onWebMessage}
+              javaScriptEnabled
+              allowFileAccess
+              allowUniversalAccessFromFileURLs
+              mixedContentMode="always"
+              style={isLandscape ? styles.landscapeWebview : styles.webview}
+              nestedScrollEnabled={true}
+              scrollEnabled={true}
+            />
+          </ScrollView>
+        </View>
+
+        {/* View Controls - Secondary */}
+        <View style={styles.viewControlsSection}>
+          <ThemedText style={styles.sectionLabel}>View Controls</ThemedText>
+          <View style={styles.viewControls}>
+            <Button title="Zoom −" color="#3498db" onPress={() => post({ type: 'setZoom', zoom: 0.9 })} />
+            <Button title="Zoom +" color="#3498db" onPress={() => post({ type: 'setZoom', zoom: 1.1 })} />
+            <Button title="Reset Cursor" color="#9b59b6" onPress={() => post({ type: 'cursorReset' })} />
+            <Button title="Clear Score" color="#e74c3c" onPress={() => {
+              setAccumulatedNotes([]);
+              setAccumulatedChords([]);
+              lastXmlRef.current = null;
+              measuresSentRef.current = 0;
+              post({ type: 'renderXml', xml: FALLBACK_XML });
+              post({ type: 'stop' });
+            }} />
+          </View>
+        </View>
       </View>
     </ScrollView>
   );
@@ -700,12 +1191,14 @@ export default function PianoSheetMusic({ results, tempoMultiplier = 1 }: PianoS
 
 const styles = StyleSheet.create({
   container: {
-    padding: 20,
+    padding: 10,
     backgroundColor: 'rgba(255,255,255,0.95)',
     borderRadius: 12,
     marginBottom: 20,
-    height: 500,
     width: '100%',
+  },
+  mainContainer: {
+    flex: 1,
   },
   title: {
     textAlign: 'center',
@@ -714,24 +1207,116 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
   },
-  toolbar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 8,
+  // Playback section
+  playbackSection: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#666',
     marginBottom: 8,
+    textAlign: 'center',
+  },
+  playbackControls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 12,
+  },
+  playButtonContainer: {
+    minWidth: 100,
+  },
+  stopButtonContainer: {
+    minWidth: 70,
+  },
+  bpmContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    padding: 4,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  bpmDisplay: {
+    alignItems: 'center',
+    paddingHorizontal: 12,
+  },
+  bpmValue: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  bpmLabel: {
+    fontSize: 10,
+    color: '#888',
+  },
+  // Score section
+  scoreSection: {
+    flex: 1,
+    backgroundColor: '#fff',
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
   },
   webview: {
-    height: 500,       // adjust as needed
+    height: 350,
     borderRadius: 8,
     width: 600,
     overflow: 'hidden',
     backgroundColor: '#fff',
   },
   landscapeWebview: {
-    height: 500,       // adjust as needed
+    height: 400,
     borderRadius: 0,
     width: 800,
     overflow: 'hidden',
     backgroundColor: '#fff',
+  },
+  // View controls section
+  viewControlsSection: {
+    backgroundColor: '#f0f0f0',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  viewControls: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  // Legacy - keep for compatibility
+  toolbar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 8,
+  },
+  playbackToolbar: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+    paddingVertical: 4,
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    borderRadius: 8,
+  },
+  bpmText: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+    minWidth: 40,
+    textAlign: 'center',
   }
 });
