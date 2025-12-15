@@ -1,4 +1,6 @@
 import modal
+MODEL_URL = "https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1=0.9186.pth?download=1"
+MODEL_PATH = "/root/piano_transcription_inference_data/note_F1=0.9677_pedal_F1=0.9186.pth"
 
 app = modal.App("livescore-gpu")
 image = (
@@ -85,8 +87,10 @@ image = (
     .apt_install("ffmpeg")
 )
 image = image.run_commands(
-    "apt-get update && apt-get install -y wget"
-)
+        "apt-get update && apt-get install -y wget",
+        f"mkdir -p $(dirname {MODEL_PATH})",
+        f"wget -O {MODEL_PATH} {MODEL_URL}"
+    )
 image = image.add_local_file("main.py", "/root/main.py")
 image = image.add_local_file("detect_note.py", "/root/detect_note.py")
 
