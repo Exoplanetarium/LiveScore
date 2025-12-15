@@ -16,6 +16,7 @@ interface NoteResult {
   offset_seconds?: number;
   duration_seconds?: number;
   offset_frame?: number;
+  hand?: 'bass' | 'treble';  // Neural output: bass/treble hand assignment
   note_value?: 'whole' | 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
   note_divisions?: number;
   dotted?: boolean;
@@ -29,18 +30,22 @@ interface NoteResult {
 
 interface ChordResult {
   time_seconds: number;
-  frame_index: number;
+  frame_index?: number;
   duration_seconds?: number;
-  chord_quality: string;
+  chord_quality?: string;  // Optional - may not be present in neural output
   label: string; 
   confidence: number;
   note_score?: number;
   octave?: number;
-  inversion: string;
+  inversion?: string;  // Optional - neural defaults to 'root'
   offset_frame?: number;
   offset_seconds?: number;
   midi_notes?: number[]; 
+  note_names?: string[];  // Neural output: array of note names like ['C4', 'E4', 'G4']
+  root?: string;  // Neural output: root note name like 'C4'
   root_midi?: number;
+  method?: string;  // Detection method ('neural', 'bic', etc.)
+  hand?: 'bass' | 'treble';  // Neural output: bass/treble hand assignment
   note_value?: 'whole' | 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
   note_divisions?: number;
   dotted?: boolean;
@@ -65,6 +70,12 @@ interface AnalysisResult {
     detected_bpm?: number;
     tempo_confidence?: number;
     beat_interval?: number;
+    bass_notes?: number;  // Number of bass notes (left hand)
+    treble_notes?: number;  // Number of treble notes (right hand)
+    bass_chords?: number;  // Number of bass chords (left hand)
+    treble_chords?: number;  // Number of treble chords (right hand)
+    method?: string;  // Analysis method used ('neural', 'bic', etc.)
+    device?: string;  // Device used for neural inference ('cuda', 'cpu')
   };
   stream_info?: {
     analysis_type?: string;

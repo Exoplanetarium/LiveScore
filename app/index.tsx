@@ -8,31 +8,53 @@ import PianoSheetMusic from '../components/PianoSheetMusic';
 import { ThemedText } from '../components/ThemedText';
 import { ThemedView } from '../components/ThemedView';
 
-const BACKEND_URL = 'https://livescore-production-4dfa.up.railway.app';
+const BACKEND_URL = 'https://exoplanetarium--livescore-gpu-fastapi-app.modal.run';
 
 // Types for analysis results
 interface NoteResult {
   time_seconds: number;
-  frame_index: number;
+  frame_index?: number;
   midi_note: number;
   note_name: string;
   frequency_hz: number;
   method: string;
   confidence: number;
+  offset_seconds?: number;
+  duration_seconds?: number;
+  hand?: 'bass' | 'treble';
+  // Rhythm detection fields
+  note_value?: 'whole' | 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
+  note_divisions?: number;
+  dotted?: boolean;
+  triplet?: boolean;
+  triplet_position?: 'start' | 'middle' | 'end';
 }
 
 interface ChordResult {
   time_seconds: number;
-  frame_index: number;
-  type: string;
-  chord_quality: string;
+  frame_index?: number;
+  midi_notes?: number[];
+  note_names?: string[];
+  root?: string;
+  octave?: number;
+  chord_quality?: string;
   label: string;
-  inversion: string;
+  inversion?: string;
   confidence: number;
+  method?: string;
+  offset_seconds?: number;
+  duration_seconds?: number;
+  hand?: 'bass' | 'treble';
+  // Rhythm detection fields
+  note_value?: 'whole' | 'half' | 'quarter' | 'eighth' | '16th' | '32nd';
+  note_divisions?: number;
+  dotted?: boolean;
+  triplet?: boolean;
+  triplet_position?: 'start' | 'middle' | 'end';
 }
 
 interface AnalysisResult {
-  onsets: { time_seconds: number; frame_index: number }[];
+  onsets: { time_seconds: number; frame_index?: number; offset_seconds?: number; duration_seconds?: number }[];
   notes: NoteResult[];
   chords: ChordResult[];
   analysis_summary: {
@@ -41,11 +63,15 @@ interface AnalysisResult {
     total_chords: number;
     duration_seconds: number;
     sample_rate: number;
-    bass_notes?: number;  // Optional: number of bass notes when using split analysis
-    treble_notes?: number;  // Optional: number of treble notes when using split analysis
+    bass_notes?: number;  // Number of bass notes (left hand)
+    treble_notes?: number;  // Number of treble notes (right hand)
+    bass_chords?: number;  // Number of bass chords (left hand)
+    treble_chords?: number;  // Number of treble chords (right hand)
     detected_bpm?: number;  // Detected tempo from audio analysis
     tempo_confidence?: number;  // Confidence of tempo detection (0-1)
     beat_interval?: number;  // Beat interval in seconds
+    method?: string;  // Analysis method used ('neural', 'bic', etc.)
+    device?: string;  // Device used for neural inference ('cuda', 'cpu')
   };
 }
 

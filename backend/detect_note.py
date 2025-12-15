@@ -81,18 +81,23 @@ def frames_to_seconds(frames, sr, hop_length):
     """Convert frame indices to time in seconds."""
     return (np.asarray(frames) * hop_length) / float(sr)
 
-def duration_to_note_value(duration_seconds, bpm=120):
+
+def duration_to_note_value(duration_seconds, bpm=120, debug=False):
     """
     Convert duration in seconds to a note value based on tempo.
     Supports: whole, half, quarter, eighth, 16th, 32nd notes and their dotted versions.
     
+    Uses a "closest match" approach instead of fixed boundaries for better
+    accuracy at faster tempos where small timing errors matter more.
+    
     Args:
         duration_seconds: Duration of the note in seconds
         bpm: Beats per minute (default 120)
+        debug: Print debug info for this quantization
     
     Returns:
         dict with 'type' (MusicXML note type), 'divisions' (duration in divisions),
-        'beats' (duration in beats), and 'dotted' (boolean)
+        'beats' (duration in beats), 'dotted' (boolean), and 'raw_beats' (original)
     """
     # Calculate beat duration in seconds
     beat_duration = 60.0 / bpm  # Duration of one quarter note
@@ -100,47 +105,249 @@ def duration_to_note_value(duration_seconds, bpm=120):
     # Calculate how many beats this note is
     beats = duration_seconds / beat_duration
     
-    # Note values in beats (from longest to shortest)
-    # Format: (min_threshold, max_threshold, type, beats, dotted)
-    # Thresholds use midpoints between adjacent note values for best matching
+    # All possible note values in beats (type, beats, dotted)
+    # Listed from longest to shortest
     note_values = [
-        # Dotted whole (6 beats) - threshold: > 5 beats
-        (5.0, float('inf'), 'whole', 6.0, True),
-        # Whole (4 beats) - threshold: 3.5 to 5 beats
-        (3.5, 5.0, 'whole', 4.0, False),
-        # Dotted half (3 beats) - threshold: 2.75 to 3.5 beats
-        (2.75, 3.5, 'half', 3.0, True),
-        # Half (2 beats) - threshold: 1.75 to 2.75 beats
-        (1.75, 2.75, 'half', 2.0, False),
-        # Dotted quarter (1.5 beats) - threshold: 1.25 to 1.75 beats
-        (1.25, 1.75, 'quarter', 1.5, True),
-        # Quarter (1 beat) - threshold: 0.875 to 1.25 beats
-        (0.875, 1.25, 'quarter', 1.0, False),
-        # Dotted eighth (0.75 beats) - threshold: 0.625 to 0.875 beats
-        (0.625, 0.875, 'eighth', 0.75, True),
-        # Eighth (0.5 beats) - threshold: 0.4375 to 0.625 beats
-        (0.4375, 0.625, 'eighth', 0.5, False),
-        # Dotted 16th (0.375 beats) - threshold: 0.3125 to 0.4375 beats
-        (0.3125, 0.4375, '16th', 0.375, True),
-        # 16th (0.25 beats) - threshold: 0.1875 to 0.3125 beats
-        (0.1875, 0.3125, '16th', 0.25, False),
-        # Dotted 32nd (0.1875 beats) - threshold: 0.15625 to 0.1875 beats
-        (0.15625, 0.1875, '32nd', 0.1875, True),
-        # 32nd (0.125 beats) - threshold: < 0.15625 beats
-        (0, 0.15625, '32nd', 0.125, False),
+        ('whole', 6.0, True),    # Dotted whole
+        ('whole', 4.0, False),   # Whole
+        ('half', 3.0, True),     # Dotted half
+        ('half', 2.0, False),    # Half
+        ('quarter', 1.5, True),  # Dotted quarter
+        ('quarter', 1.0, False), # Quarter
+        ('eighth', 0.75, True),  # Dotted eighth
+        ('eighth', 0.5, False),  # Eighth
+        ('16th', 0.375, True),   # Dotted 16th
+        ('16th', 0.25, False),   # 16th
+        ('32nd', 0.1875, True),  # Dotted 32nd
+        ('32nd', 0.125, False),  # 32nd
     ]
     
-    for min_thresh, max_thresh, note_type, note_beats, dotted in note_values:
-        if min_thresh <= beats < max_thresh:
-            return {
-                'type': note_type,
-                'divisions': note_beats,
-                'beats': note_beats,
-                'dotted': dotted
-            }
+    # Find the closest note value
+    best_match = None
+    best_distance = float('inf')
+    
+    for note_type, note_beats, dotted in note_values:
+        # Use logarithmic distance for better musical perception
+        # This makes the ratio more important than absolute difference
+        # e.g., 0.4 beats is closer to 0.5 (ratio 0.8) than to 0.25 (ratio 1.6)
+        if beats > 0 and note_beats > 0:
+            ratio = beats / note_beats
+            # Log distance: how many "doublings" away
+            log_distance = abs(math.log2(ratio))
+        else:
+            # Fallback to linear distance
+            log_distance = abs(beats - note_beats)
+        
+        if log_distance < best_distance:
+            best_distance = log_distance
+            best_match = (note_type, note_beats, dotted)
+    
+    if best_match:
+        note_type, note_beats, dotted = best_match
+        
+        if debug:
+            margin_ms = abs(beats - note_beats) * beat_duration * 1000
+            print(f"[Duration] {duration_seconds*1000:.1f}ms = {beats:.4f} beats @ {bpm} BPM "
+                  f"-> {('dotted ' if dotted else '') + note_type} ({note_beats} beats, "
+                  f"margin: {margin_ms:.1f}ms)")
+        
+        return {
+            'type': note_type,
+            'divisions': note_beats,
+            'beats': note_beats,
+            'dotted': dotted,
+            'raw_beats': beats,  # Include original for debugging
+            'quantization_error': abs(beats - note_beats) / note_beats if note_beats > 0 else 0
+        }
     
     # Fallback to 32nd note for very short durations
-    return {'type': '32nd', 'divisions': 0.125, 'beats': 0.125, 'dotted': False}
+    return {
+        'type': '32nd', 
+        'divisions': 0.125, 
+        'beats': 0.125, 
+        'dotted': False,
+        'raw_beats': beats,
+        'quantization_error': abs(beats - 0.125) / 0.125
+    }
+
+
+def quantize_rhythm_from_ioi(notes, bpm, debug=False):
+    """
+    Quantize note rhythms using intelligent selection between IOI and duration.
+    
+    The key insight: IOI = note_duration + rest_duration
+    - When IOI ≈ duration: legato/connected notes → use IOI (more reliable onset detection)
+    - When IOI >> duration: there's a rest after the note → use duration
+    - When IOI << duration: overlapping notes or detection error → use duration
+    
+    Args:
+        notes: List of note dicts with 'time_seconds' and 'duration_seconds'
+        bpm: Detected tempo in BPM
+        debug: Print debug info
+    
+    Returns:
+        Modified notes list with improved note_value assignments
+    """
+    if len(notes) < 2:
+        # Not enough notes to use IOI, fall back to duration-based
+        for note in notes:
+            dur = note.get('duration_seconds', 0.5)
+            note_val = duration_to_note_value(dur, bpm=bpm, debug=debug)
+            note['note_value'] = note_val['type']
+            note['note_divisions'] = note_val['divisions']
+            note['dotted'] = note_val['dotted']
+            note['quantization_method'] = 'duration'
+        return notes
+    
+    beat_duration = 60.0 / bpm
+    
+    # Standard note durations in beats for snapping
+    standard_beats = [4.0, 3.0, 2.0, 1.5, 1.0, 0.75, 0.5, 0.375, 0.25, 0.1875, 0.125]
+    
+    # Sort notes by time
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+    
+    # Calculate IOIs
+    times = [n.get('time_seconds', 0) for n in sorted_notes]
+    iois = np.diff(times)  # IOIs in seconds
+    
+    if debug:
+        print(f"\n[IOI Quantization] {len(notes)} notes, BPM={bpm}")
+        print(f"  Beat duration: {beat_duration*1000:.1f}ms")
+    
+    # Process each note
+    for i, note in enumerate(sorted_notes):
+        detected_dur = note.get('duration_seconds', 0.5)
+        detected_beats = detected_dur / beat_duration
+        
+        if i < len(iois):
+            ioi_sec = iois[i]
+            ioi_beats = ioi_sec / beat_duration
+            
+            # Calculate the ratio between IOI and detected duration
+            # This tells us if there's likely a rest after the note
+            ratio = ioi_sec / detected_dur if detected_dur > 0.01 else 10.0
+            
+            # Decision logic:
+            # 1. If IOI and duration are similar (ratio 0.7-1.4), they agree → use IOI
+            # 2. If IOI >> duration (ratio > 1.8), there's a rest → use duration  
+            # 3. If IOI << duration (ratio < 0.6), detection issue → use duration
+            # 4. For very short notes (<100ms), prefer duration (grace notes, ornaments)
+            
+            use_ioi = False
+            method = 'duration'
+            
+            if 0.7 <= ratio <= 1.4:
+                # IOI and duration agree reasonably well
+                # Use IOI as it's based on more reliable onset detection
+                use_ioi = True
+                method = 'ioi (legato)'
+            elif ratio > 1.8:
+                # IOI is much longer than duration → rest after note
+                # Snap duration to nearest standard value
+                method = 'duration (rest follows)'
+                note['has_rest_after'] = True
+                note['rest_duration'] = ioi_sec - detected_dur
+            elif ratio < 0.6:
+                # Duration longer than IOI → overlapping/sustained notes
+                # This can happen with held notes or detection artifacts
+                method = 'duration (overlap)'
+            elif detected_dur < 0.1:
+                # Very short note - likely grace note or ornament
+                method = 'duration (short)'
+            else:
+                # Ambiguous case - use whichever quantizes better
+                ioi_val = duration_to_note_value(ioi_sec, bpm=bpm)
+                dur_val = duration_to_note_value(detected_dur, bpm=bpm)
+                
+                if ioi_val.get('quantization_error', 1) < dur_val.get('quantization_error', 1):
+                    use_ioi = True
+                    method = 'ioi (better fit)'
+                else:
+                    method = 'duration (better fit)'
+            
+            if use_ioi:
+                note_val = duration_to_note_value(ioi_sec, bpm=bpm, debug=False)
+            else:
+                note_val = duration_to_note_value(detected_dur, bpm=bpm, debug=False)
+            
+            if debug:
+                print(f"  Note {i}: t={times[i]:.3f}s, IOI={ioi_sec*1000:.1f}ms, "
+                      f"dur={detected_dur*1000:.1f}ms, ratio={ratio:.2f} -> {note_val['type']} via {method}")
+        else:
+            # Last note: use detected duration
+            note_val = duration_to_note_value(detected_dur, bpm=bpm, debug=False)
+            method = 'duration (last note)'
+            
+            if debug:
+                print(f"  Note {i}: t={times[i]:.3f}s, dur={detected_dur*1000:.1f}ms -> {note_val['type']} via {method}")
+        
+        note['note_value'] = note_val['type']
+        note['note_divisions'] = note_val['divisions']
+        note['dotted'] = note_val['dotted']
+        note['quantization_method'] = method
+        note['raw_beats'] = note_val.get('raw_beats', 0)
+        note['quantization_error'] = note_val.get('quantization_error', 0)
+    
+    return sorted_notes
+
+
+def quantize_rhythm_sequence(notes, chords, bpm, debug=False):
+    """
+    Quantize rhythms for both notes and chords using IOI-based approach.
+    
+    Handles notes and chords in separate hands independently to avoid
+    cross-hand IOI confusion.
+    
+    Args:
+        notes: List of note dicts
+        chords: List of chord dicts  
+        bpm: Detected tempo
+        debug: Print debug info
+    
+    Returns:
+        Tuple of (quantized_notes, quantized_chords)
+    """
+    # Separate by hand if available
+    bass_notes = [n for n in notes if n.get('hand') == 'bass']
+    treble_notes = [n for n in notes if n.get('hand') == 'treble']
+    other_notes = [n for n in notes if n.get('hand') not in ('bass', 'treble')]
+    
+    bass_chords = [c for c in chords if c.get('hand') == 'bass']
+    treble_chords = [c for c in chords if c.get('hand') == 'treble']
+    other_chords = [c for c in chords if c.get('hand') not in ('bass', 'treble')]
+    
+    # Quantize each group separately
+    if debug:
+        print(f"\n[Rhythm Quantization] Bass: {len(bass_notes)} notes, {len(bass_chords)} chords")
+    if bass_notes:
+        bass_notes = quantize_rhythm_from_ioi(bass_notes, bpm, debug=debug)
+    if bass_chords:
+        bass_chords = quantize_rhythm_from_ioi(bass_chords, bpm, debug=debug)
+    
+    if debug:
+        print(f"\n[Rhythm Quantization] Treble: {len(treble_notes)} notes, {len(treble_chords)} chords")
+    if treble_notes:
+        treble_notes = quantize_rhythm_from_ioi(treble_notes, bpm, debug=debug)
+    if treble_chords:
+        treble_chords = quantize_rhythm_from_ioi(treble_chords, bpm, debug=debug)
+    
+    if debug and other_notes:
+        print(f"\n[Rhythm Quantization] Other: {len(other_notes)} notes, {len(other_chords)} chords")
+    if other_notes:
+        other_notes = quantize_rhythm_from_ioi(other_notes, bpm, debug=debug)
+    if other_chords:
+        other_chords = quantize_rhythm_from_ioi(other_chords, bpm, debug=debug)
+    
+    # Merge back
+    all_notes = bass_notes + treble_notes + other_notes
+    all_chords = bass_chords + treble_chords + other_chords
+    
+    # Sort by time
+    all_notes.sort(key=lambda n: n.get('time_seconds', 0))
+    all_chords.sort(key=lambda c: c.get('time_seconds', 0))
+    
+    return all_notes, all_chords
 
 
 def detect_tempo_from_onsets(onset_times, min_bpm=50, max_bpm=200):
@@ -260,6 +467,117 @@ def detect_tempo_from_onsets(onset_times, min_bpm=50, max_bpm=200):
         'bpm': bpm,
         'confidence': round(confidence, 2),
         'beat_interval': round(beat_interval, 4)
+    }
+
+
+def refine_tempo_by_quantization(notes, initial_bpm, min_bpm=50, max_bpm=200):
+    """
+    Refine tempo by testing candidates and picking the one with lowest quantization error.
+    
+    The initial tempo detection uses histogram analysis which can pick up subdivisions
+    or multiples of the true beat. This function tests related tempos (0.67x, 0.75x, 
+    1.0x, 1.33x, 1.5x, 2.0x) and picks the one that minimizes quantization error.
+    
+    Args:
+        notes: List of note dicts with 'time_seconds' and 'duration_seconds'
+        initial_bpm: Initially detected BPM
+        min_bpm: Minimum valid BPM
+        max_bpm: Maximum valid BPM
+    
+    Returns:
+        dict with refined 'bpm', 'confidence', 'beat_interval', 'refinement_factor'
+    """
+    if len(notes) < 3:
+        return {
+            'bpm': initial_bpm,
+            'confidence': 0.5,
+            'beat_interval': 60.0 / initial_bpm,
+            'refinement_factor': 1.0
+        }
+    
+    # Test these multipliers of the initial tempo
+    # These correspond to common tempo confusions:
+    # 0.67 = confusing dotted quarters with quarters
+    # 0.75 = confusing compound meter 
+    # 1.33 = inverse of 0.75
+    # 1.5 = confusing half notes with dotted half notes
+    # 2.0 = double time
+    multipliers = [0.5, 0.67, 0.75, 1.0, 1.33, 1.5, 2.0]
+    
+    # Calculate IOIs
+    times = [n.get('time_seconds', 0) for n in notes]
+    iois = np.diff(times)
+    
+    if len(iois) == 0:
+        return {
+            'bpm': initial_bpm,
+            'confidence': 0.5,
+            'beat_interval': 60.0 / initial_bpm,
+            'refinement_factor': 1.0
+        }
+    
+    best_bpm = initial_bpm
+    best_error = float('inf')
+    best_mult = 1.0
+    
+    for mult in multipliers:
+        test_bpm = initial_bpm * mult
+        
+        # Skip if outside valid range
+        if test_bpm < min_bpm or test_bpm > max_bpm:
+            continue
+        
+        # Calculate mean quantization error at this tempo
+        errors = []
+        for i, note in enumerate(notes):
+            dur = note.get('duration_seconds', 0.5)
+            
+            if i < len(iois):
+                ioi = iois[i]
+                ratio = ioi / dur if dur > 0.01 else 10.0
+                
+                # Use same logic as quantize_rhythm_from_ioi
+                if 0.7 <= ratio <= 1.4:
+                    val = duration_to_note_value(ioi, bpm=test_bpm)
+                else:
+                    val = duration_to_note_value(dur, bpm=test_bpm)
+            else:
+                val = duration_to_note_value(dur, bpm=test_bpm)
+            
+            errors.append(val.get('quantization_error', 0))
+        
+        mean_error = np.mean(errors)
+        
+        # Prefer the multiplier closest to 1.0 if errors are similar (within 1%)
+        # This avoids unnecessary tempo changes
+        if mean_error < best_error - 0.01 or \
+           (abs(mean_error - best_error) < 0.01 and abs(mult - 1.0) < abs(best_mult - 1.0)):
+            best_error = mean_error
+            best_bpm = test_bpm
+            best_mult = mult
+    
+    # Round to nice BPM
+    nice_bpms = [50, 54, 58, 60, 63, 66, 69, 72, 76, 80, 84, 88, 92, 96, 
+                 100, 104, 108, 112, 116, 120, 126, 132, 138, 144, 150, 
+                 156, 160, 168, 176, 184, 192, 200]
+    closest_nice = min(nice_bpms, key=lambda x: abs(x - best_bpm))
+    if abs(closest_nice - best_bpm) / best_bpm < 0.03:
+        best_bpm = closest_nice
+    else:
+        best_bpm = round(best_bpm)
+    
+    # Confidence is higher if error is low
+    confidence = max(0.3, min(1.0, 1.0 - best_error * 2))
+    
+    if best_mult != 1.0:
+        print(f"[Tempo Refinement] Adjusted {initial_bpm:.0f} → {best_bpm:.0f} BPM "
+              f"(×{best_mult:.2f}, error: {best_error*100:.1f}%)")
+    
+    return {
+        'bpm': int(best_bpm),
+        'confidence': round(confidence, 2),
+        'beat_interval': round(60.0 / best_bpm, 4),
+        'refinement_factor': best_mult
     }
 
 
@@ -1411,9 +1729,90 @@ def _salience_candidates_from_fft(mag, top=8, H=6):
     scores.sort(reverse=True, key=lambda x: x[0])
     return [(s[1], s[0], s[2], s[3], s[4], s[5], s[6]) for s in scores[:top]]  # (midi, score, fund, peak_bonus, harm, subharm, has_peak)
 
-def estimate_voices_bic(mag_window, max_K=3, H=8, debug=False):
+def _temporal_filter_candidates(mag_frames, min_consecutive=2, top_per_frame=12, H=6, debug=False):
+    """
+    Run salience detection on multiple frames and filter to candidates
+    that appear in at least `min_consecutive` consecutive frames.
+    
+    This acts as a simple HMM-like temporal filter to reject spurious 
+    single-frame detections (noise, transients, harmonics).
+    
+    Args:
+        mag_frames: List of 1D magnitude arrays (one per frame)
+        min_consecutive: Minimum consecutive frames a candidate must appear in
+        top_per_frame: How many top candidates to consider per frame
+        H: Number of harmonics for salience calculation
+        debug: Print debug info
+    
+    Returns:
+        List of (midi, avg_score) for candidates that pass temporal filter,
+        sorted by average score descending
+    """
+    if len(mag_frames) < min_consecutive:
+        # Not enough frames - fall back to single-frame detection on average
+        avg_mag = np.mean(mag_frames, axis=0) if len(mag_frames) > 0 else mag_frames[0]
+        results = _salience_candidates_from_fft(avg_mag, top=top_per_frame, H=H)
+        return [(midi, score) for midi, score, *_ in results]
+    
+    # Run salience detection on each frame
+    frame_candidates = []
+    for i, mag in enumerate(mag_frames):
+        # Normalize each frame independently
+        mag_norm = mag.astype(np.float32).copy()
+        if mag_norm.max() > 0:
+            mag_norm /= (mag_norm.max() + 1e-12)
+        
+        results = _salience_candidates_from_fft(mag_norm, top=top_per_frame, H=H)
+        # Store as dict: midi -> score
+        frame_cands = {midi: score for midi, score, *_ in results}
+        frame_candidates.append(frame_cands)
+    
+    # Find candidates that appear in min_consecutive consecutive frames
+    # A MIDI is "present" in a frame if it's in the top candidates
+    all_midis = set()
+    for fc in frame_candidates:
+        all_midis.update(fc.keys())
+    
+    persistent_candidates = []
+    
+    for midi in all_midis:
+        # Check for consecutive runs
+        max_consecutive = 0
+        current_consecutive = 0
+        total_score = 0.0
+        appearances = 0
+        
+        for fc in frame_candidates:
+            if midi in fc:
+                current_consecutive += 1
+                max_consecutive = max(max_consecutive, current_consecutive)
+                total_score += fc[midi]
+                appearances += 1
+            else:
+                current_consecutive = 0
+        
+        if max_consecutive >= min_consecutive:
+            avg_score = total_score / appearances if appearances > 0 else 0
+            persistent_candidates.append((midi, avg_score, max_consecutive, appearances))
+    
+    # Sort by average score (descending)
+    persistent_candidates.sort(key=lambda x: x[1], reverse=True)
+    
+    if debug and persistent_candidates:
+        print(f"  [Temporal Filter] {len(all_midis)} unique candidates across {len(mag_frames)} frames")
+        print(f"  [Temporal Filter] {len(persistent_candidates)} passed (>={min_consecutive} consecutive frames):")
+        for midi, avg_score, max_consec, appearances in persistent_candidates[:8]:
+            note_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
+            print(f"    {note_name:4s}: avg_score={avg_score:.4f}, max_consecutive={max_consec}, appearances={appearances}/{len(mag_frames)}")
+    
+    return [(midi, avg_score) for midi, avg_score, *_ in persistent_candidates]
+
+
+def estimate_voices_bic(mag_window, max_K=3, H=8, debug=False, mag_frames=None, use_temporal_filter=True):
     """
     mag_window: 1D FFT magnitude you'd like to explain (ideally averaged over ±1 frame around the onset).
+    mag_frames: Optional list of individual frame magnitudes for temporal filtering.
+                If provided and use_temporal_filter=True, candidates must appear in 2+ frames.
     Returns: dict with {'K', 'midis', 'gains', 'bic', 'err'}
     """
     # Normalize the target spectrum so BIC compares apples to apples
@@ -1422,21 +1821,41 @@ def estimate_voices_bic(mag_window, max_K=3, H=8, debug=False):
         x /= (x.max() + 1e-12)
     B = len(x)
 
-    # Propose ~8 MIDI candidates via FFT salience (fast, no thresholds)
-    cand_results = _salience_candidates_from_fft(x, top=12, H=H)  # Get more candidates for filtering
-    
-    # Build salience info dict for CQT validation: MIDI -> (score, has_peak)
-    salience_info = {midi: (score, has_peak) for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results}
-    
-    if debug:
-        print(f"\n  [Salience] Top candidates from FFT:")
-        for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results[:8]:
-            note_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
-            f0 = 440.0 * 2**((midi - 69)/12)
-            print(f"    {note_name:4s} (MIDI {midi:3d}, {f0:6.1f}Hz): score={score:.4f} "
-                  f"[fund={fund:.4f}, peak_bonus={peak_bonus:.4f}, harm={harm:.4f}, subharm_penalty={subharm:.4f}, has_peak={has_peak}]")
-    
-    cand_midis = [r[0] for r in cand_results]  # Extract just MIDI numbers
+    # Apply temporal filtering if we have multiple frames
+    if use_temporal_filter and mag_frames is not None and len(mag_frames) >= 2:
+        # Use temporal filter - only consider candidates in 2+ consecutive frames
+        temporal_results = _temporal_filter_candidates(
+            mag_frames, min_consecutive=2, top_per_frame=12, H=H, debug=debug
+        )
+        
+        if temporal_results:
+            # Use temporally-filtered candidates
+            cand_midis = [midi for midi, score in temporal_results[:12]]
+            # Build salience_info from temporal results
+            salience_info = {midi: (score, True) for midi, score in temporal_results}
+            
+            if debug:
+                print(f"  [BIC] Using {len(cand_midis)} temporally-filtered candidates")
+        else:
+            # No candidates passed temporal filter - fall back to single-frame
+            if debug:
+                print(f"  [BIC] No candidates passed temporal filter, using single-frame detection")
+            cand_results = _salience_candidates_from_fft(x, top=12, H=H)
+            salience_info = {midi: (score, has_peak) for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results}
+            cand_midis = [r[0] for r in cand_results]
+    else:
+        # No temporal filtering - use single-frame salience (original behavior)
+        cand_results = _salience_candidates_from_fft(x, top=12, H=H)  # Get more candidates for filtering
+        salience_info = {midi: (score, has_peak) for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results}
+        cand_midis = [r[0] for r in cand_results]
+        
+        if debug:
+            print(f"\n  [Salience] Top candidates from FFT:")
+            for midi, score, fund, peak_bonus, harm, subharm, has_peak in cand_results[:8]:
+                note_name = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'][midi % 12] + str(midi // 12 - 1)
+                f0 = 440.0 * 2**((midi - 69)/12)
+                print(f"    {note_name:4s} (MIDI {midi:3d}, {f0:6.1f}Hz): score={score:.4f} "
+                      f"[fund={fund:.4f}, peak_bonus={peak_bonus:.4f}, harm={harm:.4f}, subharm_penalty={subharm:.4f}, has_peak={has_peak}]")
     
     # Keep top 8 candidates (no octave filtering - let CQT validation handle it)
     cand_midis = cand_midis[:8]
@@ -2873,14 +3292,20 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
         results["onsets"].append(onset_info)
         
         # Extract onset-centered magnitude from pre-computed STFT
+        # Also collect individual frames for temporal filtering (HMM-like approach)
         if 1 <= onset_frame < magnitude.shape[1] - 1:
             mag_window = np.mean(magnitude[:, onset_frame-1:onset_frame+2], axis=1)
+            # Individual frames for temporal filtering
+            mag_frames_raw = [magnitude[:, onset_frame-1], magnitude[:, onset_frame], magnitude[:, onset_frame+1]]
         else:
             mag_window = magnitude[:, min(onset_frame, magnitude.shape[1]-1)]
+            mag_frames_raw = [mag_window]  # Single frame fallback
         
-        # Ringing cancellation + BIC voice estimation
+        # Ringing cancellation + BIC voice estimation with temporal filtering
         resid, _ = cancel_ringing(mag_window, freqs)
-        bic_est = estimate_voices_bic(resid, max_K=3, H=8, debug=debug)
+        # Apply ringing cancellation to each frame for temporal filtering
+        mag_frames_resid = [cancel_ringing(mf, freqs)[0] for mf in mag_frames_raw]
+        bic_est = estimate_voices_bic(resid, max_K=3, H=8, debug=debug, mag_frames=mag_frames_resid)
         
         K = bic_est['K']
         midi_set = bic_est['midis']
@@ -2997,25 +3422,26 @@ def analyze_audio_optimized(wav_path_or_array, debug=False):
     # Detect tempo from onset times
     onset_times = [o["time_seconds"] for o in results["onsets"]]
     tempo_info = detect_tempo_from_onsets(onset_times)
-    detected_bpm = tempo_info['bpm']
+    initial_bpm = tempo_info['bpm']
+    
+    # Refine tempo by testing candidates based on quantization error
+    # This helps when the histogram picks up subdivisions instead of the true beat
+    all_events = results["notes"] + results["chords"]
+    refined_tempo = refine_tempo_by_quantization(all_events, initial_bpm)
+    detected_bpm = refined_tempo['bpm']
     
     # Add tempo info to results
     results["analysis_summary"]["detected_bpm"] = detected_bpm
-    results["analysis_summary"]["tempo_confidence"] = tempo_info['confidence']
-    results["analysis_summary"]["beat_interval"] = tempo_info['beat_interval']
+    results["analysis_summary"]["initial_bpm"] = initial_bpm
+    results["analysis_summary"]["tempo_confidence"] = refined_tempo['confidence']
+    results["analysis_summary"]["beat_interval"] = refined_tempo['beat_interval']
+    results["analysis_summary"]["tempo_refinement_factor"] = refined_tempo.get('refinement_factor', 1.0)
     
-    # Add note values based on duration (using detected BPM)
-    for note in results["notes"]:
-        note_val = duration_to_note_value(note.get("duration_seconds", 0.5), bpm=detected_bpm)
-        note["note_value"] = note_val["type"]
-        note["note_divisions"] = note_val["divisions"]
-        note["dotted"] = note_val["dotted"]
-    
-    for chord in results["chords"]:
-        note_val = duration_to_note_value(chord.get("duration_seconds", 0.5), bpm=detected_bpm)
-        chord["note_value"] = note_val["type"]
-        chord["note_divisions"] = note_val["divisions"]
-        chord["dotted"] = note_val["dotted"]
+    # RE-QUANTIZE rhythms using IOI-based approach for better accuracy at fast tempos
+    print(f"\n[Rhythm] Re-quantizing with IOI-based approach at {detected_bpm} BPM...")
+    results["notes"], results["chords"] = quantize_rhythm_sequence(
+        results["notes"], results["chords"], detected_bpm, debug=debug
+    )
     
     # Detect triplets (must be after regular note values are assigned)
     # Sort by time for triplet detection
@@ -3197,14 +3623,20 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
             print(f"{'='*60}")
         
         # Get magnitude window around onset
+        # Also collect individual frames for temporal filtering (HMM-like approach)
         if 1 <= onset_frame < magnitude.shape[1] - 1:
             mag_window = np.mean(magnitude[:, onset_frame-1:onset_frame+2], axis=1)
+            # Individual frames for temporal filtering
+            mag_frames_raw = [magnitude[:, onset_frame-1], magnitude[:, onset_frame], magnitude[:, onset_frame+1]]
         else:
             mag_window = magnitude[:, min(onset_frame, magnitude.shape[1]-1)]
+            mag_frames_raw = [mag_window]  # Single frame fallback
         
-        # Ringing cancellation + BIC voice estimation
+        # Ringing cancellation + BIC voice estimation with temporal filtering
         resid, _ = cancel_ringing(mag_window, freqs)
-        bic_est = estimate_voices_bic(resid, max_K=6, H=8, debug=debug)  # Allow more voices for chords
+        # Apply ringing cancellation to each frame for temporal filtering
+        mag_frames_resid = [cancel_ringing(mf, freqs)[0] for mf in mag_frames_raw]
+        bic_est = estimate_voices_bic(resid, max_K=6, H=8, debug=debug, mag_frames=mag_frames_resid)  # Allow more voices for chords
         
         K = bic_est['K']
         midi_set = bic_est['midis']
@@ -3258,7 +3690,7 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
             dur = round(osec - time_seconds, 3)
         
         dur = max(dur, 0.05)  # Minimum duration
-        note_val = duration_to_note_value(dur)
+        note_val = duration_to_note_value(dur, bpm=detected_bpm)  # Use detected tempo
         
         if is_chord:
             # Try detect_chord_multiframe for chord quality/label detection
@@ -3398,13 +3830,22 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
         if (round(n["time_seconds"] / TIME_TOLERANCE), n["midi_note"]) not in notes_in_chords
     ]
     
-    # Add note values to chords (using detected BPM)
-    for chord in results["chords"]:
-        if "note_value" not in chord:
-            note_val = duration_to_note_value(chord.get("duration_seconds", 0.5), bpm=detected_bpm)
-            chord["note_value"] = note_val["type"]
-            chord["note_divisions"] = note_val["divisions"]
-            chord["dotted"] = note_val["dotted"]
+    # RE-QUANTIZE rhythms using IOI-based approach for better accuracy at fast tempos
+    # This is more reliable than duration-based quantization because onset detection
+    # is more accurate than offset detection
+    
+    # Refine tempo by testing alternatives and picking the one with lowest quantization error
+    all_items = results["notes"] + results["chords"]
+    refined_tempo = refine_tempo_by_quantization(all_items, detected_bpm)
+    if refined_tempo['bpm'] != detected_bpm:
+        detected_bpm = refined_tempo['bpm']
+        beat_interval = refined_tempo['beat_interval']
+        tempo_confidence = refined_tempo['confidence']
+    
+    print(f"\n[Rhythm] Re-quantizing with IOI-based approach at {detected_bpm} BPM...")
+    results["notes"], results["chords"] = quantize_rhythm_sequence(
+        results["notes"], results["chords"], detected_bpm, debug=debug
+    )
     
     # Detect triplets separately for bass and treble (to avoid cross-hand triplet detection)
     bass_notes_list = [n for n in results["notes"] if n.get("hand") == "bass"]
@@ -3506,7 +3947,286 @@ def analyze_audio_split_ranges(wav_path_or_array, debug=False, split_midi=60):
     
     return results
 
-def analyze_audio(wav_path_or_array, debug=False, use_split=True, independent_hands=True):
+
+#* ─── NEURAL NETWORK TRANSCRIPTION (piano_transcription_inference) ───────────
+def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu'):
+    """
+    High-accuracy polyphonic piano transcription using ByteDance's neural network.
+    
+    This uses the piano_transcription_inference model which is trained specifically
+    for piano transcription and typically achieves much higher accuracy than
+    traditional signal processing approaches.
+    
+    SELF-CONTAINED: Delete this entire function to remove neural network dependency.
+    
+    Requirements:
+        pip install piano_transcription_inference
+    
+    Args:
+        wav_path: Path to audio file (must be a file path, not array)
+        debug: Enable debug output  
+        split_midi: MIDI note to split bass/treble hands (default 60 = middle C)
+        device: 'cuda' for GPU or 'cpu' for CPU inference
+    
+    Returns:
+        Results dict compatible with existing format (notes, chords, analysis_summary)
+    """
+    try:
+        from piano_transcription_inference import (PianoTranscription,
+                                                   sample_rate)
+    except ImportError:
+        return {"error": "piano_transcription_inference not installed. Run: pip install piano_transcription_inference"}
+    
+    print(f"\n{'='*70}")
+    print("🧠 NEURAL NETWORK TRANSCRIPTION (ByteDance Piano Transcription)")
+    print(f"   Device: {device}")
+    print(f"{'='*70}\n")
+    
+    try:
+        # Load audio at the model's expected sample rate
+        print(f"[Neural] Loading audio: {wav_path}")
+        audio, _ = librosa.load(path=wav_path, sr=sample_rate, mono=True)
+        duration_seconds = len(audio) / sample_rate
+        print(f"[Neural] Audio duration: {duration_seconds:.2f}s, sample rate: {sample_rate}")
+        
+        # Create transcriptor (downloads model on first run)
+        print(f"[Neural] Initializing transcriptor...")
+        transcriptor = PianoTranscription(device=device, checkpoint_path=None)
+        
+        # Transcribe - don't write MIDI file, just get the dict
+        print(f"[Neural] Running inference...")
+        transcribed_dict = transcriptor.transcribe(audio, midi_path=None)
+        
+        # transcribed_dict contains 'est_note_events' and 'est_pedal_events'
+        # est_note_events is a list of dicts with 'onset_time', 'offset_time', 'midi_note', 'velocity'
+        note_events = transcribed_dict.get('est_note_events', [])
+        print(f"[Neural] Detected {len(note_events)} note events")
+        
+        if debug:
+            for i, event in enumerate(note_events[:20]):
+                onset = event['onset_time']
+                offset = event['offset_time']
+                pitch = event['midi_note']
+                velocity = event.get('velocity', 64)
+                note_name = note_to_name(int(pitch))
+                print(f"  {i+1}. {note_name} (MIDI {pitch}): {onset:.3f}s - {offset:.3f}s, vel={velocity}")
+            if len(note_events) > 20:
+                print(f"  ... and {len(note_events) - 20} more")
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return {"error": f"Neural transcription failed: {str(e)}"}
+    
+    # Convert note_events to our format
+    # Group simultaneous notes into chords
+    TIME_TOLERANCE = 0.05  # 50ms - notes within this window are considered simultaneous
+    
+    # Sort by onset time
+    note_events_sorted = sorted(note_events, key=lambda x: x['onset_time'])
+    
+    # Group into simultaneous events
+    event_groups = []
+    current_group = []
+    current_time = -1.0
+    
+    for event in note_events_sorted:
+        onset = event['onset_time']
+        
+        if current_time < 0 or abs(onset - current_time) <= TIME_TOLERANCE:
+            current_group.append(event)
+            if current_time < 0:
+                current_time = onset
+        else:
+            if current_group:
+                event_groups.append(current_group)
+            current_group = [event]
+            current_time = onset
+    
+    if current_group:
+        event_groups.append(current_group)
+    
+    print(f"[Neural] Grouped into {len(event_groups)} onset events")
+    
+    # Convert groups to notes and chords
+    notes = []
+    chords = []
+    all_onset_times = []
+    
+    for group in event_groups:
+        # Use average onset time for the group
+        avg_onset = sum(e['onset_time'] for e in group) / len(group)
+        all_onset_times.append(avg_onset)
+        
+        # Get MIDI notes, sorted low to high
+        midi_notes = sorted([int(e['midi_note']) for e in group])
+        
+        # Duration: use minimum offset time minus onset (conservative)
+        min_offset = min(e['offset_time'] for e in group)
+        duration = max(0.05, min_offset - avg_onset)
+        
+        # Average velocity (convert to 0-1 confidence)
+        avg_velocity = sum(e.get('velocity', 64) for e in group) / len(group)
+        confidence = avg_velocity / 127.0
+        
+        # Determine hand assignment based on lowest note
+        lowest_midi = min(midi_notes)
+        hand = "bass" if lowest_midi < split_midi else "treble"
+        
+        if len(midi_notes) == 1:
+            # Single note
+            m = midi_notes[0]
+            notes.append({
+                "time_seconds": round(avg_onset, 3),
+                "midi_note": m,
+                "note_name": note_to_name(m),
+                "frequency_hz": round(440.0 * 2**((m - 69)/12), 2),
+                "method": "neural",
+                "confidence": round(confidence, 3),
+                "offset_seconds": round(min_offset, 3),
+                "duration_seconds": round(duration, 3),
+                "hand": hand,
+            })
+        else:
+            # Chord (2+ simultaneous notes)
+            # Calculate octave from lowest note (MIDI octave: note // 12 - 1)
+            octave = (lowest_midi // 12) - 1
+            
+            # Try to identify chord quality using existing chord detection logic
+            chords.append({
+                "time_seconds": round(avg_onset, 3),
+                "midi_notes": midi_notes,
+                "note_names": [note_to_name(m) for m in midi_notes],
+                "root": note_to_name(lowest_midi),
+                "octave": octave,
+                "inversion": "root",  # Neural model doesn't detect inversions, assume root position
+                "method": "neural",
+                "confidence": round(confidence, 3),
+                "offset_seconds": round(min_offset, 3),
+                "duration_seconds": round(duration, 3),
+                "hand": hand,
+                "label": _identify_chord_label(midi_notes),
+            })
+    
+    print(f"[Neural] Converted to: {len(notes)} single notes, {len(chords)} chords")
+    
+    # Detect tempo from onset times
+    tempo_info = detect_tempo_from_onsets(all_onset_times)
+    detected_bpm = tempo_info['bpm']
+    tempo_confidence = tempo_info['confidence']
+    beat_interval = tempo_info['beat_interval']
+    
+    # Refine tempo
+    all_events = notes + chords
+    refined_tempo = refine_tempo_by_quantization(all_events, detected_bpm)
+    detected_bpm = refined_tempo['bpm']
+    tempo_confidence = refined_tempo['confidence']
+    beat_interval = refined_tempo['beat_interval']
+    
+    # Quantize rhythms
+    print(f"\n[Rhythm] Quantizing at {detected_bpm} BPM...")
+    notes, chords = quantize_rhythm_sequence(notes, chords, detected_bpm, debug=debug)
+    
+    # Detect triplets (separately for bass and treble)
+    bass_notes_list = [n for n in notes if n.get("hand") == "bass"]
+    treble_notes_list = [n for n in notes if n.get("hand") == "treble"]
+    bass_chords_list = [c for c in chords if c.get("hand") == "bass"]
+    treble_chords_list = [c for c in chords if c.get("hand") == "treble"]
+    
+    bass_notes_list = sorted(bass_notes_list, key=lambda x: x.get("time_seconds", 0))
+    treble_notes_list = sorted(treble_notes_list, key=lambda x: x.get("time_seconds", 0))
+    bass_chords_list = sorted(bass_chords_list, key=lambda x: x.get("time_seconds", 0))
+    treble_chords_list = sorted(treble_chords_list, key=lambda x: x.get("time_seconds", 0))
+    
+    detect_triplets(bass_notes_list, bpm=detected_bpm, tolerance=0.20)
+    detect_triplets(treble_notes_list, bpm=detected_bpm, tolerance=0.20)
+    detect_triplets_in_chords(bass_chords_list, bpm=detected_bpm, tolerance=0.20)
+    detect_triplets_in_chords(treble_chords_list, bpm=detected_bpm, tolerance=0.20)
+    
+    # Merge back
+    notes = sorted(bass_notes_list + treble_notes_list, key=lambda x: x.get("time_seconds", 0))
+    chords = sorted(bass_chords_list + treble_chords_list, key=lambda x: x.get("time_seconds", 0))
+    
+    # Build results
+    results = {
+        "notes": notes,
+        "chords": chords,
+        "onsets": [{"time_seconds": t, "frame_index": int(t * SAMPLE_RATE / HOP_SIZE)} for t in all_onset_times],
+        "analysis_summary": {
+            "duration_seconds": round(duration_seconds, 3),
+            "sample_rate": int(sample_rate),
+            "total_onsets": len(event_groups),
+            "total_notes": len(notes),
+            "total_chords": len(chords),
+            "detected_bpm": float(detected_bpm),
+            "tempo_confidence": float(tempo_confidence),
+            "beat_interval": float(beat_interval),
+            "bass_notes": len([n for n in notes if n.get("hand") == "bass"]),
+            "treble_notes": len([n for n in notes if n.get("hand") == "treble"]),
+            "bass_chords": len([c for c in chords if c.get("hand") == "bass"]),
+            "treble_chords": len([c for c in chords if c.get("hand") == "treble"]),
+            "method": "neural (piano_transcription_inference)",
+            "device": device,
+        }
+    }
+    
+    print(f"\n{'='*70}")
+    print(f"✓ Neural transcription complete:")
+    print(f"   Tempo:  {detected_bpm:.0f} BPM (confidence: {tempo_confidence:.2f})")
+    print(f"   Bass:   {results['analysis_summary']['bass_notes']} notes, {results['analysis_summary']['bass_chords']} chords")
+    print(f"   Treble: {results['analysis_summary']['treble_notes']} notes, {results['analysis_summary']['treble_chords']} chords")
+    print(f"{'='*70}\n")
+    
+    return results
+
+
+def _identify_chord_label(midi_notes):
+    """
+    Helper to identify chord label from MIDI notes.
+    Returns a string like 'C:maj' or 'G:min7'.
+    """
+    if len(midi_notes) < 2:
+        return f"{note_to_name(midi_notes[0])}:single" if midi_notes else "unknown"
+    
+    # Get pitch classes (0-11)
+    pcs = sorted(set([m % 12 for m in midi_notes]))
+    root_pc = min(midi_notes) % 12
+    root_name = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'][root_pc]
+    
+    # Calculate intervals from root
+    intervals = sorted([(pc - root_pc) % 12 for pc in pcs])
+    
+    # Match against known chord patterns
+    chord_patterns = {
+        (0, 4, 7): 'maj',
+        (0, 3, 7): 'min',
+        (0, 3, 6): 'dim',
+        (0, 4, 8): 'aug',
+        (0, 2, 7): 'sus2',
+        (0, 5, 7): 'sus4',
+        (0, 4, 7, 11): 'maj7',
+        (0, 3, 7, 10): 'min7',
+        (0, 4, 7, 10): 'dom7',
+        (0, 3, 6, 10): 'm7b5',
+        (0, 3, 6, 9): 'dim7',
+        (0, 4, 7, 9): 'maj6',
+        (0, 3, 7, 9): 'min6',
+    }
+    
+    intervals_tuple = tuple(intervals)
+    if intervals_tuple in chord_patterns:
+        return f"{root_name}:{chord_patterns[intervals_tuple]}"
+    
+    # Try matching subsets (for incomplete voicings)
+    for pattern, name in chord_patterns.items():
+        if all(i in intervals for i in pattern):
+            return f"{root_name}:{name}"
+    
+    # Fallback
+    return f"{root_name}:chord"
+
+
+def analyze_audio(wav_path_or_array, debug=False, use_split=True, independent_hands=True, use_neural=False, device='cpu'):
     """
     Main audio analysis function.
     
@@ -3517,9 +4237,19 @@ def analyze_audio(wav_path_or_array, debug=False, use_split=True, independent_ha
         independent_hands: If True and use_split is True, detect bass and treble rhythms 
                           independently (enables held bass chord + moving treble melody).
                           If False, uses shared onset detection (default: True)
+        use_neural: If True, use neural network transcription (requires piano_transcription_inference).
+                   This typically gives much higher accuracy but requires more memory/compute.
+        device: Device for neural inference ('cuda' for GPU, 'cpu' for CPU). Only used if use_neural=True.
     
     For the legacy frame-by-frame pipeline, use analyze_audio_legacy().
     """
+    if use_neural:
+        # Neural network transcription (requires file path, not array)
+        if isinstance(wav_path_or_array, str):
+            return analyze_audio_neural(wav_path_or_array, debug=debug, device=device)
+        else:
+            return {"error": "Neural transcription requires a file path, not an array. Save to a temp file first."}
+    
     if use_split:
         if independent_hands:
             return analyze_audio_independent_hands(wav_path_or_array, debug=debug)
@@ -3614,19 +4344,24 @@ def analyze_audio_legacy(wav_path_or_array, debug=False):
         results["onsets"].append(onset_info)
         
         # 1) Build a tiny onset-centered spectrum (average 2 frames ahead for stability)
+        # Also collect individual frames for temporal filtering (HMM-like approach)
         fft_mag_center = compute_magnitude(frames[idx])
         if 1 <= idx < len(frames)-1:
             fft_mag_prev   = compute_magnitude(frames[idx-1])
             fft_mag_next   = compute_magnitude(frames[idx+1])
             mag_window = (fft_mag_prev + fft_mag_center + fft_mag_next) / 3.0
+            mag_frames_raw = [fft_mag_prev, fft_mag_center, fft_mag_next]
         else:
             mag_window = fft_mag_center
+            mag_frames_raw = [fft_mag_center]
 
         # ringing cancellation
         freqs = np.fft.rfftfreq(FFT_SIZE, 1.0/SAMPLE_RATE)
         resid, updated = cancel_ringing(mag_window, freqs)
-        # 2) Explain it with K harmonic sources chosen by BIC
-        bic_est = estimate_voices_bic(resid, max_K=3, H=8)
+        # Apply ringing cancellation to each frame for temporal filtering
+        mag_frames_resid = [cancel_ringing(mf, freqs)[0] for mf in mag_frames_raw]
+        # 2) Explain it with K harmonic sources chosen by BIC (with temporal filtering)
+        bic_est = estimate_voices_bic(resid, max_K=3, H=8, mag_frames=mag_frames_resid)
         K = bic_est['K']
         midi_set = bic_est['midis']
         salience_info = bic_est.get('salience_info', {})  # For selecting best note when multiple detected
@@ -3719,7 +4454,7 @@ def analyze_audio_legacy(wav_path_or_array, debug=False):
     return results
 
 #* ─── Command-line Analysis Function ───────────────────────────────────────────
-def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, split_midi=60, independent_hands=True):
+def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, split_midi=60, independent_hands=True, use_neural=True, device='cuda'):
     """
     Command-line focused audio analysis with both single note and chord detection.
     Includes detailed console logging of the analysis process and thresholds.
@@ -3730,7 +4465,17 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
         use_split: Use frequency range splitting to separate left/right hand (default: True)
         split_midi: MIDI note to split at when use_split=True (default: 60 = middle C)
         independent_hands: If True, detect bass/treble rhythms independently (default: True)
+        use_neural: If True, use neural network transcription for higher accuracy (default: False)
+        device: Device for neural inference - 'cuda' for GPU, 'cpu' for CPU (default: 'cpu')
     """
+    # Neural network transcription (highest accuracy)
+    if use_neural:
+        if isinstance(wav_path_or_array, str):
+            return analyze_audio_neural(wav_path_or_array, debug=True, split_midi=split_midi, device=device)
+        else:
+            print("ERROR: Neural transcription requires a file path, not an array.")
+            return {"error": "Neural transcription requires a file path"}
+    
     if not use_legacy:
         if use_split:
             if independent_hands:
@@ -3909,15 +4654,18 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
         print(f"  [OFFSETS] estimated offset={osec}s (frame {oframe}), duration={dur}s")
         
         # 1) Build a tiny onset-centered spectrum (average 2 frames ahead for stability)
+        # Also collect individual frames for temporal filtering (HMM-like approach)
         print(f"  🔬 Building onset-centered spectrum...")
         fft_mag_center = compute_magnitude(frames[idx])
         if 1 <= idx < len(frames)-1:
             fft_mag_prev   = compute_magnitude(frames[idx-1])
             fft_mag_next   = compute_magnitude(frames[idx+1])
             mag_window = (fft_mag_prev + fft_mag_center + fft_mag_next) / 3.0
-            print(f"     Using 3-frame average (frames {idx-1}-{idx+1}) for stability")
+            mag_frames_raw = [fft_mag_prev, fft_mag_center, fft_mag_next]
+            print(f"     Using 3-frame average (frames {idx-1}-{idx+1}) for stability + temporal filtering")
         else:
             mag_window = fft_mag_center
+            mag_frames_raw = [fft_mag_center]
             print(f"     Using single frame {idx} (edge case)")
         
         spectrum_energy = np.sum(mag_window)
@@ -3927,9 +4675,11 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
         # ringing cancellation
         freqs = np.fft.rfftfreq(FFT_SIZE, 1.0/SAMPLE_RATE)
         resid, updated = cancel_ringing(mag_window, freqs)
-        # 2) Explain it with K harmonic sources chosen by BIC
-        print(f"  🎼 Performing BIC harmonic mixture analysis...")
-        bic_est = estimate_voices_bic(resid, max_K=3, H=8)
+        # Apply ringing cancellation to each frame for temporal filtering
+        mag_frames_resid = [cancel_ringing(mf, freqs)[0] for mf in mag_frames_raw]
+        # 2) Explain it with K harmonic sources chosen by BIC (with temporal filtering)
+        print(f"  🎼 Performing BIC harmonic mixture analysis with temporal filtering...")
+        bic_est = estimate_voices_bic(resid, max_K=3, H=8, mag_frames=mag_frames_resid)
         K = bic_est['K']
         midi_set = bic_est['midis']
         bic_value = bic_est['bic']
@@ -4069,7 +4819,7 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
 #* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     # Use absolute path to audio file
-    wav_path = os.path.join(os.path.dirname(__file__), 'audio', test_benchmark)
+    wav_path = os.path.join(os.path.dirname(__file__), 'audio', "test_fugue1_cmajor.wav")
     print(f"🎹 Piano Note Detection - Command Line")
     print(f"Reading audio from: {wav_path}")
     try:
@@ -4078,7 +4828,7 @@ if __name__ == "__main__":
         print(f"Failed to open audio file: {e}")
         exit()
     
-    results = analyze_audio_cmdline(audio)
+    results = analyze_audio_cmdline(wav_path, use_legacy=False, use_split=True, independent_hands=True, use_neural=True, device='cuda')
 
     if "error" not in results:
         print("\n" + "="*50)
@@ -4103,7 +4853,13 @@ if __name__ == "__main__":
                 dur = chord.get("duration_seconds")
                 off_str = f"{off:.2f}s" if off is not None else "N/A"
                 dur_str = f"{dur:.2f}s" if dur is not None else "N/A"
-                print(f"  {chord['time_seconds']:6.2f}s -> {off_str} (dur {dur_str}): {chord['label']:>8} octave {chord['octave']} ({chord['inversion']} inversion) - confidence: {chord['confidence']:.3f}")
+                label = chord.get('label', 'unknown')
+                octave = chord.get('octave', '?')
+                inversion = chord.get('inversion', 'unknown')
+                confidence = chord.get('confidence', 0.0)
+                hand = chord.get('hand', '')
+                note_names = chord.get('note_names', [])
+                print(f"  {chord['time_seconds']:6.2f}s -> {off_str} (dur {dur_str}): {label:>12} oct {octave} ({inversion}) [{hand}] conf={confidence:.2f} - {note_names}")
         
         if not results["notes"] and not results["chords"]:
             print("  No notes or chords detected")

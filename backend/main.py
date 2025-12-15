@@ -1,10 +1,8 @@
-import hashlib
-import json
 import logging
 import math
 import os
 from io import BytesIO
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 # consistency between local and server
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -131,7 +129,9 @@ async def health_check():
 @app.post("/analyze")
 async def analyze_audio_file(
     file: UploadFile = File(...),
-    debug: bool = False
+    debug: bool = False,
+    use_neural: bool = True,  # Default to neural for higher accuracy
+    device: str = "cuda"  # 'cuda' for GPU, 'cpu' for CPU
 ):
     """
     Analyze an uploaded audio file and return detected notes and onsets.
@@ -139,9 +139,17 @@ async def analyze_audio_file(
     Args:
         file: Audio file (WAV, MP3, etc.)
         debug: Whether to include debug information in response
+        use_neural: If True, use neural network transcription (higher accuracy, default: True)
+        device: Device for neural inference ('cuda' for GPU, 'cpu' for CPU)
         
     Returns:
-        JSON with detected notes, onsets, and analysis metadata
+        JSON with detected notes, chords, onsets, and analysis metadata
+        
+    Neural output format:
+        - notes: [{time_seconds, midi_note, note_name, frequency_hz, method, confidence, 
+                   offset_seconds, duration_seconds, hand (bass/treble)}]
+        - chords: [{time_seconds, midi_notes, note_names, root, octave, label, inversion,
+                    method, confidence, offset_seconds, duration_seconds, hand (bass/treble)}]
     """
     
     # Validate file type
@@ -179,11 +187,26 @@ async def analyze_audio_file(
         tmp.close()
 
         audio = read_wav(tmp.name)
-        os.unlink(tmp.name)
+        
+        # Keep temp file path for neural transcription
+        temp_audio_path = tmp.name
 
         try:
             # Analyze the audio in a threadpool (blocking CPU work)
-            results = await run_in_threadpool(analyze_audio, audio, debug)
+            # For neural transcription, pass the file path; for traditional, pass the array
+            if use_neural:
+                results = await run_in_threadpool(
+                    analyze_audio, temp_audio_path, debug, 
+                    True, True, True, device  # use_split, independent_hands, use_neural, device
+                )
+            else:
+                results = await run_in_threadpool(analyze_audio, audio, debug)
+            
+            # Clean up temp file after analysis
+            try:
+                os.unlink(temp_audio_path)
+            except:
+                pass
 
             # Add metadata about the uploaded file
             results["file_info"] = {
