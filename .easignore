@@ -1,0 +1,15 @@
+# Gradle cache
+android/.gradle/
+.gradle/
+
+# Build outputs
+android/app/build/
+android/build/
+
+# Local environment
+backend/env/
+node_modules/
+
+# Large training data
+backend/rhythm_training/rhythm_training_data.jsonl
+backend/rhythm_training/maestro_midi/

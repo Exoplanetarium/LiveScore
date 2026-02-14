@@ -1,4 +1,5 @@
 import modal
+
 MODEL_URL = "https://zenodo.org/record/4034264/files/CRNN_note_F1%3D0.9677_pedal_F1=0.9186.pth?download=1"
 MODEL_PATH = "/root/piano_transcription_inference_data/note_F1=0.9677_pedal_F1=0.9186.pth"
 
@@ -93,6 +94,11 @@ image = image.run_commands(
     )
 image = image.add_local_file("main.py", "/root/main.py")
 image = image.add_local_file("detect_note.py", "/root/detect_note.py")
+image = image.add_local_file("gpu_ops.py", "/root/gpu_ops.py")
+# Add rhythm ML model (only essential files, not training data)
+image = image.add_local_file("rhythm_training/__init__.py", "/root/rhythm_training/__init__.py")
+image = image.add_local_file("rhythm_training/rhythm_model.py", "/root/rhythm_training/rhythm_model.py")
+image = image.add_local_file("rhythm_training/rhythm_model.npz", "/root/rhythm_training/rhythm_model.npz")
 
 
 @app.function(

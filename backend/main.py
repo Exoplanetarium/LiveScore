@@ -65,19 +65,32 @@ app.add_middleware(
 
 
 # Helper: make results JSON serializable (convert numpy types/arrays)
-def make_json_serializable(obj):
-    if isinstance(obj, dict):
-        return {k: make_json_serializable(v) for k, v in obj.items()}
-    elif isinstance(obj, list):
-        return [make_json_serializable(item) for item in obj]
-    elif isinstance(obj, np.integer):
-        return int(obj)
-    elif isinstance(obj, np.floating):
-        return float(obj)
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    else:
-        return obj
+def make_json_serializable(obj, path="root"):
+    try:
+        if isinstance(obj, dict):
+            return {k: make_json_serializable(v, f"{path}.{k}") for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [make_json_serializable(item, f"{path}[{i}]") for i, item in enumerate(obj)]
+        elif isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.bool_):
+            return bool(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, (bool, int, float, str, type(None))):
+            return obj
+        else:
+            # Fallback: try to convert to string for unknown types
+            print(f"[WARN] Unknown type at {path}: {type(obj)} = {repr(obj)[:100]}")
+            try:
+                return str(obj)
+            except:
+                return None
+    except Exception as e:
+        print(f"[ERROR] Serialization failed at {path}: {type(obj)} - {e}")
+        raise
 
 def load_audio_deterministic(path, target_sr=44100):
     # Read raw PCM deterministically
@@ -217,11 +230,22 @@ async def analyze_audio_file(
             }
 
             # Ensure JSON serializable
-            clean_results = make_json_serializable(results)
+            print("[DEBUG] Building JSON response...")
+            try:
+                clean_results = make_json_serializable(results)
+                print(f"[DEBUG] JSON serialization successful, returning response")
+            except Exception as ser_err:
+                import traceback
+                print(f"[ERROR] JSON serialization failed: {ser_err}")
+                traceback.print_exc()
+                raise
 
             return JSONResponse(content=clean_results)
 
         except Exception as e:
+            import traceback
+            print(f"[ERROR] Audio analysis failed: {str(e)}")
+            traceback.print_exc()
             raise HTTPException(
                 status_code=500,
                 detail=f"Audio analysis failed: {str(e)}"

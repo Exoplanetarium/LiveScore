@@ -17,7 +17,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
-from backend.detect_note import (HOP_SIZE, SAMPLE_RATE, analyze_audio,
+from detect_note import (HOP_SIZE, SAMPLE_RATE, analyze_audio,
                          duration_to_note_value)
 
 
@@ -169,6 +169,344 @@ def compare_quantization_methods(notes, bpm):
         print(f"   In these cases, IOI-based quantization is usually more accurate")
 
 
+def print_visual_timeline(results, max_width=100):
+    """
+    Print a horizontal timeline showing notes/chords with proportional duration bars.
+    
+    Output looks like:
+    C4════E4══G4════════C5══[Cmaj]════════
+    
+    Where the bar length represents duration proportionally.
+    """
+    notes = results.get('notes', [])
+    chords = results.get('chords', [])
+    summary = results.get('analysis_summary', {})
+    bpm = summary.get('detected_bpm', 120)
+    beat_duration = 60.0 / bpm
+    
+    print(f"\n{'='*max_width}")
+    print(f"🎼 VISUAL TRANSCRIPTION TIMELINE (BPM: {bpm})")
+    print(f"{'='*max_width}")
+    print(f"   Bar length ∝ duration | ─ = 1/16 beat | ░ = rest")
+    print(f"{'─'*max_width}\n")
+    
+    # Combine notes and chords into unified events
+    events = []
+    
+    for note in notes:
+        events.append({
+            'time': note.get('time_seconds', 0),
+            'label': note.get('note_name', '?'),
+            'duration': note.get('duration_seconds', 0.25),
+            'note_value': note.get('note_value', 'quarter'),
+            'dotted': note.get('dotted', False),
+            'is_triplet': note.get('is_triplet', False),
+            'type': 'note',
+            'has_rest': note.get('has_rest_after', False),
+            'rest_dur': note.get('rest_duration', 0)
+        })
+    
+    for chord in chords:
+        # Use chord label or construct from notes
+        label = chord.get('label', None)
+        if not label:
+            midi_notes = chord.get('midi_notes', [])
+            if midi_notes:
+                from detect_note import note_to_name
+                names = [note_to_name(m) for m in midi_notes[:2]]  # First 2 notes
+                label = '+'.join(names)
+                if len(midi_notes) > 2:
+                    label += f"+{len(midi_notes)-2}"
+            else:
+                label = "chd"
+        
+        events.append({
+            'time': chord.get('time_seconds', 0),
+            'label': f"[{label}]",
+            'duration': chord.get('duration_seconds', 0.5),
+            'note_value': chord.get('note_value', 'quarter'),
+            'dotted': chord.get('dotted', False),
+            'is_triplet': chord.get('is_triplet', False),
+            'type': 'chord',
+            'has_rest': chord.get('has_rest_after', False),
+            'rest_dur': chord.get('rest_duration', 0)
+        })
+    
+    if not events:
+        print("   No notes or chords detected.")
+        return
+    
+    # Sort by time
+    events.sort(key=lambda e: e['time'])
+    
+    # Calculate scale: how many chars per beat?
+    # We want a reasonable density - about 4 chars per 16th note = 16 chars per beat
+    chars_per_beat = 12
+    
+    # Build the continuous timeline string
+    timeline = ""
+    prev_end_time = 0
+    line_count = 1
+    
+    for event in events:
+        t = event['time']
+        label = event['label']
+        dur = event['duration']
+        nv = event['note_value']
+        dotted = event['dotted']
+        is_triplet = event['is_triplet']
+        
+        # Add rest if there's a gap
+        gap = t - prev_end_time
+        if gap > beat_duration * 0.15:  # More than ~1/8 beat gap
+            gap_beats = gap / beat_duration
+            rest_chars = max(1, int(gap_beats * chars_per_beat))
+            timeline += "░" * rest_chars
+        
+        # Add note/chord label
+        # Add markers for dotted/triplet
+        prefix = ""
+        if is_triplet:
+            prefix = "³"
+        if dotted:
+            prefix += "•"
+        
+        timeline += prefix + label
+        
+        # Add duration bar
+        dur_beats = dur / beat_duration
+        bar_chars = max(1, int(dur_beats * chars_per_beat))
+        
+        # Use different bar chars for notes vs chords
+        if event['type'] == 'chord':
+            bar_char = "═"
+        else:
+            bar_char = "─"
+        
+        timeline += bar_char * bar_chars
+        
+        prev_end_time = t + dur
+    
+    # Print with line wrapping
+    print("   ", end="")
+    line_len = 3
+    wrap_width = max_width - 6
+    
+    for char in timeline:
+        print(char, end="")
+        line_len += 1
+        if line_len >= wrap_width and char in "─═░":
+            print("\n   ", end="")
+            line_len = 3
+            line_count += 1
+    
+    print(f"\n\n   ({len(events)} events over {line_count} lines)")
+    print(f"   Legend: ─ = note duration | ═ = chord duration | ░ = rest")
+    print(f"           • = dotted | ³ = triplet | [X] = chord")
+
+
+def print_beat_aligned_timeline(results, max_width=100):
+    """
+    Print timeline with beat markers for easier reading.
+    Each line is one measure (4 beats by default).
+    """
+    notes = results.get('notes', [])
+    chords = results.get('chords', [])
+    summary = results.get('analysis_summary', {})
+    bpm = summary.get('detected_bpm', 120)
+    beat_duration = 60.0 / bpm
+    beats_per_measure = 4
+    
+    print(f"\n{'='*max_width}")
+    print(f"🎵 BEAT-ALIGNED TIMELINE (BPM: {bpm}, {beats_per_measure}/4 time)")
+    print(f"{'='*max_width}\n")
+    
+    # Combine events
+    events = []
+    for note in notes:
+        events.append({
+            'time': note.get('time_seconds', 0),
+            'label': note.get('note_name', '?'),
+            'duration': note.get('duration_seconds', 0.25),
+            'type': 'note'
+        })
+    for chord in chords:
+        label = chord.get('label', 'chd')[:6]
+        events.append({
+            'time': chord.get('time_seconds', 0),
+            'label': f"[{label}]",
+            'duration': chord.get('duration_seconds', 0.5),
+            'type': 'chord'
+        })
+    
+    if not events:
+        print("   No events.")
+        return
+    
+    events.sort(key=lambda e: e['time'])
+    
+    # Calculate total measures
+    total_time = events[-1]['time'] + events[-1]['duration']
+    total_beats = total_time / beat_duration
+    total_measures = int(np.ceil(total_beats / beats_per_measure))
+    
+    chars_per_beat = 16
+    chars_per_measure = chars_per_beat * beats_per_measure
+    
+    # Build each measure
+    for measure in range(total_measures):
+        measure_start = measure * beats_per_measure * beat_duration
+        measure_end = (measure + 1) * beats_per_measure * beat_duration
+        
+        # Beat markers
+        header = f"M{measure+1:02d}│"
+        for b in range(beats_per_measure):
+            header += f"{b+1}" + "·" * (chars_per_beat - 1)
+        print(f"   {header}")
+        
+        # Build measure content
+        line = "   " + " " * 4  # Indent for measure number
+        pos = 0  # Current position in chars
+        
+        # Get events in this measure
+        measure_events = [e for e in events 
+                         if e['time'] >= measure_start and e['time'] < measure_end]
+        
+        for event in measure_events:
+            # Position within measure
+            event_beat = (event['time'] - measure_start) / beat_duration
+            event_pos = int(event_beat * chars_per_beat)
+            
+            # Fill gap with spaces/rests
+            if event_pos > pos:
+                gap = event_pos - pos
+                line += "·" * gap
+                pos = event_pos
+            
+            # Add label
+            label = event['label']
+            line += label
+            pos += len(label)
+            
+            # Add duration bar
+            dur_beats = event['duration'] / beat_duration
+            bar_chars = max(0, int(dur_beats * chars_per_beat) - len(label))
+            bar_char = "═" if event['type'] == 'chord' else "─"
+            line += bar_char * bar_chars
+            pos += bar_chars
+        
+        # Fill rest of measure
+        remaining = chars_per_measure - (pos - 4)
+        if remaining > 0:
+            line += "·" * remaining
+        
+        print(line)
+        print()
+
+
+def print_compact_score(results, beats_per_line=4):
+    """
+    Print a compact score-like view with multiple beats per line.
+    Shows the rhythm pattern more clearly.
+    """
+    notes = results.get('notes', [])
+    chords = results.get('chords', [])
+    summary = results.get('analysis_summary', {})
+    bpm = summary.get('detected_bpm', 120)
+    beat_duration = 60.0 / bpm
+    
+    print(f"\n{'='*70}")
+    print(f"🎵 COMPACT SCORE VIEW ({beats_per_line} beats per line)")
+    print(f"{'='*70}\n")
+    
+    # Combine and sort events
+    events = []
+    for note in notes:
+        events.append({
+            'time': note.get('time_seconds', 0),
+            'label': note.get('note_name', '?'),
+            'duration': note.get('duration_seconds', 0.25),
+            'note_value': note.get('note_value', 'quarter'),
+            'dotted': note.get('dotted', False),
+            'type': 'note'
+        })
+    for chord in chords:
+        label = chord.get('label', 'chd')
+        events.append({
+            'time': chord.get('time_seconds', 0),
+            'label': f"[{label[:6]}]",
+            'duration': chord.get('duration_seconds', 0.5),
+            'note_value': chord.get('note_value', 'quarter'),
+            'dotted': chord.get('dotted', False),
+            'type': 'chord'
+        })
+    
+    if not events:
+        print("   No events to display.")
+        return
+    
+    events.sort(key=lambda e: e['time'])
+    
+    # Note value symbols (similar to music notation)
+    note_symbols = {
+        'whole': '𝅝', 'half': '𝅗𝅥', 'quarter': '♩', 'eighth': '♪',
+        '16th': '𝅘𝅥𝅯', '32nd': '𝅘𝅥𝅰', 'grace': '⁽♪⁾'
+    }
+    
+    # ASCII fallback symbols
+    ascii_symbols = {
+        'whole': 'W', 'half': 'H', 'quarter': 'Q', 'eighth': 'E',
+        '16th': 'S', '32nd': 'T', 'grace': 'g'
+    }
+    
+    # Determine total duration
+    if events:
+        total_time = events[-1]['time'] + events[-1]['duration']
+        total_beats = total_time / beat_duration
+    else:
+        total_beats = 0
+    
+    # Group events by beat
+    current_beat = 0
+    line_events = []
+    lines = []
+    
+    for event in events:
+        event_beat = event['time'] / beat_duration
+        
+        # Check if we need a new line
+        while event_beat >= current_beat + beats_per_line:
+            if line_events:
+                lines.append((current_beat, line_events))
+            line_events = []
+            current_beat += beats_per_line
+        
+        line_events.append(event)
+    
+    # Don't forget the last line
+    if line_events:
+        lines.append((current_beat, line_events))
+    
+    # Print each line
+    for start_beat, line_events in lines:
+        # Header showing beat numbers
+        beat_header = f"   Beat {int(start_beat)+1}-{int(start_beat)+beats_per_line}: "
+        print(beat_header)
+        
+        # Print events on this line
+        line_str = "   "
+        for event in line_events:
+            label = event['label'][:6]
+            nv = event['note_value']
+            sym = ascii_symbols.get(nv, '?')
+            dot = '.' if event['dotted'] else ''
+            
+            line_str += f"{label}({sym}{dot}) "
+        
+        print(line_str)
+        print()
+
+
 def test_alternate_tempos(notes, detected_bpm):
     """Test how quantization errors change at different tempos."""
     
@@ -176,36 +514,26 @@ def test_alternate_tempos(notes, detected_bpm):
     print(f"TEMPO SENSITIVITY ANALYSIS")
     print(f"{'='*70}\n")
     
-    # Test tempos: 0.5x, 0.75x, 1x, 1.25x, 1.5x, 2x
-    multipliers = [0.5, 0.67, 0.75, 0.83, 1.0, 1.2, 1.33, 1.5, 2.0]
+    # Test tempos: 0.33x to 2x (covers typical range 40-240 BPM)
+    multipliers = [0.33, 0.4, 0.5, 0.67, 0.75, 0.83, 1.0, 1.2, 1.33, 1.5, 2.0]
     
     results = []
     
     for mult in multipliers:
         test_bpm = detected_bpm * mult
         
-        # Calculate errors at this tempo
-        errors = []
+        # Calculate errors at this tempo using IOI (more reliable than duration)
         times = [n.get('time_seconds', 0) for n in notes]
         iois = np.diff(times)
         
-        for i, note in enumerate(notes):
-            dur = note.get('duration_seconds', 0.5)
-            
-            # Use similar logic to quantize_rhythm_from_ioi
-            if i < len(iois):
-                ioi = iois[i]
-                ratio = ioi / dur if dur > 0.01 else 10.0
-                
-                if 0.7 <= ratio <= 1.4:
-                    val = duration_to_note_value(ioi, bpm=test_bpm)
-                else:
-                    val = duration_to_note_value(dur, bpm=test_bpm)
-            else:
-                val = duration_to_note_value(dur, bpm=test_bpm)
-            
+        errors = []
+        for ioi in iois:
+            val = duration_to_note_value(ioi, bpm=test_bpm)
             errors.append(val.get('quantization_error', 0))
         
+        if not errors:
+            continue
+            
         mean_err = np.mean(errors) * 100
         max_err = np.max(errors) * 100
         high_err_count = sum(1 for e in errors if e > 0.15)
@@ -227,14 +555,31 @@ def test_alternate_tempos(notes, detected_bpm):
 
 
 if __name__ == "__main__":
+    import argparse
     
-    audio_file = os.path.join(os.path.dirname(__file__), 'audio', "test_fugue1_cmajor.wav")
+    parser = argparse.ArgumentParser(description='Debug rhythm detection')
+    parser.add_argument('audio_file', nargs='?', 
+                        default=os.path.join(os.path.dirname(__file__), 'audio', "test_fugue1_cmajor.wav"),
+                        help='Path to audio file')
+    parser.add_argument('--neural', '-n', action='store_true',
+                        help='Use neural network model (more accurate, requires GPU)')
+    parser.add_argument('--device', '-d', default='cuda',
+                        help='Device for neural model: cuda or cpu (default: cuda)')
+    parser.add_argument('--width', '-w', type=int, default=120,
+                        help='Max width for timeline display (default: 120)')
+    args = parser.parse_args()
+    
+    audio_file = args.audio_file
     
     print(f"Analyzing: {audio_file}")
+    if args.neural:
+        print(f"Using NEURAL model on {args.device}...")
+    else:
+        print("Using signal processing pipeline...")
     print("Please wait...")
     
-    # Run analysis with debug=True to see IOI quantization details
-    results = analyze_audio(audio_file, debug=True)
+    # Run analysis - use neural if requested
+    results = analyze_audio(audio_file, debug=True, use_neural=args.neural, device=args.device)
     
     if 'error' in results:
         print(f"Error: {results['error']}")
@@ -242,6 +587,12 @@ if __name__ == "__main__":
     
     # Print detailed analysis
     print_rhythm_analysis(results)
+    
+    # Print horizontal visual timeline (notes in sequence with duration bars)
+    print_visual_timeline(results, max_width=args.width)
+    
+    # Print beat-aligned view (measure by measure)
+    print_beat_aligned_timeline(results, max_width=args.width)
     
     # Compare methods
     notes = results.get('notes', [])

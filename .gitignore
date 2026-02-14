@@ -47,3 +47,7 @@ env/
 # audio
 *.wav
 *.mp3
+
+# datasets
+maestro_midi/
+*.jsonl

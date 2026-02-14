@@ -329,6 +329,108 @@ export const OSMD_HTML = `
       return note + octave;
     }
     
+    // ─── Expand Ornaments into Notes ───
+    // Generates the individual notes that make up an ornament
+    function expandOrnament(ornamentType, baseMidi, startTime, totalDuration, bpm) {
+      const notes = [];
+      const ornamentNoteDuration = Math.min(0.08, totalDuration / 8); // Fast ornament notes (~80ms or faster)
+      
+      switch (ornamentType) {
+        case 'trill': {
+          // Rapid alternation between base note and note above (usually whole step)
+          const auxMidi = baseMidi + 2; // Whole step up (could be 1 for half step)
+          const trillCount = Math.max(4, Math.floor(totalDuration / ornamentNoteDuration));
+          const actualNoteDuration = totalDuration / trillCount;
+          
+          for (let i = 0; i < trillCount; i++) {
+            const midi = i % 2 === 0 ? baseMidi : auxMidi;
+            notes.push({
+              time: startTime + i * actualNoteDuration,
+              note: midiToNoteName(midi),
+              duration: actualNoteDuration * 0.85,
+              midi: midi,
+              isOrnament: true
+            });
+          }
+          break;
+        }
+        
+        case 'mordent': {
+          // Upper mordent: main -> upper -> main
+          const auxMidi = baseMidi + 2;
+          const mordentTime = Math.min(0.15, totalDuration * 0.3); // Mordent takes ~30% of note
+          const mordentNoteDur = mordentTime / 3;
+          const mainDuration = totalDuration - mordentTime;
+          
+          // Three quick notes at start
+          notes.push({ time: startTime, note: midiToNoteName(baseMidi), duration: mordentNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          notes.push({ time: startTime + mordentNoteDur, note: midiToNoteName(auxMidi), duration: mordentNoteDur * 0.9, midi: auxMidi, isOrnament: true });
+          notes.push({ time: startTime + mordentNoteDur * 2, note: midiToNoteName(baseMidi), duration: mordentNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          // Hold main note for rest
+          notes.push({ time: startTime + mordentTime, note: midiToNoteName(baseMidi), duration: mainDuration * 0.9, midi: baseMidi });
+          break;
+        }
+        
+        case 'inverted-mordent': {
+          // Lower mordent: main -> lower -> main
+          const auxMidi = baseMidi - 2;
+          const mordentTime = Math.min(0.15, totalDuration * 0.3);
+          const mordentNoteDur = mordentTime / 3;
+          const mainDuration = totalDuration - mordentTime;
+          
+          notes.push({ time: startTime, note: midiToNoteName(baseMidi), duration: mordentNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          notes.push({ time: startTime + mordentNoteDur, note: midiToNoteName(auxMidi), duration: mordentNoteDur * 0.9, midi: auxMidi, isOrnament: true });
+          notes.push({ time: startTime + mordentNoteDur * 2, note: midiToNoteName(baseMidi), duration: mordentNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          notes.push({ time: startTime + mordentTime, note: midiToNoteName(baseMidi), duration: mainDuration * 0.9, midi: baseMidi });
+          break;
+        }
+        
+        case 'turn': {
+          // Turn: upper -> main -> lower -> main
+          const upperMidi = baseMidi + 2;
+          const lowerMidi = baseMidi - 2;
+          const turnTime = Math.min(0.2, totalDuration * 0.4);
+          const turnNoteDur = turnTime / 4;
+          const mainDuration = totalDuration - turnTime;
+          
+          notes.push({ time: startTime, note: midiToNoteName(upperMidi), duration: turnNoteDur * 0.9, midi: upperMidi, isOrnament: true });
+          notes.push({ time: startTime + turnNoteDur, note: midiToNoteName(baseMidi), duration: turnNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          notes.push({ time: startTime + turnNoteDur * 2, note: midiToNoteName(lowerMidi), duration: turnNoteDur * 0.9, midi: lowerMidi, isOrnament: true });
+          notes.push({ time: startTime + turnNoteDur * 3, note: midiToNoteName(baseMidi), duration: turnNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          // Hold main note for rest
+          notes.push({ time: startTime + turnTime, note: midiToNoteName(baseMidi), duration: mainDuration * 0.9, midi: baseMidi });
+          break;
+        }
+        
+        case 'inverted-turn': {
+          // Inverted turn: lower -> main -> upper -> main
+          const upperMidi = baseMidi + 2;
+          const lowerMidi = baseMidi - 2;
+          const turnTime = Math.min(0.2, totalDuration * 0.4);
+          const turnNoteDur = turnTime / 4;
+          const mainDuration = totalDuration - turnTime;
+          
+          notes.push({ time: startTime, note: midiToNoteName(lowerMidi), duration: turnNoteDur * 0.9, midi: lowerMidi, isOrnament: true });
+          notes.push({ time: startTime + turnNoteDur, note: midiToNoteName(baseMidi), duration: turnNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          notes.push({ time: startTime + turnNoteDur * 2, note: midiToNoteName(upperMidi), duration: turnNoteDur * 0.9, midi: upperMidi, isOrnament: true });
+          notes.push({ time: startTime + turnNoteDur * 3, note: midiToNoteName(baseMidi), duration: turnNoteDur * 0.9, midi: baseMidi, isOrnament: true });
+          notes.push({ time: startTime + turnTime, note: midiToNoteName(baseMidi), duration: mainDuration * 0.9, midi: baseMidi });
+          break;
+        }
+        
+        default:
+          // No ornament, just return the plain note
+          notes.push({
+            time: startTime,
+            note: midiToNoteName(baseMidi),
+            duration: totalDuration * 0.9,
+            midi: baseMidi
+          });
+      }
+      
+      return notes;
+    }
+    
     // ─── Parse MusicXML for Playback ───
     function parseMusicXMLForPlayback(xmlString) {
       const parser = new DOMParser();
@@ -384,6 +486,7 @@ export const OSMD_HTML = `
           } else if (el.tagName === 'note') {
             const isRest = el.querySelector('rest') !== null;
             const isChord = el.querySelector('chord') !== null;
+            const isGrace = el.querySelector('grace') !== null;
             const durationEl = el.querySelector('duration');
             const duration = durationEl ? parseInt(durationEl.textContent) : divisions;
             const durationSeconds = (duration / divisions) * quarterNoteDuration;
@@ -411,12 +514,44 @@ export const OSMD_HTML = `
                 const lastNoteTime = activeVoice === 1 ? lastVoice1NoteTime : lastVoice2NoteTime;
                 const noteStartTime = isChord ? lastNoteTime : voiceTime;
                 
-                notes.push({
-                  time: noteStartTime,
-                  note: noteName,
-                  duration: Math.max(0.1, durationSeconds * 0.9), // slightly shorter for separation
-                  midi: midi
-                });
+                // Check for ornaments in notations
+                const notationsEl = el.querySelector('notations');
+                let ornamentType = null;
+                
+                if (notationsEl) {
+                  const ornamentsEl = notationsEl.querySelector('ornaments');
+                  if (ornamentsEl) {
+                    if (ornamentsEl.querySelector('trill-mark')) ornamentType = 'trill';
+                    else if (ornamentsEl.querySelector('inverted-mordent')) ornamentType = 'inverted-mordent';
+                    else if (ornamentsEl.querySelector('mordent')) ornamentType = 'mordent';
+                    else if (ornamentsEl.querySelector('inverted-turn')) ornamentType = 'inverted-turn';
+                    else if (ornamentsEl.querySelector('turn')) ornamentType = 'turn';
+                  }
+                }
+                
+                // Handle grace notes - play very quickly before the main note
+                if (isGrace) {
+                  const graceNoteDuration = 0.08; // 80ms grace note
+                  notes.push({
+                    time: noteStartTime - graceNoteDuration,
+                    note: noteName,
+                    duration: graceNoteDuration * 0.9,
+                    midi: midi,
+                    isOrnament: true
+                  });
+                } else if (ornamentType) {
+                  // Expand ornament into multiple notes
+                  const expandedNotes = expandOrnament(ornamentType, midi, noteStartTime, durationSeconds, playbackBPM);
+                  notes.push(...expandedNotes);
+                } else {
+                  // Regular note
+                  notes.push({
+                    time: noteStartTime,
+                    note: noteName,
+                    duration: Math.max(0.1, durationSeconds * 0.9), // slightly shorter for separation
+                    midi: midi
+                  });
+                }
                 
                 // Update last note time for this voice (for chord detection)
                 if (!isChord) {
@@ -429,8 +564,8 @@ export const OSMD_HTML = `
               }
             }
             
-            // Advance time only for non-chord notes
-            if (!isChord) {
+            // Advance time only for non-chord, non-grace notes
+            if (!isChord && !isGrace) {
               if (activeVoice === 1) {
                 voice1Time += durationSeconds;
               } else {
