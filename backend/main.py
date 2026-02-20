@@ -1,8 +1,67 @@
 import logging
 import math
 import os
+import time
+from collections import defaultdict
 from io import BytesIO
 from typing import Dict, List
+
+
+# ─── Timing Instrumentation ───────────────────────────────────────────────────
+class TimingTracker:
+    """Track timing of pipeline stages for real-time optimization."""
+    
+    def __init__(self):
+        self.timings: Dict[str, List[float]] = defaultdict(list)
+        self.current_request_timings: Dict[str, float] = {}
+        
+    def start(self, stage: str):
+        """Start timing a stage."""
+        self.current_request_timings[f"{stage}_start"] = time.perf_counter()
+        
+    def stop(self, stage: str):
+        """Stop timing a stage and record."""
+        start_key = f"{stage}_start"
+        if start_key in self.current_request_timings:
+            elapsed_ms = (time.perf_counter() - self.current_request_timings[start_key]) * 1000
+            self.timings[stage].append(elapsed_ms)
+            del self.current_request_timings[start_key]
+            return elapsed_ms
+        return 0.0
+    
+    def get_request_summary(self) -> Dict[str, float]:
+        """Get timings from the most recent request."""
+        summary = {}
+        for stage, times in self.timings.items():
+            if times:
+                summary[f"{stage}_ms"] = times[-1]
+        return summary
+    
+    def get_stats(self) -> Dict:
+        """Get aggregate statistics."""
+        stats = {}
+        for stage, times in self.timings.items():
+            if times:
+                import numpy as np
+                arr = np.array(times)
+                stats[stage] = {
+                    "count": len(times),
+                    "mean_ms": float(np.mean(arr)),
+                    "std_ms": float(np.std(arr)),
+                    "min_ms": float(np.min(arr)),
+                    "max_ms": float(np.max(arr)),
+                    "p50_ms": float(np.percentile(arr, 50)),
+                    "p95_ms": float(np.percentile(arr, 95)),
+                }
+        return stats
+        
+    def reset(self):
+        """Reset all timings."""
+        self.timings.clear()
+        self.current_request_timings.clear()
+
+# Global timing tracker
+TIMER = TimingTracker()
 
 # consistency between local and server
 os.environ["OMP_NUM_THREADS"] = "1"
@@ -19,7 +78,8 @@ import tempfile
 import numpy as np
 import soundfile as sf
 import uvicorn
-from detect_note import analyze_audio, analyze_audio_optimized, read_wav
+from detect_note import (analyze_audio, analyze_audio_optimized, read_wav,
+                         second_pass_gap_fill)
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -139,6 +199,43 @@ async def health_check():
         "version": "1.0.0"
     }
 
+@app.get("/timing-stats")
+async def timing_stats():
+    """Get timing statistics for performance analysis."""
+    return {
+        "stats": TIMER.get_stats(),
+        "last_request": TIMER.get_request_summary(),
+    }
+
+@app.post("/timing-reset")
+async def timing_reset():
+    """Reset timing statistics."""
+    TIMER.reset()
+    return {"status": "reset"}
+
+@app.get("/warmup")
+async def warmup():
+    """
+    Warmup endpoint - call this when app opens to pre-load models.
+    This ensures the first recording request is fast.
+    """
+    try:
+        from gpu_ops import get_gpu_ensemble_transcriber, get_gpu_rhythm_model
+        
+        ensemble = get_gpu_ensemble_transcriber()
+        rhythm = get_gpu_rhythm_model()
+        
+        return {
+            "status": "warm",
+            "ensemble_model": ensemble is not None and ensemble.initialized,
+            "rhythm_model": rhythm is not None,
+        }
+    except Exception as e:
+        return {
+            "status": "warmup_failed",
+            "error": str(e)
+        }
+
 @app.post("/analyze")
 async def analyze_audio_file(
     file: UploadFile = File(...),
@@ -174,10 +271,15 @@ async def analyze_audio_file(
         )
     
     try:
+        TIMER.start("total_request")
+        TIMER.start("file_read")
+        
         # Read the uploaded file
         data = await file.read()
         if len(data) > 100*1024*1024:
             raise HTTPException(413, "File too large")
+            
+        file_read_ms = TIMER.stop("file_read")
         
         #! DEBUG
         import binascii
@@ -198,8 +300,10 @@ async def analyze_audio_file(
         #! END DEBUG
 
         tmp.close()
-
+        
+        TIMER.start("audio_decode")
         audio = read_wav(tmp.name)
+        decode_ms = TIMER.stop("audio_decode")
         
         # Keep temp file path for neural transcription
         temp_audio_path = tmp.name
@@ -207,6 +311,7 @@ async def analyze_audio_file(
         try:
             # Analyze the audio in a threadpool (blocking CPU work)
             # For neural transcription, pass the file path; for traditional, pass the array
+            TIMER.start("inference")
             if use_neural:
                 results = await run_in_threadpool(
                     analyze_audio, temp_audio_path, debug, 
@@ -214,6 +319,7 @@ async def analyze_audio_file(
                 )
             else:
                 results = await run_in_threadpool(analyze_audio, audio, debug)
+            inference_ms = TIMER.stop("inference")
             
             # Clean up temp file after analysis
             try:
@@ -231,6 +337,7 @@ async def analyze_audio_file(
 
             # Ensure JSON serializable
             print("[DEBUG] Building JSON response...")
+            TIMER.start("serialization")
             try:
                 clean_results = make_json_serializable(results)
                 print(f"[DEBUG] JSON serialization successful, returning response")
@@ -239,6 +346,19 @@ async def analyze_audio_file(
                 print(f"[ERROR] JSON serialization failed: {ser_err}")
                 traceback.print_exc()
                 raise
+            serialization_ms = TIMER.stop("serialization")
+            total_ms = TIMER.stop("total_request")
+            
+            # Add timing info to response
+            clean_results["_timing_ms"] = {
+                "file_read": round(file_read_ms, 2),
+                "audio_decode": round(decode_ms, 2),
+                "inference": round(inference_ms, 2),
+                "serialization": round(serialization_ms, 2),
+                "total": round(total_ms, 2),
+            }
+            
+            print(f"[TIMING] /analyze: file_read={file_read_ms:.1f}ms, decode={decode_ms:.1f}ms, inference={inference_ms:.1f}ms, serial={serialization_ms:.1f}ms, TOTAL={total_ms:.1f}ms")
 
             return JSONResponse(content=clean_results)
 
@@ -256,6 +376,85 @@ async def analyze_audio_file(
             status_code=500,
             detail=f"File processing failed: {str(e)}"
         )
+
+class SecondPassRequest(BaseModel):
+    """Request model for second pass gap-fill detection."""
+    notes: List[dict]
+    chords: List[dict]
+    min_gap_seconds: float = 0.25
+    soft_k: float = 1.2
+
+
+@app.post("/analyze-second-pass")
+async def analyze_second_pass(
+    file: UploadFile = File(...),
+    notes: str = Form(...),  # JSON string of existing notes
+    chords: str = Form(...),  # JSON string of existing chords
+    min_gap_seconds: float = Form(0.25),
+    soft_k: float = Form(1.2),
+    debug: bool = Form(False),
+):
+    """
+    Second pass detection to find soft notes missed in gaps.
+    
+    Args:
+        file: Audio file (same as original analysis)
+        notes: JSON string of existing notes from first pass
+        chords: JSON string of existing chords from first pass
+        min_gap_seconds: Minimum gap duration to search (default: 0.25s)
+        soft_k: Sensitivity threshold (lower = more sensitive, default: 1.2)
+        debug: Whether to include debug information
+        
+    Returns:
+        JSON with NEW notes and chords found in gaps
+    """
+    import json
+    
+    try:
+        # Parse existing notes/chords
+        existing_notes = json.loads(notes)
+        existing_chords = json.loads(chords)
+        
+        # Read the uploaded file
+        data = await file.read()
+        if len(data) > 100*1024*1024:
+            raise HTTPException(413, "File too large")
+        
+        # Write to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+            tmp.write(data)
+            tmp.flush()
+            temp_path = tmp.name
+        
+        try:
+            # Run second pass detection
+            results = await run_in_threadpool(
+                second_pass_gap_fill,
+                temp_path,
+                existing_notes,
+                existing_chords,
+                min_gap_seconds,
+                soft_k,
+                debug
+            )
+            
+            # Clean up
+            os.unlink(temp_path)
+            
+            clean_results = make_json_serializable(results)
+            return JSONResponse(content=clean_results)
+            
+        except Exception as e:
+            os.unlink(temp_path)
+            raise
+            
+    except json.JSONDecodeError as e:
+        raise HTTPException(400, f"Invalid JSON in notes or chords: {str(e)}")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(500, f"Second pass analysis failed: {str(e)}")
+
 
 @app.post("/analyze-raw")
 async def analyze_raw_audio(
@@ -442,9 +641,14 @@ async def stream_chunk(
     Client should send each chunk file with the same session_id for a recording session.
     """
     try:
+        TIMER.start("chunk_total")
+        TIMER.start("chunk_decode")
+        
         # Read and decode to PCM float32 mono 44.1k
         data = await file.read()
         x_chunk = _load_bytes_to_pcm(data, target_sr=44100)
+        chunk_decode_ms = TIMER.stop("chunk_decode")
+        chunk_duration_ms = len(x_chunk) / 44100 * 1000
 
         # Get session and build analysis buffer with previous tail for overlap continuity
         sess = _get_session(session_id)
@@ -457,8 +661,10 @@ async def stream_chunk(
         overlap_sec = float(tail.size) / 44100.0
 
         # Run the main analyzer on the combined buffer (use optimized if flag is set)
+        TIMER.start("chunk_inference")
         analyzer = analyze_audio_optimized if USE_OPTIMIZED_PIPELINE else analyze_audio
         results = await run_in_threadpool(analyzer, x_full, debug)
+        chunk_inference_ms = TIMER.stop("chunk_inference")
 
         # Filter out detections that lie within the leading overlap region
         def _shift_and_filter_events(evts):
@@ -487,7 +693,12 @@ async def stream_chunk(
         take = min(OVERLAP_SAMPLES, x_full.size)
         sess["tail"] = x_full[-take:].astype(np.float32, copy=False)
 
-        # Pack stream metadata
+        chunk_total_ms = TIMER.stop("chunk_total")
+        
+        # Calculate real-time factor (< 1.0 means faster than real-time)
+        rtf = chunk_total_ms / chunk_duration_ms if chunk_duration_ms > 0 else 0
+        
+        # Pack stream metadata with timing
         results_filtered["stream_info"] = {
             "session_id": session_id,
             "chunk_samples": int(x_chunk.size),
@@ -495,6 +706,16 @@ async def stream_chunk(
             "sample_cursor": int(sess["sample_cursor"]),
             "processed_sample_rate": 44100,
         }
+        
+        results_filtered["_timing_ms"] = {
+            "chunk_decode": round(chunk_decode_ms, 2),
+            "chunk_inference": round(chunk_inference_ms, 2),
+            "chunk_total": round(chunk_total_ms, 2),
+            "chunk_audio_duration": round(chunk_duration_ms, 2),
+            "real_time_factor": round(rtf, 3),
+        }
+        
+        print(f"[TIMING] /stream/chunk: decode={chunk_decode_ms:.1f}ms, inference={chunk_inference_ms:.1f}ms, TOTAL={chunk_total_ms:.1f}ms | audio={chunk_duration_ms:.0f}ms, RTF={rtf:.2f}x")
 
         return JSONResponse(content=make_json_serializable(results_filtered))
 

@@ -1155,8 +1155,8 @@ def get_gpu_transcriber() -> Optional[GpuPianoTranscriber]:
                 print(f"[GPU Transcriber] Failed to load from {path}: {e}")
                 _gpu_transcriber = None
 
-    if _gpu_transcriber is None:
-        print("[GPU Transcriber] Custom model not found, will use ByteDance fallback")
+    # Note: Custom model (piano_transcription.pt) is optional - ensemble model is primary
+    # No warning needed since ensemble_transcription.pt is the main transcriber
 
     _gpu_transcriber_loaded = True
     return _gpu_transcriber
@@ -1178,3 +1178,191 @@ def parallel_process_hands(bass_func, treble_func, bass_args, treble_args):
         treble_result = treble_future.result()
 
     return bass_result, treble_result
+
+
+# ─── GPU Multi-Resolution Ensemble Transcriber ────────────────────────────────
+
+class GpuEnsembleTranscriber(nn.Module):
+    """
+    GPU inference wrapper for multi-resolution ensemble transcription model.
+
+    Combines:
+      - MultiResFeatureExtractor (373 features from 3 STFTs + CQT + chroma + onsets)
+      - EnsembleMetaLearner (Conv1d + BiGRU, ~770K params)
+
+    Drop-in replacement for ByteDance PianoTranscription interface.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.initialized = False
+        self.config = None
+        self.extractor = None
+        self.model = None
+
+    def load_from_pt(self, path: str):
+        """Load a trained ensemble model checkpoint."""
+        checkpoint = torch.load(path, map_location=DEVICE, weights_only=False)
+        config = checkpoint.get('config', {})
+        self.config = config
+
+        # Build feature extractor
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'rhythm_training'))
+        from train_ensemble import (EnsembleMetaLearner,
+                                    MultiResFeatureExtractor)
+
+        self.extractor = MultiResFeatureExtractor(
+            sr=config.get('sample_rate', 16000),
+            hop_length=config.get('hop_length', 512),
+            device=DEVICE,
+        )
+
+        # Build and load model
+        self.model = EnsembleMetaLearner(
+            n_features=config.get('n_features', 373),
+            conv_channels=config.get('conv_channels', [256, 256, 128]),
+            gru_hidden=config.get('gru_hidden', 64),
+            gru_layers=config.get('gru_layers', 2),
+            n_keys=config.get('n_keys', 88),
+        )
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.to(DEVICE)
+        self.model.eval()
+
+        self.initialized = True
+        n_params = sum(p.numel() for p in self.model.parameters())
+        print(f"[GPU Ensemble] Loaded from {path} ({n_params:,} params)")
+
+    @torch.no_grad()
+    def transcribe(self, audio: np.ndarray, onset_threshold: float = 0.7,
+                   frame_threshold: float = 0.5,
+                   min_note_duration: float = 0.05,
+                   min_velocity: int = 15,
+                   filter_harmonics: bool = True) -> Dict:
+        """
+        Transcribe audio to note events.
+
+        Returns dict matching ByteDance format:
+            {'est_note_events': [{'onset_time', 'offset_time', 'midi_note', 'velocity'}, ...]}
+        """
+        import time
+        timings = {}
+        t_total = time.perf_counter()
+        
+        if not self.initialized:
+            return {'est_note_events': [], '_inference_timing_ms': {'error': 'not_initialized'}}
+
+        sr = self.config.get('sample_rate', 16000)
+        hop = self.config.get('hop_length', 512)
+
+        # Audio → GPU tensor
+        t0 = time.perf_counter()
+        audio_t = torch.from_numpy(audio).float().to(DEVICE)
+        timings['audio_to_gpu'] = (time.perf_counter() - t0) * 1000
+
+        # Extract multi-resolution features
+        t0 = time.perf_counter()
+        features = self.extractor.extract(audio_t)  # (1, T, 373)
+        torch.cuda.synchronize() if DEVICE.type == 'cuda' else None
+        timings['feature_extraction'] = (time.perf_counter() - t0) * 1000
+
+        # Process in overlapping chunks for long audio
+        t0 = time.perf_counter()
+        n_frames = features.size(1)
+        chunk_frames = int(10.0 * sr / hop)  # 10 second chunks
+        overlap = chunk_frames // 4
+        step = chunk_frames - overlap
+
+        n_keys = self.config.get('n_keys', 88)
+        all_onset = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_frame = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_vel = np.zeros((n_frames, n_keys), dtype=np.float32)
+        counts = np.zeros(n_frames, dtype=np.float32)
+
+        n_chunks = 0
+        for start in range(0, n_frames, step):
+            end = min(start + chunk_frames, n_frames)
+            chunk = features[:, start:end, :]  # (1, chunk_len, 373)
+
+            out = self.model(chunk)
+
+            onset_p = torch.sigmoid(out['onset_logits'][0]).cpu().numpy()
+            frame_p = torch.sigmoid(out['frame_logits'][0]).cpu().numpy()
+            vel = out['velocity'][0].cpu().numpy()
+
+            actual_len = end - start
+            all_onset[start:end] += onset_p[:actual_len]
+            all_frame[start:end] += frame_p[:actual_len]
+            all_vel[start:end] += vel[:actual_len]
+            counts[start:end] += 1.0
+            n_chunks += 1
+        
+        torch.cuda.synchronize() if DEVICE.type == 'cuda' else None
+        timings['model_inference'] = (time.perf_counter() - t0) * 1000
+
+        # Average overlapping regions
+        t0 = time.perf_counter()
+        counts = np.maximum(counts, 1.0)
+        all_onset /= counts[:, None]
+        all_frame /= counts[:, None]
+        all_vel /= counts[:, None]
+
+        # Decode note events with post-processing
+        from train_ensemble import decode_note_events
+        events = decode_note_events(
+            all_onset, all_frame, all_vel,
+            sr=sr, hop=hop,
+            onset_threshold=onset_threshold,
+            frame_threshold=frame_threshold,
+            min_note_duration=min_note_duration,
+            min_velocity=min_velocity,
+            use_peak_picking=True,
+            filter_harmonics=filter_harmonics,
+        )
+        timings['decode_notes'] = (time.perf_counter() - t0) * 1000
+        
+        timings['total'] = (time.perf_counter() - t_total) * 1000
+        timings['audio_duration_ms'] = len(audio) / sr * 1000
+        timings['n_frames'] = n_frames
+        timings['n_chunks'] = n_chunks
+        timings['real_time_factor'] = timings['total'] / timings['audio_duration_ms'] if timings['audio_duration_ms'] > 0 else 0
+        
+        print(f"[TIMING] Ensemble.transcribe: audio_to_gpu={timings['audio_to_gpu']:.1f}ms, features={timings['feature_extraction']:.1f}ms, model={timings['model_inference']:.1f}ms, decode={timings['decode_notes']:.1f}ms | TOTAL={timings['total']:.1f}ms for {timings['audio_duration_ms']:.0f}ms audio (RTF={timings['real_time_factor']:.2f}x)")
+
+        return {'est_note_events': events, '_inference_timing_ms': timings}
+
+
+# ─── Ensemble Transcriber Singleton ───────────────────────────────────────────
+
+_gpu_ensemble_transcriber: Optional[GpuEnsembleTranscriber] = None
+_gpu_ensemble_transcriber_loaded = False
+
+
+def get_gpu_ensemble_transcriber() -> Optional[GpuEnsembleTranscriber]:
+    """Lazy-load the GPU ensemble transcriber (singleton)."""
+    global _gpu_ensemble_transcriber, _gpu_ensemble_transcriber_loaded
+
+    if _gpu_ensemble_transcriber_loaded:
+        return _gpu_ensemble_transcriber
+
+    model_paths = [
+        os.path.join(os.path.dirname(__file__), 'rhythm_training', 'ensemble_transcription.pt'),
+        os.path.join(os.path.dirname(__file__), 'ensemble_transcription.pt'),
+        '/root/rhythm_training/ensemble_transcription.pt',
+    ]
+
+    for path in model_paths:
+        if os.path.exists(path):
+            try:
+                _gpu_ensemble_transcriber = GpuEnsembleTranscriber()
+                _gpu_ensemble_transcriber.load_from_pt(path)
+                break
+            except Exception as e:
+                print(f"[GPU Ensemble] Failed to load from {path}: {e}")
+                _gpu_ensemble_transcriber = None
+
+    if _gpu_ensemble_transcriber is None:
+        print("[GPU Ensemble] Model not found, will use fallback transcriber")
+
+    _gpu_ensemble_transcriber_loaded = True
+    return _gpu_ensemble_transcriber

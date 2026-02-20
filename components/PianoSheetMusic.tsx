@@ -1,10 +1,10 @@
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
 } from "react";
 import { Button, ScrollView, StyleSheet, View } from "react-native";
 import { WebView, WebViewMessageEvent } from "react-native-webview";
@@ -112,7 +112,7 @@ interface AnalysisResult {
 
 interface PianoSheetMusicProps {
   results?: AnalysisResult;
-  tempoMultiplier?: number; // 0.5 = double note values, 1 = normal, 2 = half note values
+  timeSignature?: "4/4" | "3/4" | "6/8"; // Time signature for measure grouping
 }
 
 // Helper function to convert MIDI note to step and octave
@@ -137,33 +137,30 @@ function midiToStepOctave(midi: number): { step: string; octave: number } {
 }
 
 // Function to generate MusicXML from notes
-// tempoMultiplier: 0.5 = double note values (slower), 1 = normal, 2 = half note values (faster)
+// timeSignature: "4/4" | "3/4" | "6/8" - controls beats per measure
 // bpm: Beats per minute for playback tempo marking
 function generateMeasureXmls(
   notes: NoteResult[],
   chords: ChordResult[],
-  tempoMultiplier: number = 1,
+  timeSignature: "4/4" | "3/4" | "6/8" = "4/4",
   bpm: number = 120,
 ): string[] {
   const measures: string[] = [];
-  const BEATS_PER_MEASURE = 4;
 
-  // Note type order for tempo adjustments
-  const noteTypeOrder = ["32nd", "16th", "eighth", "quarter", "half", "whole"];
-
-  // Adjust note type based on tempo multiplier
-  const adjustNoteType = (noteType?: string): string => {
-    if (!noteType || tempoMultiplier === 1) return noteType || "quarter";
-    const currentIndex = noteTypeOrder.indexOf(noteType);
-    if (currentIndex === -1) return noteType;
-    let newIndex = currentIndex;
-    if (tempoMultiplier === 2) {
-      newIndex = Math.max(0, currentIndex - 1);
-    } else if (tempoMultiplier === 0.5) {
-      newIndex = Math.min(noteTypeOrder.length - 1, currentIndex + 1);
+  // Parse time signature to get beats per measure
+  const getBeatsPerMeasure = (ts: "4/4" | "3/4" | "6/8"): number => {
+    switch (ts) {
+      case "4/4":
+        return 4;
+      case "3/4":
+        return 3;
+      case "6/8":
+        return 6 * 0.5; // 6 eighth notes = 3 quarter note beats
+      default:
+        return 4;
     }
-    return noteTypeOrder[newIndex];
   };
+  const BEATS_PER_MEASURE = getBeatsPerMeasure(timeSignature);
 
   // Helper to get beat value for a note type (considers triplets)
   const getNoteBeats = (
@@ -171,9 +168,8 @@ function generateMeasureXmls(
     dotted?: boolean,
     triplet?: boolean,
   ): number => {
-    const adjustedType = adjustNoteType(noteType);
     let beats = 1;
-    switch (adjustedType) {
+    switch (noteType) {
       case "whole":
         beats = 4;
         break;
@@ -198,8 +194,10 @@ function generateMeasureXmls(
     }
     if (dotted) beats *= 1.5;
     // Triplet: 3 notes in time of 2, so each note is 2/3 of normal
-    // Round to avoid floating-point fragmentation (1.333... -> 1.375 or 1.25)
-    if (triplet) beats = Math.round(beats * (2 / 3) * 8) / 8;
+    // Use floor to ensure triplets don't overflow (3 triplet notes should fit in 2 normal notes' time)
+    // E.g., 3 eighth note triplets: floor(0.5 * 2/3 * 8) / 8 = floor(2.67) / 8 = 2/8 = 0.25 per note
+    // Total: 0.25 * 3 = 0.75 beats (slightly less than 1 beat, but avoids overflow)
+    if (triplet) beats = Math.floor(beats * (2 / 3) * 8) / 8;
     return beats;
   };
 
@@ -211,9 +209,8 @@ function generateMeasureXmls(
     dotted?: boolean,
     triplet?: boolean,
   ): number => {
-    const adjustedType = adjustNoteType(noteType);
     let duration = 8;
-    switch (adjustedType) {
+    switch (noteType) {
       case "whole":
         duration = 32;
         break;
@@ -244,8 +241,78 @@ function generateMeasureXmls(
     return duration;
   };
 
+  // Helper to split beats into a list of (noteType, duration, dotted) tuples
+  // Used for ties that span measure boundaries
+  const splitBeatsIntoNoteTypes = (
+    beats: number,
+  ): { noteType: string; duration: number; beats: number }[] => {
+    const result: { noteType: string; duration: number; beats: number }[] = [];
+    // Note values from largest to smallest
+    const noteValues = [
+      { beats: 4, noteType: "whole", duration: 32 },
+      { beats: 3, noteType: "half", duration: 24, dotted: true }, // dotted half
+      { beats: 2, noteType: "half", duration: 16 },
+      { beats: 1.5, noteType: "quarter", duration: 12, dotted: true }, // dotted quarter
+      { beats: 1, noteType: "quarter", duration: 8 },
+      { beats: 0.75, noteType: "eighth", duration: 6, dotted: true }, // dotted eighth
+      { beats: 0.5, noteType: "eighth", duration: 4 },
+      { beats: 0.25, noteType: "16th", duration: 2 },
+      { beats: 0.125, noteType: "32nd", duration: 1 },
+    ];
+
+    let remaining = Math.round(beats * 8) / 8; // Round to 32nd note precision
+
+    while (remaining >= 0.125 - 0.001) {
+      let found = false;
+      for (const nv of noteValues) {
+        if (remaining >= nv.beats - 0.001) {
+          result.push({
+            noteType: nv.noteType,
+            duration: nv.duration,
+            beats: nv.beats,
+          });
+          remaining = Math.round((remaining - nv.beats) * 8) / 8;
+          found = true;
+          break;
+        }
+      }
+      if (!found) break;
+    }
+
+    return result;
+  };
+
+  // Generate a note XML with optional tie start/stop
+  const generateNoteXmlWithTie = (
+    pitchXml: string,
+    duration: number,
+    noteType: string,
+    staff: number,
+    tieType?: "start" | "stop" | "continue",
+    isChord?: boolean,
+  ): string => {
+    const chordTag = isChord ? "<chord/>" : "";
+    let tieXml = "";
+    let notationsXml = "";
+
+    if (tieType === "start") {
+      tieXml = '<tie type="start"/>';
+      notationsXml = '<notations><tied type="start"/></notations>';
+    } else if (tieType === "stop") {
+      tieXml = '<tie type="stop"/>';
+      notationsXml = '<notations><tied type="stop"/></notations>';
+    } else if (tieType === "continue") {
+      tieXml = '<tie type="stop"/><tie type="start"/>';
+      notationsXml =
+        '<notations><tied type="stop"/><tied type="start"/></notations>';
+    }
+
+    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration>${tieXml}<voice>${staff}</voice><type>${noteType}</type><staff>${staff}</staff>${notationsXml}</note>`;
+  };
+
+  // Return the note type (no tempo-based adjustments anymore)
   const getAdjustedNoteType = (noteType?: string): string =>
-    adjustNoteType(noteType);
+    noteType || "quarter";
 
   // Generate triplet notation XML elements
   const getTripletNotations = (
@@ -524,6 +591,7 @@ function generateMeasureXmls(
     staff: number;
     beats: number;
     xml: string[];
+    midiNotes: number[]; // Store MIDI notes for tie generation
     // Triplet metadata for cross-measure handling
     triplet?: boolean;
     tripletPosition?: "start" | "middle" | "end";
@@ -559,18 +627,24 @@ function generateMeasureXmls(
     }
 
     const staff = getStaff(n.midi_note);
-    const beats = getNoteBeats(n.note_value, n.dotted, n.triplet);
+    // Grace notes have 0 beats - they don't take up time in the measure
+    // Grace notes also cannot have triplet markings
+    const isGrace = n.ornament === "grace";
+    const beats = isGrace
+      ? 0
+      : getNoteBeats(n.note_value, n.dotted, n.triplet);
     const xml = [noteToXmlWithVoice(n, false)];
     timeline.push({
       time,
       staff,
       beats,
       xml,
-      triplet: n.triplet,
-      tripletPosition: n.triplet_position,
-      tripletType: n.triplet_type || n.note_value,
-      actualNotes: n.actual_notes,
-      normalNotes: n.normal_notes,
+      midiNotes: [n.midi_note],
+      triplet: isGrace ? false : n.triplet,
+      tripletPosition: isGrace ? undefined : n.triplet_position,
+      tripletType: isGrace ? undefined : n.triplet_type || n.note_value,
+      actualNotes: isGrace ? undefined : n.actual_notes,
+      normalNotes: isGrace ? undefined : n.normal_notes,
     });
   }
 
@@ -626,11 +700,13 @@ function generateMeasureXmls(
     );
 
     if (trebleXml.length > 0) {
+      const trebleMidiNotes = midiList.filter((m) => getStaff(m) === 1);
       timeline.push({
         time,
         staff: 1,
         beats,
         xml: trebleXml,
+        midiNotes: trebleMidiNotes,
         triplet,
         tripletPosition: c.triplet_position,
         tripletType: c.triplet_type || noteType,
@@ -639,11 +715,13 @@ function generateMeasureXmls(
       });
     }
     if (bassXml.length > 0) {
+      const bassMidiNotes = midiList.filter((m) => getStaff(m) === 2);
       timeline.push({
         time,
         staff: 2,
         beats,
         xml: bassXml,
+        midiNotes: bassMidiNotes,
         triplet,
         tripletPosition: c.triplet_position,
         tripletType: c.triplet_type || noteType,
@@ -682,9 +760,78 @@ function generateMeasureXmls(
   // Sort groups by time
   timeGroups.sort((a, b) => a.time - b.time);
 
-  // MERGE simultaneous events on the same staff into chords
-  // Use the same tolerance as TIME_TOLERANCE to ensure grouped notes become chords
-  const CHORD_MERGE_TOLERANCE = TIME_TOLERANCE; // Match grouping tolerance
+  // Deduplicate MIDI notes within each time group per staff
+  // This prevents the same note from appearing twice at the same position
+  for (const group of timeGroups) {
+    for (const staffKey of ["treble", "bass"] as const) {
+      const events = group[staffKey];
+      if (events.length <= 1) continue;
+
+      // Collect all unique MIDI notes across events in this staff/time
+      const seenMidi = new Set<number>();
+      const deduped: TimelineEvent[] = [];
+
+      for (const ev of events) {
+        const uniqueMidi = (ev.midiNotes || []).filter((m) => {
+          if (seenMidi.has(m)) return false;
+          seenMidi.add(m);
+          return true;
+        });
+
+        if (uniqueMidi.length === 0) continue;
+
+        if (uniqueMidi.length === ev.midiNotes.length) {
+          // No duplicates found in this event, keep as-is
+          deduped.push(ev);
+        } else {
+          // Rebuild XML for only the unique notes
+          const filteredXml = ev.xml.filter((xml) => {
+            // Check if this XML element's pitch is in the unique set
+            const pitchMatch = xml.match(
+              /<pitch><step>(\w+)<\/step>(?:<alter>(-?\d)<\/alter>)?<octave>(\d+)<\/octave><\/pitch>/,
+            );
+            if (!pitchMatch) return true; // Keep non-pitch elements
+            const step = pitchMatch[1];
+            const alter = pitchMatch[2] ? parseInt(pitchMatch[2]) : 0;
+            const octave = parseInt(pitchMatch[3]);
+            const noteNames = [
+              "C",
+              "C#",
+              "D",
+              "D#",
+              "E",
+              "F",
+              "F#",
+              "G",
+              "G#",
+              "A",
+              "A#",
+              "B",
+            ];
+            const stepIdx = noteNames.indexOf(
+              step + (alter === 1 ? "#" : alter === -1 ? "b" : ""),
+            );
+            const midi = stepIdx >= 0 ? (octave + 1) * 12 + stepIdx : -1;
+            return midi < 0 || uniqueMidi.includes(midi);
+          });
+
+          if (filteredXml.length > 0) {
+            deduped.push({
+              ...ev,
+              midiNotes: uniqueMidi,
+              xml: filteredXml,
+            });
+          }
+        }
+      }
+
+      group[staffKey] = deduped;
+    }
+  }
+
+  // Merge simultaneous events on the same staff into chords
+  // Events within a time group are considered simultaneous
+  const CHORD_MERGE_TOLERANCE = 0;
 
   for (const group of timeGroups) {
     // For treble: sub-group by actual time, only merge within each sub-group
@@ -713,9 +860,11 @@ function generateMeasureXmls(
         } else {
           // Merge into chord
           const mergedXml: string[] = [];
+          const mergedMidiNotes: number[] = [];
           let maxBeats = 0;
           let first = true;
           for (const ev of sg) {
+            mergedMidiNotes.push(...(ev.midiNotes || []));
             for (const xml of ev.xml) {
               if (first) {
                 mergedXml.push(xml);
@@ -732,6 +881,7 @@ function generateMeasureXmls(
             staff: 1,
             beats: maxBeats,
             xml: mergedXml,
+            midiNotes: mergedMidiNotes,
             triplet: sg[0].triplet,
             tripletPosition: sg[0].tripletPosition,
             tripletType: sg[0].tripletType,
@@ -766,9 +916,11 @@ function generateMeasureXmls(
           newBass.push(sg[0]);
         } else {
           const mergedXml: string[] = [];
+          const mergedMidiNotes: number[] = [];
           let maxBeats = 0;
           let first = true;
           for (const ev of sg) {
+            mergedMidiNotes.push(...(ev.midiNotes || []));
             for (const xml of ev.xml) {
               if (first) {
                 mergedXml.push(xml);
@@ -785,6 +937,7 @@ function generateMeasureXmls(
             staff: 2,
             beats: maxBeats,
             xml: mergedXml,
+            midiNotes: mergedMidiNotes,
             triplet: sg[0].triplet,
             tripletPosition: sg[0].tripletPosition,
             tripletType: sg[0].tripletType,
@@ -841,22 +994,37 @@ function generateMeasureXmls(
   }
 
   // ============================================================================
-  // TRIPLET VALIDATION: Ensure complete triplets (3 notes) stay together
-  // If a triplet would span measures, strip the triplet markers
+  // TRIPLET VALIDATION: Ensure triplets are valid before building measures
+  // Rules:
+  // 1. Grace notes can never be triplets
+  // 2. Triplets must be complete (start -> middle -> end = exactly 3 notes)
+  // 3. Triplets must NOT cross measure boundaries
+  // 4. All 3 notes in a triplet must have the same note type
   // ============================================================================
 
   // Helper to strip triplet markers from XML strings
   const stripTripletFromXml = (xmlArr: string[]): string[] => {
-    return xmlArr.map((xml) =>
-      xml
-        .replace(/<time-modification>.*?<\/time-modification>/g, "")
-        .replace(/<notations><tuplet[^>]*\/><\/notations>/g, "")
-        .replace(/<notations><tuplet[^>]*><\/notations>/g, ""),
-    );
+    return xmlArr.map((xml) => {
+      // Remove time-modification
+      let result = xml.replace(/<time-modification>.*?<\/time-modification>/g, "");
+      // Remove tuplet elements (may be inside notations with other content)
+      result = result.replace(/<tuplet[^>]*\/>/g, "");
+      // Clean up empty notations tags
+      result = result.replace(/<notations>\s*<\/notations>/g, "");
+      return result;
+    });
   };
 
-  // Track triplet groups per staff to validate completeness
-  // A valid triplet must have: start -> middle -> end (exactly 3 notes)
+  // Helper to strip triplet from a single event
+  const stripTripletFromEvent = (ev: TimelineEvent) => {
+    ev.xml = stripTripletFromXml(ev.xml);
+    ev.triplet = false;
+    ev.tripletPosition = undefined;
+  };
+
+  const quarterDurationSec = 60 / bpm;
+
+  // Track triplet groups per staff to validate completeness and measure alignment
   for (const staff of [1, 2] as const) {
     const events =
       staff === 1
@@ -868,30 +1036,46 @@ function generateMeasureXmls(
 
     for (const ev of events) {
       if (ev.tripletPosition === "start") {
-        // Start of a new triplet
+        // If there was a previous incomplete triplet, strip it
+        if (tripletStart) stripTripletFromEvent(tripletStart);
+        if (tripletMiddle) stripTripletFromEvent(tripletMiddle);
         tripletStart = ev;
         tripletMiddle = null;
       } else if (ev.tripletPosition === "middle" && tripletStart) {
         tripletMiddle = ev;
       } else if (ev.tripletPosition === "end") {
         if (tripletStart && tripletMiddle) {
-          // Valid triplet - all 3 notes present, keep the markers
-          // The triplet is complete and will be rendered correctly
+          // All 3 notes present - now validate measure alignment and same type
+
+          // Check all notes have the same triplet type
+          const sameType =
+            tripletStart.tripletType === tripletMiddle.tripletType &&
+            tripletMiddle.tripletType === ev.tripletType;
+
+          // Check all notes fall in the same measure
+          const startBeat = tripletStart.time / quarterDurationSec;
+          const middleBeat = tripletMiddle.time / quarterDurationSec;
+          const endBeat = ev.time / quarterDurationSec;
+
+          const startMeasure = Math.floor(startBeat / BEATS_PER_MEASURE);
+          const middleMeasure = Math.floor(middleBeat / BEATS_PER_MEASURE);
+          const endMeasure = Math.floor(endBeat / BEATS_PER_MEASURE);
+
+          const sameMeasure =
+            startMeasure === middleMeasure && middleMeasure === endMeasure;
+
+          if (!sameType || !sameMeasure) {
+            // Invalid - strip all three
+            stripTripletFromEvent(tripletStart);
+            stripTripletFromEvent(tripletMiddle);
+            stripTripletFromEvent(ev);
+          }
+          // else: valid triplet - keep markers
         } else {
-          // Incomplete triplet - strip markers
-          if (tripletStart) {
-            tripletStart.xml = stripTripletFromXml(tripletStart.xml);
-            tripletStart.triplet = false;
-            tripletStart.tripletPosition = undefined;
-          }
-          if (tripletMiddle) {
-            tripletMiddle.xml = stripTripletFromXml(tripletMiddle.xml);
-            tripletMiddle.triplet = false;
-            tripletMiddle.tripletPosition = undefined;
-          }
-          ev.xml = stripTripletFromXml(ev.xml);
-          ev.triplet = false;
-          ev.tripletPosition = undefined;
+          // Incomplete triplet - strip all present
+          if (tripletStart) stripTripletFromEvent(tripletStart);
+          if (tripletMiddle) stripTripletFromEvent(tripletMiddle);
+          stripTripletFromEvent(ev);
         }
         tripletStart = null;
         tripletMiddle = null;
@@ -899,16 +1083,8 @@ function generateMeasureXmls(
     }
 
     // Handle orphaned triplet starts/middles at the end
-    if (tripletStart) {
-      tripletStart.xml = stripTripletFromXml(tripletStart.xml);
-      tripletStart.triplet = false;
-      tripletStart.tripletPosition = undefined;
-    }
-    if (tripletMiddle) {
-      tripletMiddle.xml = stripTripletFromXml(tripletMiddle.xml);
-      tripletMiddle.triplet = false;
-      tripletMiddle.tripletPosition = undefined;
-    }
+    if (tripletStart) stripTripletFromEvent(tripletStart);
+    if (tripletMiddle) stripTripletFromEvent(tripletMiddle);
   }
 
   // ============================================================================
@@ -917,24 +1093,215 @@ function generateMeasureXmls(
   // ============================================================================
 
   // Group time groups by measure
+  type MeasureEventData = {
+    beatPos: number;
+    xml: string[];
+    beats: number;
+    midiNotes: number[];
+    staff: number;
+  };
   type MeasureData = {
-    trebleEvents: { beatPos: number; xml: string[]; beats: number }[];
-    bassEvents: { beatPos: number; xml: string[]; beats: number }[];
+    trebleEvents: MeasureEventData[];
+    bassEvents: MeasureEventData[];
   };
 
   const measuresData: MeasureData[] = [];
   let currentMeasure: MeasureData = { trebleEvents: [], bassEvents: [] };
   let currentBeatPos = 0;
 
-  // Track active triplets per staff to detect splits
-  let activeTrebleTriplet: {
-    events: typeof currentMeasure.trebleEvents;
-    measureIdx: number;
-  } | null = null;
-  let activeBassTriplet: {
-    events: typeof currentMeasure.bassEvents;
-    measureIdx: number;
-  } | null = null;
+  // Track pending tied notes that need to continue in the next measure
+  type PendingTie = {
+    midiNotes: number[];
+    remainingBeats: number;
+    staff: number;
+  };
+  let pendingTrebleTies: PendingTie[] = [];
+  let pendingBassTies: PendingTie[] = [];
+
+  // Helper to add pending ties at the start of a new measure
+  const addPendingTiesToMeasure = () => {
+    // Add treble ties
+    for (const tie of pendingTrebleTies) {
+      const beatsThisMeasure = Math.min(tie.remainingBeats, BEATS_PER_MEASURE);
+      const tieType =
+        tie.remainingBeats > BEATS_PER_MEASURE ? "continue" : "stop";
+      const segments = splitBeatsIntoNoteTypes(beatsThisMeasure);
+      const xml: string[] = [];
+
+      for (const seg of segments) {
+        let first = xml.length === 0;
+        for (const midi of tie.midiNotes) {
+          const { step, octave } = midiToStepOctave(midi);
+          let baseStep = step;
+          let alter = 0;
+          if (step.includes("#")) {
+            baseStep = step[0];
+            alter = 1;
+          } else if (step.includes("b") || step.includes("♭")) {
+            baseStep = step[0];
+            alter = -1;
+          }
+          const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
+          const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
+          xml.push(
+            generateNoteXmlWithTie(
+              pitchXml,
+              seg.duration,
+              seg.noteType,
+              1,
+              tieType,
+              !first,
+            ),
+          );
+          first = false;
+        }
+      }
+
+      currentMeasure.trebleEvents.push({
+        beatPos: 0,
+        xml,
+        beats: beatsThisMeasure,
+        midiNotes: tie.midiNotes,
+        staff: 1,
+      });
+
+      tie.remainingBeats -= beatsThisMeasure;
+    }
+    // Keep ties that still have remaining beats
+    pendingTrebleTies = pendingTrebleTies.filter(
+      (t) => t.remainingBeats > 0.001,
+    );
+
+    // Add bass ties
+    for (const tie of pendingBassTies) {
+      const beatsThisMeasure = Math.min(tie.remainingBeats, BEATS_PER_MEASURE);
+      const tieType =
+        tie.remainingBeats > BEATS_PER_MEASURE ? "continue" : "stop";
+      const segments = splitBeatsIntoNoteTypes(beatsThisMeasure);
+      const xml: string[] = [];
+
+      for (const seg of segments) {
+        let first = xml.length === 0;
+        for (const midi of tie.midiNotes) {
+          const { step, octave } = midiToStepOctave(midi);
+          let baseStep = step;
+          let alter = 0;
+          if (step.includes("#")) {
+            baseStep = step[0];
+            alter = 1;
+          } else if (step.includes("b") || step.includes("♭")) {
+            baseStep = step[0];
+            alter = -1;
+          }
+          const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
+          const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
+          xml.push(
+            generateNoteXmlWithTie(
+              pitchXml,
+              seg.duration,
+              seg.noteType,
+              2,
+              tieType,
+              !first,
+            ),
+          );
+          first = false;
+        }
+      }
+
+      currentMeasure.bassEvents.push({
+        beatPos: 0,
+        xml,
+        beats: beatsThisMeasure,
+        midiNotes: tie.midiNotes,
+        staff: 2,
+      });
+
+      tie.remainingBeats -= beatsThisMeasure;
+    }
+    pendingBassTies = pendingBassTies.filter((t) => t.remainingBeats > 0.001);
+  };
+
+  // Helper to add an event, splitting with ties if it overflows the measure
+  const addEventToMeasure = (
+    ev: TimelineEvent,
+    events: MeasureEventData[],
+    pendingTies: PendingTie[],
+  ) => {
+    const remainingInMeasure = BEATS_PER_MEASURE - currentBeatPos;
+
+    if (ev.beats <= remainingInMeasure + 0.001) {
+      // Event fits entirely in this measure
+      events.push({
+        beatPos: currentBeatPos,
+        xml: ev.xml,
+        beats: ev.beats,
+        midiNotes: ev.midiNotes || [],
+        staff: ev.staff,
+      });
+    } else {
+      // Event overflows - split with ties
+      const beatsThisMeasure = remainingInMeasure;
+      const beatsRemaining = ev.beats - beatsThisMeasure;
+
+      if (beatsThisMeasure > 0.001 && ev.midiNotes && ev.midiNotes.length > 0) {
+        // Generate tied note XML for the portion that fits
+        const segments = splitBeatsIntoNoteTypes(beatsThisMeasure);
+        const xml: string[] = [];
+
+        for (const seg of segments) {
+          let first = xml.length === 0;
+          for (const midi of ev.midiNotes) {
+            const { step, octave } = midiToStepOctave(midi);
+            let baseStep = step;
+            let alter = 0;
+            if (step.includes("#")) {
+              baseStep = step[0];
+              alter = 1;
+            } else if (step.includes("b") || step.includes("♭")) {
+              baseStep = step[0];
+              alter = -1;
+            }
+            const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
+            const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
+            xml.push(
+              generateNoteXmlWithTie(
+                pitchXml,
+                seg.duration,
+                seg.noteType,
+                ev.staff,
+                "start",
+                !first,
+              ),
+            );
+            first = false;
+          }
+        }
+
+        events.push({
+          beatPos: currentBeatPos,
+          xml,
+          beats: beatsThisMeasure,
+          midiNotes: ev.midiNotes,
+          staff: ev.staff,
+        });
+
+        // Queue the remainder for the next measure
+        pendingTies.push({
+          midiNotes: ev.midiNotes,
+          remainingBeats: beatsRemaining,
+          staff: ev.staff,
+        });
+      } else {
+        // No room in this measure, just queue the whole thing
+        pendingTies.push({
+          midiNotes: ev.midiNotes || [],
+          remainingBeats: ev.beats,
+          staff: ev.staff,
+        });
+      }
+    }
+  };
 
   for (const group of timeGroups) {
     // Get the max duration for this time group
@@ -946,8 +1313,8 @@ function generateMeasureXmls(
       group.bass.length > 0 ? Math.max(...group.bass.map((e) => e.beats)) : 0;
     const maxBeats = Math.max(trebleBeats, bassBeats, 0.125); // At least a 32nd note
 
-    // Check if this event would overflow the measure
-    if (currentBeatPos + maxBeats > BEATS_PER_MEASURE + 0.001) {
+    // Check if this event would start a new measure (no room left)
+    if (currentBeatPos >= BEATS_PER_MEASURE - 0.001) {
       // Finalize current measure
       if (
         currentMeasure.trebleEvents.length > 0 ||
@@ -958,79 +1325,45 @@ function generateMeasureXmls(
       currentMeasure = { trebleEvents: [], bassEvents: [] };
       currentBeatPos = 0;
 
-      // If we have active triplets that weren't completed, they span measures - strip markers
-      if (activeTrebleTriplet) {
-        for (const ev of activeTrebleTriplet.events) {
-          // Modify the xml array in place
-          const stripped = stripTripletFromXml(ev.xml);
-          ev.xml.length = 0;
-          ev.xml.push(...stripped);
-        }
-        activeTrebleTriplet = null;
-      }
-      if (activeBassTriplet) {
-        for (const ev of activeBassTriplet.events) {
-          // Modify the xml array in place
-          const stripped = stripTripletFromXml(ev.xml);
-          ev.xml.length = 0;
-          ev.xml.push(...stripped);
-        }
-        activeBassTriplet = null;
-      }
+      // Add any pending ties to the new measure
+      addPendingTiesToMeasure();
     }
 
-    // Add treble events and track triplets
+    // Add treble events (with overflow handling)
     for (const ev of group.treble) {
-      const evData = {
-        beatPos: currentBeatPos,
-        xml: ev.xml,
-        beats: ev.beats,
-      };
-      currentMeasure.trebleEvents.push(evData);
-
-      // Track triplet state
-      if (ev.tripletPosition === "start") {
-        activeTrebleTriplet = {
-          events: [evData],
-          measureIdx: measuresData.length,
-        };
-      } else if (ev.tripletPosition === "middle" && activeTrebleTriplet) {
-        activeTrebleTriplet.events.push(evData);
-      } else if (ev.tripletPosition === "end") {
-        activeTrebleTriplet = null; // Triplet completed successfully
-      }
+      addEventToMeasure(ev, currentMeasure.trebleEvents, pendingTrebleTies);
     }
 
-    // Add bass events and track triplets
+    // Add bass events (with overflow handling)
     for (const ev of group.bass) {
-      const evData = {
-        beatPos: currentBeatPos,
-        xml: ev.xml,
-        beats: ev.beats,
-      };
-      currentMeasure.bassEvents.push(evData);
-
-      // Track triplet state
-      if (ev.tripletPosition === "start") {
-        activeBassTriplet = {
-          events: [evData],
-          measureIdx: measuresData.length,
-        };
-      } else if (ev.tripletPosition === "middle" && activeBassTriplet) {
-        activeBassTriplet.events.push(evData);
-      } else if (ev.tripletPosition === "end") {
-        activeBassTriplet = null; // Triplet completed successfully
-      }
+      addEventToMeasure(ev, currentMeasure.bassEvents, pendingBassTies);
     }
 
-    currentBeatPos += maxBeats;
+    // Advance beat position by the maximum event duration (capped at measure boundary)
+    currentBeatPos = Math.min(currentBeatPos + maxBeats, BEATS_PER_MEASURE);
 
     // Check if measure is exactly full
     if (Math.abs(currentBeatPos - BEATS_PER_MEASURE) < 0.001) {
       measuresData.push(currentMeasure);
       currentMeasure = { trebleEvents: [], bassEvents: [] };
       currentBeatPos = 0;
+
+      // Add any pending ties to the new measure
+      addPendingTiesToMeasure();
     }
+  }
+
+  // Handle any remaining pending ties
+  while (pendingTrebleTies.length > 0 || pendingBassTies.length > 0) {
+    if (
+      currentMeasure.trebleEvents.length > 0 ||
+      currentMeasure.bassEvents.length > 0
+    ) {
+      measuresData.push(currentMeasure);
+    }
+    currentMeasure = { trebleEvents: [], bassEvents: [] };
+    currentBeatPos = 0;
+    addPendingTiesToMeasure();
   }
 
   // Push final measure if it has content
@@ -1047,10 +1380,16 @@ function generateMeasureXmls(
     const measureNum = mIdx + 1;
     let measureContent = "";
 
-    // Attributes only for first measure
+    // Attributes only for first measure - with dynamic time signature
     if (measureNum === 1) {
-      measureContent +=
-        '<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>4</beats><beat-type>4</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>';
+      // Parse time signature for XML
+      const [beats, beatType] =
+        timeSignature === "6/8"
+          ? ["6", "8"]
+          : timeSignature === "3/4"
+            ? ["3", "4"]
+            : ["4", "4"];
+      measureContent += `<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`;
       // Add tempo marking for playback
       measureContent += `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${Math.round(bpm)}</per-minute></metronome></direction-type><sound tempo="${Math.round(bpm)}"/></direction>`;
     }
@@ -1063,10 +1402,193 @@ function generateMeasureXmls(
     // Only add rests for gaps >= one full beat (quarter note or larger)
     const MIN_REST_GAP = 0.99; // Only add rests for gaps >= one beat (quarter note)
 
+    // ============================================================================
+    // CRITICAL FIX: Ensure total beats in measure don't exceed BEATS_PER_MEASURE
+    // Group events by beat position - events at same position are concurrent (chord)
+    // Also deduplicate MIDI notes to prevent overlapping noteheads
+    // ============================================================================
+
+    // Helper to extract MIDI note from a note XML element
+    const midiFromXml = (xml: string): number | null => {
+      const m = xml.match(
+        /<pitch><step>(\w+)<\/step>(?:<alter>(-?\d)<\/alter>)?<octave>(\d+)<\/octave><\/pitch>/,
+      );
+      if (!m) return null;
+      const stepNames: Record<string, number> = {
+        C: 0,
+        D: 2,
+        E: 4,
+        F: 5,
+        G: 7,
+        A: 9,
+        B: 11,
+      };
+      const base = stepNames[m[1]] ?? 0;
+      const alter = m[2] ? parseInt(m[2]) : 0;
+      const octave = parseInt(m[3]);
+      return (octave + 1) * 12 + base + alter;
+    };
+
+    const consolidateEvents = (
+      events: MeasureEventData[],
+    ): MeasureEventData[] => {
+      if (events.length === 0) return events;
+
+      // Sort by beatPos
+      events.sort((a, b) => a.beatPos - b.beatPos);
+
+      // Group events by beat position
+      const consolidated: MeasureEventData[] = [];
+      let currentGroup: MeasureEventData[] = [events[0]];
+
+      const finalizeGroup = (group: MeasureEventData[]) => {
+        const maxBeats = Math.max(...group.map((e) => e.beats));
+        const mergedXml: string[] = [];
+        const mergedMidi: number[] = [];
+        const seenMidi = new Set<number>();
+        let first = true;
+        for (const groupEv of group) {
+          for (let xi = 0; xi < groupEv.xml.length; xi++) {
+            const xml = groupEv.xml[xi];
+            const midi =
+              xi < groupEv.midiNotes.length
+                ? groupEv.midiNotes[xi]
+                : midiFromXml(xml);
+
+            // Skip duplicate MIDI notes at the same beat position
+            if (midi !== null && seenMidi.has(midi)) continue;
+            if (midi !== null) seenMidi.add(midi);
+
+            if (first) {
+              mergedXml.push(xml);
+              first = false;
+            } else if (!xml.includes("<chord/>")) {
+              mergedXml.push(xml.replace("<note>", "<note><chord/>"));
+            } else {
+              mergedXml.push(xml);
+            }
+            if (midi !== null) mergedMidi.push(midi);
+          }
+        }
+        consolidated.push({
+          beatPos: group[0].beatPos,
+          xml: mergedXml,
+          beats: maxBeats,
+          midiNotes: mergedMidi,
+          staff: group[0].staff,
+        });
+      };
+
+      for (let i = 1; i < events.length; i++) {
+        const ev = events[i];
+        if (Math.abs(ev.beatPos - currentGroup[0].beatPos) < 0.001) {
+          // Same beat position - add to current group
+          currentGroup.push(ev);
+        } else {
+          // Different beat position - finalize current group and start new one
+          finalizeGroup(currentGroup);
+          currentGroup = [ev];
+        }
+      }
+
+      // Finalize last group
+      if (currentGroup.length > 0) {
+        finalizeGroup(currentGroup);
+      }
+
+      return consolidated;
+    };
+
+    // Clamp events to ensure total doesn't exceed measure
+    // Preserves gaps where they exist in original positions
+    const clampEventsToMeasure = (
+      events: MeasureEventData[],
+    ): MeasureEventData[] => {
+      if (events.length === 0) return events;
+
+      const result: MeasureEventData[] = [];
+      let currentBeatEnd = 0; // Track where the last note ended
+
+      for (const ev of events) {
+        // Start position is either the original beatPos or where the last note ended
+        // (use max to not overlap if original position is behind current end)
+        const startPos = Math.max(ev.beatPos, currentBeatEnd);
+
+        if (startPos >= BEATS_PER_MEASURE - 0.001) {
+          // No room left - skip remaining events
+          break;
+        }
+
+        // Calculate how much room is left from this start position
+        const remaining = BEATS_PER_MEASURE - startPos;
+
+        if (ev.beats <= remaining + 0.001) {
+          // Event fits - add with updated position
+          result.push({ ...ev, beatPos: startPos });
+          currentBeatEnd = startPos + ev.beats;
+        } else {
+          // Event needs to be truncated - use the remaining space
+          const truncatedBeats = remaining;
+          if (truncatedBeats < 0.125) {
+            // Less than a 32nd note - skip
+            break;
+          }
+          const segments = splitBeatsIntoNoteTypes(truncatedBeats);
+          const xml: string[] = [];
+
+          for (const seg of segments) {
+            let first = xml.length === 0;
+            for (const midi of ev.midiNotes) {
+              const { step, octave } = midiToStepOctave(midi);
+              let baseStep = step;
+              let alter = 0;
+              if (step.includes("#")) {
+                baseStep = step[0];
+                alter = 1;
+              } else if (step.includes("b") || step.includes("♭")) {
+                baseStep = step[0];
+                alter = -1;
+              }
+              const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
+              const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
+              xml.push(
+                generateNoteXmlWithTie(
+                  pitchXml,
+                  seg.duration,
+                  seg.noteType,
+                  ev.staff,
+                  ev.xml.some((x) => x.includes('tie type="stop"'))
+                    ? "continue"
+                    : "start",
+                  !first,
+                ),
+              );
+              first = false;
+            }
+          }
+
+          result.push({
+            beatPos: startPos,
+            xml,
+            beats: truncatedBeats,
+            midiNotes: ev.midiNotes,
+            staff: ev.staff,
+          });
+          currentBeatEnd = BEATS_PER_MEASURE;
+        }
+      }
+
+      return result;
+    };
+
+    // Apply consolidation and clamping to treble events
+    const consolidatedTreble = consolidateEvents([...mData.trebleEvents]);
+    const clampedTreble = clampEventsToMeasure(consolidatedTreble);
+
     // Write ALL treble events first (with rests only for significant gaps)
     let trebleBeatPos = 0;
-    for (let evIdx = 0; evIdx < mData.trebleEvents.length; evIdx++) {
-      const ev = mData.trebleEvents[evIdx];
+    for (let evIdx = 0; evIdx < clampedTreble.length; evIdx++) {
+      const ev = clampedTreble[evIdx];
       const gap = ev.beatPos - trebleBeatPos;
 
       if (gap > MIN_REST_GAP) {
@@ -1099,10 +1621,14 @@ function generateMeasureXmls(
       measureContent += `<backup><duration>${backupDuration}</duration></backup>`;
     }
 
+    // Apply consolidation and clamping to bass events
+    const consolidatedBass = consolidateEvents([...mData.bassEvents]);
+    const clampedBass = clampEventsToMeasure(consolidatedBass);
+
     // Write ALL bass events (with rests only for significant gaps)
     let bassBeatPos = 0;
-    for (let evIdx = 0; evIdx < mData.bassEvents.length; evIdx++) {
-      const ev = mData.bassEvents[evIdx];
+    for (let evIdx = 0; evIdx < clampedBass.length; evIdx++) {
+      const ev = clampedBass[evIdx];
       const gap = ev.beatPos - bassBeatPos;
 
       if (gap > MIN_REST_GAP) {
@@ -1138,10 +1664,10 @@ function generateMeasureXmls(
 function generateMusicXML(
   notes: NoteResult[],
   chords: ChordResult[],
-  tempoMultiplier: number = 1,
+  timeSignature: "4/4" | "3/4" | "6/8" = "4/4",
   bpm: number = 120,
 ): string {
-  const measures = generateMeasureXmls(notes, chords, tempoMultiplier, bpm);
+  const measures = generateMeasureXmls(notes, chords, timeSignature, bpm);
   const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n<score-partwise version="3.1">\n  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>\n  <part id="P1">${measures.join("")}</part></score-partwise>`;
   console.log(xml);
   return xml;
@@ -1173,7 +1699,7 @@ const FALLBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
 // Drop-in replacement component:
 export default function PianoSheetMusic({
   results,
-  tempoMultiplier = 1,
+  timeSignature = "4/4",
 }: PianoSheetMusicProps) {
   // accumulate incoming note blocks so live updates append to the end
   const [accumulatedNotes, setAccumulatedNotes] = useState<NoteResult[]>([]);
@@ -1249,10 +1775,10 @@ export default function PianoSheetMusic({
     return generateMusicXML(
       accumulatedNotes,
       accumulatedChords,
-      tempoMultiplier,
+      timeSignature,
       detectedBPM,
     );
-  }, [accumulatedNotes, accumulatedChords, tempoMultiplier, detectedBPM]);
+  }, [accumulatedNotes, accumulatedChords, timeSignature, detectedBPM]);
 
   const webRef = useRef<WebView>(null);
   const source = useMemo(() => ({ html: OSMD_HTML }), []);
@@ -1395,7 +1921,11 @@ export default function PianoSheetMusic({
     // small guard: only post if webview ref exists
     if (!webRef.current) return;
 
-    const measures = generateMeasureXmls(accumulatedNotes, accumulatedChords);
+    const measures = generateMeasureXmls(
+      accumulatedNotes,
+      accumulatedChords,
+      timeSignature,
+    );
 
     // If we have never sent anything, send the full score and save it
     if (measuresSentRef.current === 0 || !lastXmlRef.current) {
@@ -1453,7 +1983,7 @@ export default function PianoSheetMusic({
         console.warn("Failed posting appended renderXml", e);
       }
     }
-  }, [accumulatedNotes, accumulatedChords, post, score]);
+  }, [accumulatedNotes, accumulatedChords, post, score, timeSignature]);
 
   // unlock orientation on unmount to avoid locking the device permanently
   useEffect(() => {
@@ -1474,13 +2004,8 @@ export default function PianoSheetMusic({
       scrollEnabled={!isLandscape}
     >
       <View style={styles.mainContainer}>
-        <ThemedText type="subtitle" style={styles.title}>
-          Piano Sheet Music
-        </ThemedText>
-
-        {/* Playback Controls - Clear and Prominent */}
+        {/* Playback Controls - Clean and Minimal */}
         <View style={styles.playbackSection}>
-          <ThemedText style={styles.sectionLabel}>Playback</ThemedText>
           <View style={styles.playbackControls}>
             <View style={styles.playButtonContainer}>
               <Button
@@ -1552,28 +2077,12 @@ export default function PianoSheetMusic({
           </ScrollView>
         </View>
 
-        {/* View Controls - Secondary */}
+        {/* Minimal View Controls */}
         <View style={styles.viewControlsSection}>
-          <ThemedText style={styles.sectionLabel}>View Controls</ThemedText>
           <View style={styles.viewControls}>
             <Button
-              title="Zoom −"
-              color="#3498db"
-              onPress={() => post({ type: "setZoom", zoom: 0.9 })}
-            />
-            <Button
-              title="Zoom +"
-              color="#3498db"
-              onPress={() => post({ type: "setZoom", zoom: 1.1 })}
-            />
-            <Button
-              title="Reset Cursor"
-              color="#9b59b6"
-              onPress={() => post({ type: "cursorReset" })}
-            />
-            <Button
-              title="Clear Score"
-              color="#e74c3c"
+              title="Clear"
+              color="#95a5a6"
               onPress={() => {
                 setAccumulatedNotes([]);
                 setAccumulatedChords([]);

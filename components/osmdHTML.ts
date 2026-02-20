@@ -242,6 +242,9 @@ export const OSMD_HTML = `
     let playbackStartTime = 0;
     let pausedAtTime = 0;
     let playbackBPM = 120;
+    let cursorAnimationFrameId = null;
+    let cursorPositions = [];
+    let currentCursorIndex = 0;
     
     // ─── Ensure Audio Context is Ready ───
     async function ensureAudioContext() {
@@ -650,12 +653,12 @@ export const OSMD_HTML = `
       });
       
       // Schedule cursor advances based on OSMD's internal structure
-      // Use the actual graphical note entries from OSMD for accurate sync
+      // Use continuous position tracking instead of discrete scheduling for responsiveness
       if (osmd && osmd.cursor && osmd.Sheet) {
         try {
           // Get all the timestamp positions from the cursor iterator
           osmd.cursor.reset();
-          let iteratorPositions = [];
+          cursorPositions = [];
           let safetyCounter = 0;
           const maxIterations = 10000; // Prevent infinite loop
           
@@ -666,7 +669,7 @@ export const OSMD_HTML = `
               // OSMD uses quarter notes as the base, so timestamp.RealValue * 4 = beats
               const beats = timestamp.RealValue * 4;
               const timeInSeconds = beats * (60.0 / playbackBPM);
-              iteratorPositions.push(timeInSeconds);
+              cursorPositions.push(timeInSeconds);
             }
             osmd.cursor.next();
             safetyCounter++;
@@ -675,21 +678,35 @@ export const OSMD_HTML = `
           // Reset cursor to start
           osmd.cursor.reset();
           osmd.cursor.show();
+          currentCursorIndex = 0;
           
-          // Schedule cursor movements at each position
-          let cursorIndex = 0;
-          iteratorPositions.forEach((posTime, idx) => {
-            if (idx > 0) { // Skip first position (cursor already there)
-              Tone.Transport.schedule((time) => {
-                Tone.Draw.schedule(() => {
-                  if (osmd && osmd.cursor) {
-                    osmd.cursor.next();
-                    scrollCursorIntoView();
-                  }
-                }, time);
-              }, posTime);
+          // Use requestAnimationFrame for smooth cursor tracking
+          function updateCursor() {
+            if (!isPlaying) {
+              return; // Stop loop when not playing
             }
-          });
+            
+            if (!isPaused) {
+              const currentTime = Tone.Transport.seconds;
+              
+              // Advance cursor while we're past the next position (with small lookahead)
+              while (currentCursorIndex < cursorPositions.length - 1 && 
+                     currentTime >= cursorPositions[currentCursorIndex + 1] - 0.015) {
+                if (osmd && osmd.cursor) {
+                  osmd.cursor.next();
+                  currentCursorIndex++;
+                  scrollCursorIntoView();
+                }
+              }
+            }
+            
+            // Continue animation loop while playing
+            cursorAnimationFrameId = requestAnimationFrame(updateCursor);
+          }
+          
+          // Start the cursor tracking loop
+          cursorAnimationFrameId = requestAnimationFrame(updateCursor);
+          
         } catch (e) {
           console.warn('Cursor sync error, falling back to beat-based:', e);
           // Fallback: advance cursor on each beat
@@ -739,6 +756,13 @@ export const OSMD_HTML = `
     
     // ─── Stop Playback ───
     function stopPlayback() {
+      // Cancel cursor animation
+      if (cursorAnimationFrameId) {
+        cancelAnimationFrame(cursorAnimationFrameId);
+        cursorAnimationFrameId = null;
+      }
+      currentCursorIndex = 0;
+      
       Tone.Transport.stop();
       Tone.Transport.cancel();
       scheduledEvents = [];

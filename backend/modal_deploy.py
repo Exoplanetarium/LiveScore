@@ -99,16 +99,28 @@ image = image.add_local_file("gpu_ops.py", "/root/gpu_ops.py")
 image = image.add_local_file("rhythm_training/__init__.py", "/root/rhythm_training/__init__.py")
 image = image.add_local_file("rhythm_training/rhythm_model.py", "/root/rhythm_training/rhythm_model.py")
 image = image.add_local_file("rhythm_training/rhythm_model.npz", "/root/rhythm_training/rhythm_model.npz")
+# Add ensemble transcription model (trained multi-resolution model)
+image = image.add_local_file("rhythm_training/train_ensemble.py", "/root/rhythm_training/train_ensemble.py")
+image = image.add_local_file("rhythm_training/ensemble_transcription.pt", "/root/rhythm_training/ensemble_transcription.pt")
 
 
 @app.function(
     image=image,
     gpu="L40S",
     timeout=600,
+    scaledown_window=300,  # Keep container alive for 5 minutes after last request
 )
 @modal.asgi_app()
 def fastapi_app():
     import sys
     sys.path.insert(0, "/root")
+    
+    # Pre-load models on container startup (before first request)
+    print("[Warmup] Pre-loading models...")
+    from gpu_ops import get_gpu_ensemble_transcriber, get_gpu_rhythm_model
+    get_gpu_ensemble_transcriber()
+    get_gpu_rhythm_model()
+    print("[Warmup] Models loaded!")
+    
     from main import app as fastapi 
     return fastapi

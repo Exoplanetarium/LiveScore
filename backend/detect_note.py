@@ -41,12 +41,12 @@ USE_GPU = _HAS_TORCH and _CUDA_AVAILABLE
 if USE_GPU:
     try:
         from gpu_ops import USE_GPU as _GPU_OPS_READY
-        from gpu_ops import (fused_noise_reduce, get_gpu_rhythm_model,
-                             get_gpu_transcriber,
-                             get_gpu_transformer_model, gpu_extract_features_v2,
+        from gpu_ops import (fused_noise_reduce, get_gpu_ensemble_transcriber,
+                             get_gpu_rhythm_model, get_gpu_transcriber,
+                             get_gpu_transformer_model,
                              gpu_batch_multiband_gate, gpu_compute_stft_once,
                              gpu_cqt, gpu_extract_features,
-                             gpu_magnitude_and_flux,
+                             gpu_extract_features_v2, gpu_magnitude_and_flux,
                              gpu_multiband_spectral_gate,
                              parallel_process_hands, print_gpu_info)
         USE_GPU = _GPU_OPS_READY
@@ -411,46 +411,57 @@ def detect_ornaments(notes, bpm, debug=False):
     
     # ============ GRACE NOTE DETECTION ============
     # Very short note immediately before a longer note
-    # Must be both short in beats AND absolute time (under 100ms)
+    # Tightened condition: only mark as grace if it doesn't fit well as a 32nd note
+    # (or smaller quantized value). Prefer regular notation when possible.
     i = 0
     while i < len(sorted_notes) - 1:
         if i in notes_to_remove:
             i += 1
             continue
-            
+
         note = sorted_notes[i]
         next_note = sorted_notes[i + 1]
-        
+
         if i + 1 in notes_to_remove:
             i += 1
             continue
-        
+
         duration = note.get('duration_seconds', 0.5)
         duration_beats = duration / beat_duration
-        
-        # Grace notes are very short - less than 1/8 of a beat AND under 100ms absolute
-        if duration_beats < 0.125 and duration < 0.1:
+
+        # Check if this note fits reasonably well as a 32nd note (0.125 beats)
+        # If the quantization error to 32nd note is small, prefer 32nd note over grace
+        thirty_second_beats = 0.125
+        quant_error_32nd = abs(duration_beats - thirty_second_beats) / thirty_second_beats if thirty_second_beats > 0 else 999
+        fits_as_32nd = quant_error_32nd < 0.5  # Within 50% of a 32nd note duration
+
+        # Grace notes must be extremely short AND not fit well as a 32nd note:
+        # - Less than half a 32nd note in beats (< 0.0625 beats)
+        # - Under 60ms absolute time
+        # - Must NOT fit well as a quantized 32nd note
+        if duration_beats < 0.0625 and duration < 0.06 and not fits_as_32nd:
             # Check the interval to the next note
             pitch1 = note.get('midi_note', 60)
             pitch2 = next_note.get('midi_note', 60)
             interval = abs(pitch2 - pitch1)
-            
+
             # Grace notes are usually stepwise or small leaps (within an octave)
             if interval <= 12:
-                # Check that next note is longer
+                # Check that next note is significantly longer (at least 4x)
                 next_dur_beats = next_note.get('duration_seconds', 0.5) / beat_duration
-                
-                if next_dur_beats >= duration_beats * 2:
+
+                if next_dur_beats >= duration_beats * 4:
                     # This is likely a grace note
                     note['ornament'] = 'grace'
                     note['grace_type'] = 'acciaccatura' if interval <= 2 else 'appoggiatura'
                     note['note_value'] = 'grace'
                     note['note_divisions'] = 0  # Grace notes don't count in rhythm
-                    
+
                     if debug:
                         note_name = note.get('note_name', '?')
                         print(f"[Ornament] Grace note detected: {note_name} -> "
-                              f"{next_note.get('note_name', '?')}")
+                              f"{next_note.get('note_name', '?')} "
+                              f"(dur={duration*1000:.1f}ms, {duration_beats:.4f} beats)")
         i += 1
     
     # ============ MORDENT DETECTION ============
@@ -784,7 +795,7 @@ def detect_and_normalize_runs(notes, bpm, debug=False):
     return sorted_notes
 
 
-def detect_beats_neural(audio_path, debug=False):
+def detect_beats_neural(audio_path_or_array, sr=None, debug=False):
     """
     Use neural network beat tracking for accurate beat grid detection.
     
@@ -792,32 +803,47 @@ def detect_beats_neural(audio_path, debug=False):
     accurate than simple onset-based tempo detection.
     
     Args:
-        audio_path: Path to audio file
+        audio_path_or_array: Path to audio file OR pre-loaded numpy array
+        sr: Sample rate (required if passing array, ignored if passing path)
         debug: Print debug info
     
     Returns:
         dict with 'beats' (array of beat times in seconds), 'bpm', 'confidence'
     """
+    # Use 22050Hz for beat detection - sufficient for tempo and 2x faster
+    BEAT_SR = 22050
+    BEAT_HOP = 512
+    
     try:
-        # Load audio
-        y, sr = librosa.load(audio_path, sr=SAMPLE_RATE, mono=True)
+        # Load audio or use pre-loaded
+        if isinstance(audio_path_or_array, (str, bytes)) or hasattr(audio_path_or_array, '__fspath__'):
+            y, sr = load_audio_deterministic(audio_path_or_array, target_sr=BEAT_SR)
+        else:
+            y = audio_path_or_array
+            if sr is None:
+                raise ValueError("Sample rate (sr) must be provided when passing audio array")
+            # Downsample if needed for faster beat tracking
+            if sr != BEAT_SR:
+                gcd = math.gcd(sr, BEAT_SR)
+                y = resample_poly(y, BEAT_SR // gcd, sr // gcd).astype(np.float32, copy=False)
+                sr = BEAT_SR
         
         # Use librosa's beat tracker (uses a pretrained model under the hood)
         # This is more accurate than simple autocorrelation
         tempo, beat_frames = librosa.beat.beat_track(
             y=y, sr=sr, 
-            hop_length=HOP_SIZE,
+            hop_length=BEAT_HOP,
             start_bpm=120,
             tightness=100,  # How tightly to adhere to tempo estimate
             trim=True
         )
         
         # Convert frames to times
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=HOP_SIZE)
+        beat_times = librosa.frames_to_time(beat_frames, sr=sr, hop_length=BEAT_HOP)
         
         # Calculate confidence from beat strength consistency
         # Get onset envelope
-        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=HOP_SIZE)
+        onset_env = librosa.onset.onset_strength(y=y, sr=sr, hop_length=BEAT_HOP)
         
         # Sample onset envelope at beat positions
         if len(beat_frames) > 0:
@@ -1761,15 +1787,21 @@ def reduce_rest_entropy(notes, bpm, debug=False):
 
 def enforce_triplet_groups(notes, debug=False):
     """
-    Ensure triplets only appear in groups of 3 consecutive notes.
-    
-    Isolated triplet markings are likely false positives from the ML model.
-    Real triplets come in threes (or multiples of 3).
-    
+    Ensure triplets only appear in valid groups of exactly 3 consecutive notes
+    of the same duration.
+
+    Rules:
+    - Only consecutive notes with the same note_value can form a triplet group
+    - A change in note_value breaks the run
+    - Only groups of exactly 3 are valid; for runs of 6, 9, etc. each sub-group
+      of 3 is independent (but all must be same note_value)
+    - Remainders (e.g. 2 leftover notes in a run of 5) get stripped
+    - Grace notes are never triplets
+
     Args:
         notes: List of notes with 'is_triplet' field
         debug: Print debug info
-        
+
     Returns:
         Modified notes with isolated triplets converted to non-triplets
     """
@@ -1777,38 +1809,85 @@ def enforce_triplet_groups(notes, debug=False):
         for note in notes:
             note['is_triplet'] = False
         return notes
-    
-    # Find runs of consecutive triplets
+
+    # Find runs of consecutive triplets with the SAME note_value
+    # A change in note_value breaks the run
     triplet_runs = []
     run_start = None
-    
+    run_note_value = None
+
     for i, note in enumerate(notes):
+        # Grace notes can never be triplets
+        if note.get('ornament') == 'grace':
+            note['is_triplet'] = False
+            if run_start is not None:
+                triplet_runs.append((run_start, i))
+                run_start = None
+                run_note_value = None
+            continue
+
         if note.get('is_triplet', False):
+            current_value = note.get('note_value', 'quarter')
             if run_start is None:
                 run_start = i
+                run_note_value = current_value
+            elif current_value != run_note_value:
+                # Different note value breaks the run
+                triplet_runs.append((run_start, i))
+                run_start = i
+                run_note_value = current_value
         else:
             if run_start is not None:
                 triplet_runs.append((run_start, i))
                 run_start = None
-    
+                run_note_value = None
+
     # Handle run that extends to end
     if run_start is not None:
         triplet_runs.append((run_start, len(notes)))
-    
-    # Remove triplet marking from runs that aren't multiples of 3
+
+    # For each run, keep only the first (run_len // 3) * 3 notes as triplets
+    # Strip the remainder
     removed_count = 0
     for start, end in triplet_runs:
         run_len = end - start
-        if run_len < 3 or run_len % 3 != 0:
-            # Not a valid triplet group - remove triplet marking
+        usable = (run_len // 3) * 3
+        if usable < 3:
+            # Not enough for even one triplet group - strip all
             for i in range(start, end):
                 notes[i]['is_triplet'] = False
             removed_count += run_len
-    
+        elif usable < run_len:
+            # Keep the first 'usable' notes, strip the remainder
+            for i in range(start + usable, end):
+                notes[i]['is_triplet'] = False
+            removed_count += (run_len - usable)
+
     if debug and removed_count > 0:
         print(f"  [Triplet cleanup] Removed {removed_count} isolated triplet markings")
-    
+
     return notes
+
+
+def strip_triplets_from_grace_notes(items):
+    """
+    Strip triplet markings from grace notes - they should never be triplets.
+    Works for both notes and chords.
+
+    Args:
+        items: List of note or chord dicts
+
+    Returns:
+        The same list with triplet info removed from grace notes
+    """
+    for item in items:
+        if item.get('ornament') == 'grace' and item.get('triplet'):
+            item['triplet'] = False
+            item.pop('triplet_position', None)
+            item.pop('triplet_type', None)
+            item.pop('actual_notes', None)
+            item.pop('normal_notes', None)
+    return items
 
 
 def quantize_rhythm_from_ioi(notes, bpm, debug=False):
@@ -2226,28 +2305,30 @@ def detect_triplets(notes, bpm=120, tolerance=0.15):
     """
     Detect triplet patterns in a sequence of notes.
     Triplets are EXACTLY 3 notes played in the time of 2 regular notes.
-    
+
     STRICT REQUIREMENTS:
-    1. Must have exactly 3 consecutive notes
+    1. Must have exactly 3 consecutive notes (or a multiple of 3, split into groups)
     2. Both inter-note spacings must be nearly equal to each other
     3. Both spacings must match a known triplet pattern for the tempo
     4. The note before (if any) must NOT have the same spacing
-    5. The note after (if any) must NOT have the same spacing
-    6. All 3 notes must be valid (have time_seconds)
-    
+    5. The note after the run must NOT have the same spacing
+    6. All notes must be valid (have time_seconds)
+    7. Grace notes are excluded from triplet detection
+    8. Rests can be part of a triplet group but if all 3 are rests, use a single rest
+
     Args:
         notes: List of note dictionaries with 'time_seconds' field
         bpm: Beats per minute
         tolerance: Timing tolerance as fraction (0.15 = 15% tolerance)
-    
+
     Returns:
         List of notes with triplet information added
     """
     if len(notes) < 3:
         return notes
-    
+
     beat_duration = 60.0 / bpm
-    
+
     # Triplet patterns: (type, expected_spacing_between_notes)
     triplet_patterns = [
         ('half', beat_duration * 4 / 3),      # 3 in time of 2 half notes
@@ -2256,85 +2337,137 @@ def detect_triplets(notes, bpm=120, tolerance=0.15):
         ('16th', beat_duration / 6),           # 3 in time of 2 16ths
         ('32nd', beat_duration / 12),          # 3 in time of 2 32nds
     ]
-    
+
     # Track which note indices are part of a triplet
     triplet_assigned = set()
-    
+
     i = 0
     while i <= len(notes) - 3:  # Need at least 3 notes from position i
         if i in triplet_assigned:
             i += 1
             continue
-        
-        # Get all 3 notes
-        note0 = notes[i]
-        note1 = notes[i + 1]
-        note2 = notes[i + 2]
-        
+
+        # Skip grace notes - they cannot be part of triplets
+        if notes[i].get('ornament') == 'grace':
+            i += 1
+            continue
+
+        # Get the first 3 notes (skipping grace notes in between)
+        candidates = []
+        ci = i
+        while ci < len(notes) and len(candidates) < 3:
+            if notes[ci].get('ornament') == 'grace':
+                ci += 1
+                continue
+            candidates.append(ci)
+            ci += 1
+
+        if len(candidates) < 3:
+            i += 1
+            continue
+
+        idx0, idx1, idx2 = candidates[0], candidates[1], candidates[2]
+        note0 = notes[idx0]
+        note1 = notes[idx1]
+        note2 = notes[idx2]
+
         # VALIDATION: All notes must have valid time_seconds
         t0 = note0.get('time_seconds')
         t1 = note1.get('time_seconds')
         t2 = note2.get('time_seconds')
-        
+
         if t0 is None or t1 is None or t2 is None:
             i += 1
             continue
-        
+
         # Calculate spacings between consecutive notes
         spacing1 = t1 - t0
         spacing2 = t2 - t1
-        
+
         # VALIDATION: Spacings must be positive
         if spacing1 <= 0 or spacing2 <= 0:
             i += 1
             continue
-        
+
         # VALIDATION: The two spacings must be very close to each other
         avg_spacing = (spacing1 + spacing2) / 2
         if avg_spacing < 0.02:  # Too fast to be meaningful
             i += 1
             continue
-        
+
         spacing_diff = abs(spacing1 - spacing2) / avg_spacing
         if spacing_diff > tolerance:
             # Spacings are too different - not a triplet
             i += 1
             continue
-        
+
         # Try to match a triplet pattern
         matched = False
         for triplet_type, expected_spacing in triplet_patterns:
             tol = expected_spacing * tolerance
-            
+
             # VALIDATION: Both spacings must match expected triplet spacing
             if abs(spacing1 - expected_spacing) > tol:
                 continue
             if abs(spacing2 - expected_spacing) > tol:
                 continue
-            
-            # VALIDATION: Note BEFORE must NOT have the same spacing (ensures start of triplet)
-            if i > 0:
-                t_prev = notes[i - 1].get('time_seconds')
-                if t_prev is not None:
-                    spacing_before = t0 - t_prev
-                    if spacing_before > 0 and abs(spacing_before - expected_spacing) <= tol:
-                        # Previous note has same spacing - we're in the middle of something
-                        continue
-            
-            # VALIDATION: Note AFTER must NOT have the same spacing (ensures end of triplet)
-            if i + 3 < len(notes):
-                t_next = notes[i + 3].get('time_seconds')
-                if t_next is not None:
-                    spacing_after = t_next - t2
+
+            # VALIDATION: Note BEFORE must NOT have the same spacing (ensures start of run)
+            if idx0 > 0:
+                # Find previous non-grace note
+                prev_idx = idx0 - 1
+                while prev_idx >= 0 and notes[prev_idx].get('ornament') == 'grace':
+                    prev_idx -= 1
+                if prev_idx >= 0:
+                    t_prev = notes[prev_idx].get('time_seconds')
+                    if t_prev is not None:
+                        spacing_before = t0 - t_prev
+                        if spacing_before > 0 and abs(spacing_before - expected_spacing) <= tol:
+                            # Previous note has same spacing - we're in the middle of something
+                            continue
+
+            # Count how many consecutive notes share this spacing (the full run)
+            run_indices = [idx0, idx1, idx2]
+            scan = idx2
+            while True:
+                # Find next non-grace note
+                next_scan = scan + 1
+                while next_scan < len(notes) and notes[next_scan].get('ornament') == 'grace':
+                    next_scan += 1
+                if next_scan >= len(notes):
+                    break
+                t_curr = notes[scan].get('time_seconds')
+                t_next = notes[next_scan].get('time_seconds')
+                if t_curr is None or t_next is None:
+                    break
+                sp = t_next - t_curr
+                if sp > 0 and abs(sp - expected_spacing) <= tol:
+                    run_indices.append(next_scan)
+                    scan = next_scan
+                else:
+                    break
+
+            # VALIDATION: Note AFTER the run must NOT have the same spacing
+            last_run_idx = run_indices[-1]
+            next_after = last_run_idx + 1
+            while next_after < len(notes) and notes[next_after].get('ornament') == 'grace':
+                next_after += 1
+            if next_after < len(notes):
+                t_last = notes[last_run_idx].get('time_seconds')
+                t_after = notes[next_after].get('time_seconds')
+                if t_last is not None and t_after is not None:
+                    spacing_after = t_after - t_last
                     if spacing_after > 0 and abs(spacing_after - expected_spacing) <= tol:
-                        # Next note has same spacing - this is more than 3 notes
+                        # Run extends further - but we already scanned it, shouldn't happen
                         continue
-            
-            # ALL VALIDATIONS PASSED - This is a valid triplet of exactly 3 notes
-            triplet_assigned.add(i)
-            triplet_assigned.add(i + 1)
-            triplet_assigned.add(i + 2)
-            
+
+            run_len = len(run_indices)
+
+            # Only use the portion that's a multiple of 3
+            usable = (run_len // 3) * 3
+            if usable < 3:
+                continue
+
             triplet_beats = {
                 'half': 4/3,
                 'quarter': 2/3,
@@ -2342,161 +2475,20 @@ def detect_triplets(notes, bpm=120, tolerance=0.15):
                 '16th': 1/6,
                 '32nd': 1/12,
             }[triplet_type]
-            
-            # Mark all 3 notes
-            note0.update({
-                'triplet': True,
-                'triplet_position': 'start',
-                'triplet_type': triplet_type,
-                'actual_notes': 3,
-                'normal_notes': 2,
-                'note_value': triplet_type,
-                'note_divisions': triplet_beats,
-                'dotted': False
-            })
-            note1.update({
-                'triplet': True,
-                'triplet_position': 'middle',
-                'triplet_type': triplet_type,
-                'actual_notes': 3,
-                'normal_notes': 2,
-                'note_value': triplet_type,
-                'note_divisions': triplet_beats,
-                'dotted': False
-            })
-            note2.update({
-                'triplet': True,
-                'triplet_position': 'end',
-                'triplet_type': triplet_type,
-                'actual_notes': 3,
-                'normal_notes': 2,
-                'note_value': triplet_type,
-                'note_divisions': triplet_beats,
-                'dotted': False
-            })
-            
-            matched = True
-            i += 3  # Skip past the triplet
-            break
-        
-        if not matched:
-            i += 1
-    
-    return notes
 
+            # Split into groups of 3 and mark each group
+            for g in range(0, usable, 3):
+                gi0 = run_indices[g]
+                gi1 = run_indices[g + 1]
+                gi2 = run_indices[g + 2]
 
-def detect_triplets_in_chords(chords, bpm=120, tolerance=0.15):
-    """
-    Detect triplet patterns in a sequence of chords.
-    
-    STRICT REQUIREMENTS (same as detect_triplets):
-    1. Must have exactly 3 consecutive chords
-    2. Both inter-chord spacings must be nearly equal to each other
-    3. Both spacings must match a known triplet pattern for the tempo
-    4. The chord before (if any) must NOT have the same spacing
-    5. The chord after (if any) must NOT have the same spacing
-    6. All 3 chords must have valid time_seconds
-    """
-    if len(chords) < 3:
-        return chords
-    
-    beat_duration = 60.0 / bpm
-    
-    triplet_patterns = [
-        ('half', beat_duration * 4 / 3),
-        ('quarter', beat_duration * 2 / 3),
-        ('eighth', beat_duration / 3),
-        ('16th', beat_duration / 6),
-        ('32nd', beat_duration / 12),
-    ]
-    
-    triplet_assigned = set()
-    
-    i = 0
-    while i <= len(chords) - 3:
-        if i in triplet_assigned:
-            i += 1
-            continue
-        
-        chord0 = chords[i]
-        chord1 = chords[i + 1]
-        chord2 = chords[i + 2]
-        
-        # VALIDATION: All chords must have valid time_seconds
-        t0 = chord0.get('time_seconds')
-        t1 = chord1.get('time_seconds')
-        t2 = chord2.get('time_seconds')
-        
-        if t0 is None or t1 is None or t2 is None:
-            i += 1
-            continue
-        
-        # Calculate spacings
-        spacing1 = t1 - t0
-        spacing2 = t2 - t1
-        
-        # VALIDATION: Spacings must be positive
-        if spacing1 <= 0 or spacing2 <= 0:
-            i += 1
-            continue
-        
-        # VALIDATION: The two spacings must be very close to each other
-        avg_spacing = (spacing1 + spacing2) / 2
-        if avg_spacing < 0.02:  # Too fast
-            i += 1
-            continue
-        
-        spacing_diff = abs(spacing1 - spacing2) / avg_spacing
-        if spacing_diff > tolerance:
-            i += 1
-            continue
-        
-        # Try to match a triplet pattern
-        matched = False
-        for triplet_type, expected_spacing in triplet_patterns:
-            tol = expected_spacing * tolerance
-            
-            # VALIDATION: Both spacings must match expected triplet spacing
-            if abs(spacing1 - expected_spacing) > tol:
-                continue
-            if abs(spacing2 - expected_spacing) > tol:
-                continue
-            
-            # VALIDATION: Chord BEFORE must NOT have the same spacing (ensures start of triplet)
-            if i > 0:
-                t_prev = chords[i - 1].get('time_seconds')
-                if t_prev is not None:
-                    spacing_before = t0 - t_prev
-                    if spacing_before > 0 and abs(spacing_before - expected_spacing) <= tol:
-                        # Previous chord has same spacing - not start of triplet
-                        continue
-            
-            # VALIDATION: Chord AFTER must NOT have the same spacing (ensures end of triplet)
-            if i + 3 < len(chords):
-                t_next = chords[i + 3].get('time_seconds')
-                if t_next is not None:
-                    spacing_after = t_next - t2
-                    if spacing_after > 0 and abs(spacing_after - expected_spacing) <= tol:
-                        # Next chord has same spacing - more than 3 notes
-                        continue
-            
-            # ALL VALIDATIONS PASSED - This is a valid triplet of exactly 3 chords
-            triplet_assigned.add(i)
-            triplet_assigned.add(i + 1)
-            triplet_assigned.add(i + 2)
-            
-            triplet_beats = {
-                'half': 4/3,
-                'quarter': 2/3,
-                'eighth': 1/3,
-                '16th': 1/6,
-                '32nd': 1/12,
-            }[triplet_type]
-            
-            for idx, pos in [(i, 'start'), (i + 1, 'middle'), (i + 2, 'end')]:
-                chords[idx].update({
+                triplet_assigned.add(gi0)
+                triplet_assigned.add(gi1)
+                triplet_assigned.add(gi2)
+
+                notes[gi0].update({
                     'triplet': True,
-                    'triplet_position': pos,
+                    'triplet_position': 'start',
                     'triplet_type': triplet_type,
                     'actual_notes': 3,
                     'normal_notes': 2,
@@ -2504,14 +2496,192 @@ def detect_triplets_in_chords(chords, bpm=120, tolerance=0.15):
                     'note_divisions': triplet_beats,
                     'dotted': False
                 })
-            
+                notes[gi1].update({
+                    'triplet': True,
+                    'triplet_position': 'middle',
+                    'triplet_type': triplet_type,
+                    'actual_notes': 3,
+                    'normal_notes': 2,
+                    'note_value': triplet_type,
+                    'note_divisions': triplet_beats,
+                    'dotted': False
+                })
+                notes[gi2].update({
+                    'triplet': True,
+                    'triplet_position': 'end',
+                    'triplet_type': triplet_type,
+                    'actual_notes': 3,
+                    'normal_notes': 2,
+                    'note_value': triplet_type,
+                    'note_divisions': triplet_beats,
+                    'dotted': False
+                })
+
             matched = True
-            i += 3
+            # Advance past the entire run (usable portion)
+            i = run_indices[usable - 1] + 1
             break
-        
+
         if not matched:
             i += 1
-    
+
+    return notes
+
+
+def detect_triplets_in_chords(chords, bpm=120, tolerance=0.15):
+    """
+    Detect triplet patterns in a sequence of chords.
+
+    STRICT REQUIREMENTS (same as detect_triplets):
+    1. Must have 3 consecutive chords (or multiple of 3, split into groups)
+    2. Both inter-chord spacings must be nearly equal to each other
+    3. Both spacings must match a known triplet pattern for the tempo
+    4. The chord before (if any) must NOT have the same spacing
+    5. The chord after the run must NOT have the same spacing
+    6. All chords must have valid time_seconds
+    """
+    if len(chords) < 3:
+        return chords
+
+    beat_duration = 60.0 / bpm
+
+    triplet_patterns = [
+        ('half', beat_duration * 4 / 3),
+        ('quarter', beat_duration * 2 / 3),
+        ('eighth', beat_duration / 3),
+        ('16th', beat_duration / 6),
+        ('32nd', beat_duration / 12),
+    ]
+
+    triplet_assigned = set()
+
+    i = 0
+    while i <= len(chords) - 3:
+        if i in triplet_assigned:
+            i += 1
+            continue
+
+        chord0 = chords[i]
+        chord1 = chords[i + 1]
+        chord2 = chords[i + 2]
+
+        # VALIDATION: All chords must have valid time_seconds
+        t0 = chord0.get('time_seconds')
+        t1 = chord1.get('time_seconds')
+        t2 = chord2.get('time_seconds')
+
+        if t0 is None or t1 is None or t2 is None:
+            i += 1
+            continue
+
+        # Calculate spacings
+        spacing1 = t1 - t0
+        spacing2 = t2 - t1
+
+        # VALIDATION: Spacings must be positive
+        if spacing1 <= 0 or spacing2 <= 0:
+            i += 1
+            continue
+
+        # VALIDATION: The two spacings must be very close to each other
+        avg_spacing = (spacing1 + spacing2) / 2
+        if avg_spacing < 0.02:  # Too fast
+            i += 1
+            continue
+
+        spacing_diff = abs(spacing1 - spacing2) / avg_spacing
+        if spacing_diff > tolerance:
+            i += 1
+            continue
+
+        # Try to match a triplet pattern
+        matched = False
+        for triplet_type, expected_spacing in triplet_patterns:
+            tol = expected_spacing * tolerance
+
+            # VALIDATION: Both spacings must match expected triplet spacing
+            if abs(spacing1 - expected_spacing) > tol:
+                continue
+            if abs(spacing2 - expected_spacing) > tol:
+                continue
+
+            # VALIDATION: Chord BEFORE must NOT have the same spacing (ensures start of run)
+            if i > 0:
+                t_prev = chords[i - 1].get('time_seconds')
+                if t_prev is not None:
+                    spacing_before = t0 - t_prev
+                    if spacing_before > 0 and abs(spacing_before - expected_spacing) <= tol:
+                        continue
+
+            # Count how many consecutive chords share this spacing (the full run)
+            run_indices = [i, i + 1, i + 2]
+            scan = i + 2
+            while scan + 1 < len(chords):
+                t_curr = chords[scan].get('time_seconds')
+                t_next = chords[scan + 1].get('time_seconds')
+                if t_curr is None or t_next is None:
+                    break
+                sp = t_next - t_curr
+                if sp > 0 and abs(sp - expected_spacing) <= tol:
+                    run_indices.append(scan + 1)
+                    scan += 1
+                else:
+                    break
+
+            # VALIDATION: Chord AFTER the run must NOT have the same spacing
+            last_run_idx = run_indices[-1]
+            if last_run_idx + 1 < len(chords):
+                t_last = chords[last_run_idx].get('time_seconds')
+                t_after = chords[last_run_idx + 1].get('time_seconds')
+                if t_last is not None and t_after is not None:
+                    spacing_after = t_after - t_last
+                    if spacing_after > 0 and abs(spacing_after - expected_spacing) <= tol:
+                        continue
+
+            run_len = len(run_indices)
+
+            # Only use the portion that's a multiple of 3
+            usable = (run_len // 3) * 3
+            if usable < 3:
+                continue
+
+            triplet_beats = {
+                'half': 4/3,
+                'quarter': 2/3,
+                'eighth': 1/3,
+                '16th': 1/6,
+                '32nd': 1/12,
+            }[triplet_type]
+
+            # Split into groups of 3 and mark each group
+            for g in range(0, usable, 3):
+                gi0 = run_indices[g]
+                gi1 = run_indices[g + 1]
+                gi2 = run_indices[g + 2]
+
+                triplet_assigned.add(gi0)
+                triplet_assigned.add(gi1)
+                triplet_assigned.add(gi2)
+
+                for idx, pos in [(gi0, 'start'), (gi1, 'middle'), (gi2, 'end')]:
+                    chords[idx].update({
+                        'triplet': True,
+                        'triplet_position': pos,
+                        'triplet_type': triplet_type,
+                        'actual_notes': 3,
+                        'normal_notes': 2,
+                        'note_value': triplet_type,
+                        'note_divisions': triplet_beats,
+                        'dotted': False
+                    })
+
+            matched = True
+            i = run_indices[usable - 1] + 1
+            break
+
+        if not matched:
+            i += 1
+
     return chords
 
 #* ─── Spectral Gate Noise Filter ──────────────────────────────────────────────
@@ -5110,6 +5280,7 @@ def analyze_audio_optimized(wav_path_or_array, debug=False, use_ml_rhythm=True):
     # Apply triplet detection (modifies notes/chords in place) - use detected BPM
     detect_triplets(results["notes"], bpm=detected_bpm, tolerance=0.20)
     detect_triplets_in_chords(results["chords"], bpm=detected_bpm, tolerance=0.20)
+    strip_triplets_from_grace_notes(results["notes"])
     
     # Update summary
     results["analysis_summary"].update({
@@ -5566,7 +5737,9 @@ def analyze_audio_independent_hands(wav_path_or_array, debug=False, split_midi=6
     detect_triplets(treble_notes_list, bpm=detected_bpm, tolerance=0.20)
     detect_triplets_in_chords(bass_chords_list, bpm=detected_bpm, tolerance=0.20)
     detect_triplets_in_chords(treble_chords_list, bpm=detected_bpm, tolerance=0.20)
-    
+    strip_triplets_from_grace_notes(bass_notes_list)
+    strip_triplets_from_grace_notes(treble_notes_list)
+
     # Merge back (already sorted)
     results["notes"] = sorted(bass_notes_list + treble_notes_list, key=lambda x: x.get("time_seconds", 0))
     results["chords"] = sorted(bass_chords_list + treble_chords_list, key=lambda x: x.get("time_seconds", 0))
@@ -5670,10 +5843,76 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     Returns:
         Results dict compatible with existing format (notes, chords, analysis_summary)
     """
-    # ── Try custom trained model first (velocity-weighted, better soft detect) ──
+    import time
+    neural_timings = {}
+    t_neural_start = time.perf_counter()
+    audio_full_sr = None  # Store full-rate audio for beat detection (avoid reloading)
+    
+    # ── Try ensemble multi-resolution model first (fastest, GPU-parallel) ──
+    use_ensemble = False
+    ensemble_sr = 16000
+    if USE_GPU:
+        ensemble_model = get_gpu_ensemble_transcriber()
+        if ensemble_model is not None and ensemble_model.initialized:
+            use_ensemble = True
+            ensemble_sr = ensemble_model.config.get('sample_rate', 16000)
+
+    if use_ensemble:
+        print(f"\n{'='*70}")
+        print("NEURAL TRANSCRIPTION (Multi-Resolution Ensemble)")
+        print(f"   Device: {device}")
+        print(f"{'='*70}\n")
+
+        try:
+            # Load audio using fast soundfile reader (not librosa which uses ffmpeg)
+            # Load at full sample rate (44100) for beat detection,
+            # then resample to 16kHz for ensemble model
+            t0 = time.perf_counter()
+            print(f"[Neural] Loading audio: {wav_path}")
+            audio_full_sr, _ = load_audio_deterministic(wav_path, target_sr=SAMPLE_RATE)
+            neural_timings['audio_load_ms'] = (time.perf_counter() - t0) * 1000
+            print(f"[Neural] Audio load time: {neural_timings['audio_load_ms']:.1f}ms (at {SAMPLE_RATE}Hz, soundfile)")
+            
+            # Resample for ensemble model (fast polyphase resampling)
+            t0 = time.perf_counter()
+            # Use scipy's resample_poly for deterministic fast resampling
+            gcd = math.gcd(SAMPLE_RATE, ensemble_sr)
+            up, down = ensemble_sr // gcd, SAMPLE_RATE // gcd
+            audio = resample_poly(audio_full_sr, up, down).astype(np.float32, copy=False)
+            neural_timings['resample_ms'] = (time.perf_counter() - t0) * 1000
+            print(f"[Neural] Resample to {ensemble_sr}Hz: {neural_timings['resample_ms']:.1f}ms")
+            
+            duration_seconds = len(audio) / ensemble_sr
+            sample_rate_used = ensemble_sr
+            print(f"[Neural] Audio duration: {duration_seconds:.2f}s")
+
+            t0 = time.perf_counter()
+            print(f"[Neural] Running ensemble inference (373 features, GPU-parallel)...")
+            transcribed_dict = ensemble_model.transcribe(
+                audio,
+                onset_threshold=0.7,
+                frame_threshold=0.5,
+            )
+            neural_timings['transcribe_ms'] = (time.perf_counter() - t0) * 1000
+            
+            # Extract detailed inference timings if available
+            if '_inference_timing_ms' in transcribed_dict:
+                neural_timings['inference_detail'] = transcribed_dict['_inference_timing_ms']
+                print(f"[Neural] Inference breakdown: {transcribed_dict['_inference_timing_ms']}")
+
+            note_events = transcribed_dict.get('est_note_events', [])
+            print(f"[Neural] Ensemble detected {len(note_events)} note events in {neural_timings['transcribe_ms']:.1f}ms")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            print(f"[Neural] Ensemble failed: {e}, falling back to custom model")
+            use_ensemble = False
+
+    # ── Try custom trained model second (velocity-weighted, better soft detect) ──
     use_custom = False
     custom_sr = 16000
-    if USE_GPU:
+    if not use_ensemble and USE_GPU:
         custom_model = get_gpu_transcriber()
         if custom_model is not None and custom_model.initialized:
             use_custom = True
@@ -5708,7 +5947,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             print(f"[Neural] Custom model failed: {e}, falling back to ByteDance")
             use_custom = False
 
-    if not use_custom:
+    if not use_ensemble and not use_custom:
         try:
             from piano_transcription_inference import (PianoTranscription,
                                                        sample_rate)
@@ -5781,6 +6020,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         event_groups.append(current_group)
     
     print(f"[Neural] Grouped into {len(event_groups)} onset events")
+    t0 = time.perf_counter()
     
     # Convert groups to notes and chords
     notes = []
@@ -5843,14 +6083,25 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             })
     
     print(f"[Neural] Converted to: {len(notes)} single notes, {len(chords)} chords")
+    neural_timings['note_conversion_ms'] = (time.perf_counter() - t0) * 1000
+    print(f"[TIMING] note_conversion={neural_timings['note_conversion_ms']:.1f}ms")
     
     # Detect tempo using neural beat tracking (more accurate than IOI histogram)
+    t0 = time.perf_counter()
     print(f"\n[Beat Detection] Running neural beat tracking...")
-    beat_info = detect_beats_neural(wav_path, debug=debug)
+    # Use pre-loaded audio if available (saves ~10s of re-loading)
+    if audio_full_sr is not None:
+        print(f"[Beat Detection] Using pre-loaded audio (skipping file reload)")
+        beat_info = detect_beats_neural(audio_full_sr, sr=SAMPLE_RATE, debug=debug)
+    else:
+        print(f"[Beat Detection] Loading audio from file...")
+        beat_info = detect_beats_neural(wav_path, debug=debug)
     beat_times = beat_info['beats']
     detected_bpm = beat_info['bpm']
     tempo_confidence = beat_info['confidence']
     beat_interval = beat_info['beat_interval']
+    neural_timings['beat_detection_ms'] = (time.perf_counter() - t0) * 1000
+    print(f"[TIMING] beat_detection={neural_timings['beat_detection_ms']:.1f}ms")
     
     # If beat detection failed or low confidence, fall back to onset-based
     if len(beat_times) < 4 or tempo_confidence < 0.4:
@@ -5870,6 +6121,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     
     # Quantize rhythms using beat grid if available, otherwise IOI-based
     print(f"\n[Rhythm] Quantizing at {detected_bpm} BPM...")
+    t0 = time.perf_counter()
     
     # First, detect and collapse ornaments (trills, grace notes, etc.)
     # This must happen BEFORE rhythm quantization
@@ -5901,11 +6153,16 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     print(f"[Ornaments] Found: {trills} trills, {grace_notes} grace notes, {mordents} mordents, {turns} turns")
     if collapsed > 0:
         print(f"[Ornaments] Collapsed {collapsed} ornamental notes into main notes")
+    neural_timings['ornament_detection_ms'] = (time.perf_counter() - t0) * 1000
+    print(f"[TIMING] ornament_detection={neural_timings['ornament_detection_ms']:.1f}ms")
     
     # Now analyze subdivision patterns across all notes for context-aware quantization
+    t0 = time.perf_counter()
     all_events = notes + chords
     subdivision_info = detect_dominant_subdivisions(all_events, detected_bpm, debug=debug)
+    neural_timings['subdivision_analysis_ms'] = (time.perf_counter() - t0) * 1000
     
+    t_quant_start = time.perf_counter()
     if len(beat_times) >= 4:
         # Use beat-grid quantization (more accurate)
         print(f"[Rhythm] Using beat-grid quantization with {len(beat_times)} detected beats")
@@ -5968,6 +6225,8 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         
         notes = sorted(bass_notes + treble_notes, key=lambda x: x.get('time_seconds', 0))
         chords = sorted(bass_chords + treble_chords, key=lambda x: x.get('time_seconds', 0))
+        neural_timings['rhythm_quantization_ms'] = (time.perf_counter() - t_quant_start) * 1000
+        print(f"[TIMING] rhythm_quantization={neural_timings['rhythm_quantization_ms']:.1f}ms (beat-grid)")
     else:
         # Fall back to ML/IOI-based quantization
         method_name = "ML" if use_ml_rhythm else "IOI"
@@ -5984,8 +6243,11 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             if treble_notes:
                 treble_notes = detect_and_normalize_runs(treble_notes, detected_bpm, debug=debug)
             notes = sorted(bass_notes + treble_notes, key=lambda x: x.get('time_seconds', 0))
+        neural_timings['rhythm_quantization_ms'] = (time.perf_counter() - t_quant_start) * 1000
+        print(f"[TIMING] rhythm_quantization={neural_timings['rhythm_quantization_ms']:.1f}ms ({method_name}-based)")
     
     # Detect triplets (separately for bass and treble)
+    t0 = time.perf_counter()
     bass_notes_list = [n for n in notes if n.get("hand") == "bass"]
     treble_notes_list = [n for n in notes if n.get("hand") == "treble"]
     bass_chords_list = [c for c in chords if c.get("hand") == "bass"]
@@ -6000,10 +6262,14 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     detect_triplets(treble_notes_list, bpm=detected_bpm, tolerance=0.20)
     detect_triplets_in_chords(bass_chords_list, bpm=detected_bpm, tolerance=0.20)
     detect_triplets_in_chords(treble_chords_list, bpm=detected_bpm, tolerance=0.20)
-    
+    strip_triplets_from_grace_notes(bass_notes_list)
+    strip_triplets_from_grace_notes(treble_notes_list)
+
     # Merge back
     notes = sorted(bass_notes_list + treble_notes_list, key=lambda x: x.get("time_seconds", 0))
     chords = sorted(bass_chords_list + treble_chords_list, key=lambda x: x.get("time_seconds", 0))
+    neural_timings['triplet_detection_ms'] = (time.perf_counter() - t0) * 1000
+    print(f"[TIMING] triplet_detection={neural_timings['triplet_detection_ms']:.1f}ms")
     
     # Build results
     results = {
@@ -6012,7 +6278,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         "onsets": [{"time_seconds": t, "frame_index": int(t * SAMPLE_RATE / HOP_SIZE)} for t in all_onset_times],
         "analysis_summary": {
             "duration_seconds": round(duration_seconds, 3),
-            "sample_rate": int(sample_rate),
+            "sample_rate": int(sample_rate_used),
             "total_onsets": len(event_groups),
             "total_notes": len(notes),
             "total_chords": len(chords),
@@ -6032,6 +6298,17 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         }
     }
     
+    # Add timing info to results (for bottleneck analysis)
+    neural_timings['total_ms'] = (time.perf_counter() - t_neural_start) * 1000
+    neural_timings['real_time_factor'] = neural_timings['total_ms'] / (duration_seconds * 1000)
+    results['_neural_timing_ms'] = neural_timings
+    
+    # Print full timing breakdown
+    print(f"\n[TIMING] Full breakdown:")
+    for key, val in neural_timings.items():
+        if key not in ('inference_detail', 'real_time_factor'):
+            print(f"   {key}: {val:.1f}ms" if isinstance(val, (int, float)) else f"   {key}: {val}")
+    
     print(f"\n{'='*70}")
     print(f"✓ Neural transcription complete:")
     print(f"   Tempo:  {detected_bpm:.0f} BPM (confidence: {tempo_confidence:.2f})")
@@ -6040,6 +6317,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
           f"dotted={'yes' if subdivision_info.get('uses_dotted') else 'no'}")
     print(f"   Bass:   {results['analysis_summary']['bass_notes']} notes, {results['analysis_summary']['bass_chords']} chords")
     print(f"   Treble: {results['analysis_summary']['treble_notes']} notes, {results['analysis_summary']['treble_chords']} chords")
+    print(f"   Timing: total={neural_timings['total_ms']:.1f}ms, RTF={neural_timings['real_time_factor']:.4f}")
     print(f"{'='*70}\n")
     
     return results
@@ -6686,6 +6964,210 @@ def analyze_audio_cmdline(wav_path_or_array, use_legacy=False, use_split=True, s
     print(f"   Chords detected: {len(results['chords'])}")
     
     return results
+
+
+#* ─── Second Pass: Soft Note Gap-Fill Detection ─────────────────────────────
+def second_pass_gap_fill(wav_path_or_array, existing_notes, existing_chords,
+                          min_gap_seconds=0.25, soft_K=1.2, debug=False):
+    """
+    Second pass detection to find soft notes that were missed in gaps.
+    
+    This uses a lower onset detection threshold (K=1.2 instead of K=2.0)
+    but only searches within gaps between existing notes.
+    
+    Args:
+        wav_path_or_array: Audio file path or numpy array
+        existing_notes: List of notes from first pass
+        existing_chords: List of chords from first pass  
+        min_gap_seconds: Minimum gap duration to search for soft notes (default: 0.25s)
+        soft_K: Softer threshold for onset detection (default: 1.2 std devs)
+        debug: Print debug info
+        
+    Returns:
+        dict with 'notes' and 'chords' containing only the NEW detections
+    """
+    print(f"\n🔍 Second Pass: Searching for soft notes in gaps (K={soft_K})")
+    
+    # Load audio
+    try:
+        if isinstance(wav_path_or_array, str):
+            audio = read_wav(wav_path_or_array)
+        else:
+            audio = wav_path_or_array
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+    except Exception as e:
+        return {"error": f"Failed to read audio: {str(e)}", "notes": [], "chords": []}
+    
+    duration_seconds = len(audio) / SAMPLE_RATE
+    
+    # Combine notes and chords to find all covered time ranges
+    all_events = []
+    for n in existing_notes:
+        t = n.get('time_seconds', 0)
+        d = n.get('duration_seconds', 0.1)
+        all_events.append((t, t + d))
+    
+    for c in existing_chords:
+        t = c.get('time_seconds', 0)
+        d = c.get('duration_seconds', 0.1)
+        all_events.append((t, t + d))
+    
+    # Sort by start time and find gaps
+    all_events.sort(key=lambda x: x[0])
+    
+    gaps = []
+    prev_end = 0.0
+    for start, end in all_events:
+        if start > prev_end + min_gap_seconds:
+            gaps.append((prev_end, start))
+        prev_end = max(prev_end, end)
+    
+    # Check gap at the end
+    if duration_seconds > prev_end + min_gap_seconds:
+        gaps.append((prev_end, duration_seconds))
+    
+    if debug:
+        print(f"[Second Pass] Found {len(gaps)} gaps >= {min_gap_seconds}s")
+        for i, (gs, ge) in enumerate(gaps):
+            print(f"  Gap {i+1}: {gs:.2f}s - {ge:.2f}s ({ge-gs:.2f}s)")
+    
+    if not gaps:
+        print("[Second Pass] No significant gaps found")
+        return {"notes": [], "chords": []}
+    
+    # Compute full spectral flux with softer onset detection
+    stft_data, magnitude, phase, freqs = compute_stft_once(audio)
+    flux = compute_flux_from_magnitude(magnitude)
+    flux = normalize(flux)
+    
+    # Find onsets with lower threshold (more sensitive)
+    soft_onsets = find_onsets(flux, window=50, K=soft_K)
+    
+    if debug:
+        print(f"[Second Pass] Found {len(soft_onsets)} soft onsets with K={soft_K}")
+    
+    # Filter to only onsets within gaps
+    gap_onsets = []
+    for onset_frame in soft_onsets:
+        time_sec = onset_frame * HOP_SIZE / SAMPLE_RATE
+        for gap_start, gap_end in gaps:
+            if gap_start <= time_sec <= gap_end:
+                gap_onsets.append(onset_frame)
+                break
+    
+    if debug:
+        print(f"[Second Pass] {len(gap_onsets)} onsets fall within gaps")
+    
+    if not gap_onsets:
+        print("[Second Pass] No new onsets in gaps")
+        return {"notes": [], "chords": []}
+    
+    # Compute CQT for pitch detection
+    if USE_GPU:
+        C_full = gpu_cqt(audio, sr=SAMPLE_RATE, n_bins=CQT_BINS,
+                         bins_per_octave=12, fmin=librosa.note_to_hz('A0'),
+                         hop_length=HOP_SIZE)
+    else:
+        C_full = np.abs(librosa.cqt(
+            y=audio, sr=SAMPLE_RATE, hop_length=HOP_SIZE,
+            n_bins=CQT_BINS, bins_per_octave=12,
+            fmin=librosa.note_to_hz('A0')
+        ))
+    
+    # Process each gap onset
+    new_notes = []
+    new_chords = []
+    
+    for i, onset_frame in enumerate(gap_onsets):
+        time_seconds = onset_frame * HOP_SIZE / SAMPLE_RATE
+        
+        if debug:
+            print(f"\n  [Gap Onset {i+1}] at {time_seconds:.3f}s")
+        
+        # Get CQT slice for pitch detection
+        cqt_idx = min(onset_frame + 1, C_full.shape[1] - 1)
+        cqt_slice = C_full[:, cqt_idx]
+        
+        # Detect pitches using HPS (Harmonic Product Spectrum)
+        midi_notes = pick_pitches_HPS(cqt_slice, max_voices=4, max_h=5)
+        
+        if not midi_notes:
+            if debug:
+                print(f"    No pitches detected")
+            continue
+        
+        # Estimate duration (simple heuristic: until next onset or gap end)
+        next_event_time = duration_seconds
+        for gap_start, gap_end in gaps:
+            if gap_start <= time_seconds <= gap_end:
+                next_event_time = gap_end
+                break
+        
+        for j, next_onset in enumerate(gap_onsets):
+            next_time = next_onset * HOP_SIZE / SAMPLE_RATE
+            if next_time > time_seconds:
+                next_event_time = min(next_event_time, next_time)
+                break
+        
+        duration = min(next_event_time - time_seconds, 2.0)  # Cap at 2 seconds
+        duration = max(duration, 0.05)  # Minimum 50ms
+        
+        # Determine hand (bass/treble based on pitch)
+        avg_midi = sum(midi_notes) / len(midi_notes)
+        hand = "bass" if avg_midi < 60 else "treble"
+        
+        # Helper to convert MIDI to note name
+        def _midi_to_name(m):
+            names = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B']
+            return names[m % 12] + str(m // 12 - 1)
+        
+        if len(midi_notes) == 1:
+            # Single note
+            midi = midi_notes[0]
+            note_name = _midi_to_name(midi)
+            freq = 440.0 * (2 ** ((midi - 69) / 12))
+            
+            new_notes.append({
+                'time_seconds': float(time_seconds),
+                'midi_note': int(midi),
+                'note_name': note_name,
+                'frequency_hz': float(freq),
+                'duration_seconds': float(duration),
+                'offset_seconds': float(time_seconds + duration),
+                'hand': hand,
+                'method': 'second_pass_soft',
+                'confidence': 0.6,  # Lower confidence for second pass
+            })
+            
+            if debug:
+                print(f"    → Note: {note_name} (MIDI {midi}) dur={duration:.2f}s")
+        
+        else:
+            # Multiple pitches = chord
+            note_names = [_midi_to_name(m) for m in midi_notes]
+            
+            new_chords.append({
+                'time_seconds': float(time_seconds),
+                'midi_notes': [int(m) for m in midi_notes],
+                'note_names': note_names,
+                'duration_seconds': float(duration),
+                'offset_seconds': float(time_seconds + duration),
+                'hand': hand,
+                'method': 'second_pass_soft',
+                'confidence': 0.5,
+            })
+            
+            if debug:
+                print(f"    → Chord: {note_names} dur={duration:.2f}s")
+    
+    print(f"\n✅ Second Pass Complete: Found {len(new_notes)} notes, {len(new_chords)} chords")
+    
+    return {
+        "notes": new_notes,
+        "chords": new_chords,
+    }
+
 
 #* ─── Main Pipeline ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
