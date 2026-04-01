@@ -15,12 +15,26 @@ import math
 import os
 import sys
 from functools import lru_cache
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# Add rhythm_training to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'rhythm_training'))
+
+if TYPE_CHECKING:
+    from rhythm_training.train_ensemble import (MultiResFeatureExtractor,
+                                                _build_model_from_config,
+                                                decode_note_events)
+    from rhythm_training.train_mel_baseline import (MelBaselineTranscriber,
+                                                    MelFeatureExtractor)
+    from rhythm_training.train_mel_baseline import \
+        _build_model_from_config as _build_mel_model
+    from rhythm_training.train_transcription import (PianoTranscriptionModel,
+                                                     transcribe_audio)
 
 # ─── Device Management ──────────────────────────────────────────────────────
 
@@ -871,7 +885,13 @@ class GpuRhythmTransformer(nn.Module):
         checkpoint = torch.load(path, map_location=DEVICE, weights_only=False)
         config = checkpoint.get('config', {})
         self._build(config)
-        self.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Handle key remapping: training uses pos_enc.pe, inference uses pe
+        state_dict = checkpoint['model_state_dict']
+        if 'pos_enc.pe' in state_dict and 'pe' not in state_dict:
+            state_dict['pe'] = state_dict.pop('pos_enc.pe')
+        
+        self.load_state_dict(state_dict)
         self.to(DEVICE)
         self.eval()
         self.initialized = True
@@ -1077,8 +1097,7 @@ class GpuPianoTranscriber(nn.Module):
         self.config = config
 
         # Import and build the model architecture
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'rhythm_training'))
-        from train_transcription import PianoTranscriptionModel
+        from train_transcription import PianoTranscriptionModel  # type: ignore
 
         self.model = PianoTranscriptionModel(
             n_mels=config.get('n_mels', 229),
@@ -1115,7 +1134,7 @@ class GpuPianoTranscriber(nn.Module):
         if not self.initialized or self.model is None:
             return {'est_note_events': []}
 
-        from train_transcription import transcribe_audio
+        from train_transcription import transcribe_audio  # type: ignore
         events = transcribe_audio(
             audio, self.model, DEVICE,
             sr=self.config.get('sample_rate', 16000),
@@ -1187,8 +1206,8 @@ class GpuEnsembleTranscriber(nn.Module):
     GPU inference wrapper for multi-resolution ensemble transcription model.
 
     Combines:
-      - MultiResFeatureExtractor (373 features from 3 STFTs + CQT + chroma + onsets)
-      - EnsembleMetaLearner (Conv1d + BiGRU, ~770K params)
+      - MultiResFeatureExtractor (549 features from 3 STFTs + CQT + chroma + onsets + HPSS)
+      - PitchAwareTranscriber (pitch-aligned per-key processing, ~50K params)
 
     Drop-in replacement for ByteDance PianoTranscription interface.
     """
@@ -1207,25 +1226,19 @@ class GpuEnsembleTranscriber(nn.Module):
         self.config = config
 
         # Build feature extractor
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'rhythm_training'))
-        from train_ensemble import (EnsembleMetaLearner,
-                                    MultiResFeatureExtractor)
+        from train_ensemble import MultiResFeatureExtractor  # type: ignore
+        from train_ensemble import _build_model_from_config  # type: ignore
 
         self.extractor = MultiResFeatureExtractor(
             sr=config.get('sample_rate', 16000),
             hop_length=config.get('hop_length', 512),
             device=DEVICE,
+            hop_lengths=config.get('hop_lengths', None),
         )
 
         # Build and load model
-        self.model = EnsembleMetaLearner(
-            n_features=config.get('n_features', 373),
-            conv_channels=config.get('conv_channels', [256, 256, 128]),
-            gru_hidden=config.get('gru_hidden', 64),
-            gru_layers=config.get('gru_layers', 2),
-            n_keys=config.get('n_keys', 88),
-        )
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model = _build_model_from_config(config)
+        self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
         self.model.to(DEVICE)
         self.model.eval()
 
@@ -1274,9 +1287,12 @@ class GpuEnsembleTranscriber(nn.Module):
         step = chunk_frames - overlap
 
         n_keys = self.config.get('n_keys', 88)
+        # Get note value classes from config or model output (supports 6 or 10 classes)
+        n_note_value_classes = self.config.get('n_note_value_classes', 10)
         all_onset = np.zeros((n_frames, n_keys), dtype=np.float32)
         all_frame = np.zeros((n_frames, n_keys), dtype=np.float32)
         all_vel = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_note_value = np.zeros((n_frames, n_keys, n_note_value_classes), dtype=np.float32)
         counts = np.zeros(n_frames, dtype=np.float32)
 
         n_chunks = 0
@@ -1289,11 +1305,23 @@ class GpuEnsembleTranscriber(nn.Module):
             onset_p = torch.sigmoid(out['onset_logits'][0]).cpu().numpy()
             frame_p = torch.sigmoid(out['frame_logits'][0]).cpu().numpy()
             vel = out['velocity'][0].cpu().numpy()
+            # note_value_logits: (1, chunk_len, 88, N) -> softmax -> (chunk_len, 88, N)
+            nv_probs = F.softmax(out['note_value_logits'][0], dim=-1).cpu().numpy()
+            # Handle potential mismatch if old model has 6 classes but config says 10
+            actual_nv_classes = nv_probs.shape[-1]
+            if actual_nv_classes != n_note_value_classes:
+                # Pad or truncate to match expected size
+                if actual_nv_classes < n_note_value_classes:
+                    pad = np.zeros((*nv_probs.shape[:-1], n_note_value_classes - actual_nv_classes), dtype=np.float32)
+                    nv_probs = np.concatenate([nv_probs, pad], axis=-1)
+                else:
+                    nv_probs = nv_probs[..., :n_note_value_classes]
 
             actual_len = end - start
             all_onset[start:end] += onset_p[:actual_len]
             all_frame[start:end] += frame_p[:actual_len]
             all_vel[start:end] += vel[:actual_len]
+            all_note_value[start:end] += nv_probs[:actual_len]
             counts[start:end] += 1.0
             n_chunks += 1
         
@@ -1306,11 +1334,13 @@ class GpuEnsembleTranscriber(nn.Module):
         all_onset /= counts[:, None]
         all_frame /= counts[:, None]
         all_vel /= counts[:, None]
+        all_note_value /= counts[:, None, None]
 
-        # Decode note events with post-processing
-        from train_ensemble import decode_note_events
+        # Decode note events with post-processing (including note values)
+        from train_ensemble import decode_note_events  # type: ignore
         events = decode_note_events(
             all_onset, all_frame, all_vel,
+            note_value_probs=all_note_value,
             sr=sr, hop=hop,
             onset_threshold=onset_threshold,
             frame_threshold=frame_threshold,
@@ -1366,3 +1396,195 @@ def get_gpu_ensemble_transcriber() -> Optional[GpuEnsembleTranscriber]:
 
     _gpu_ensemble_transcriber_loaded = True
     return _gpu_ensemble_transcriber
+
+
+# ─── GPU Mel Baseline Transcriber ──────────────────────────────────────────
+
+class GpuMelBaselineTranscriber(nn.Module):
+    """
+    GPU inference wrapper for mel-only baseline transcription model.
+
+    Uses a single log-mel spectrogram (229 bins) as input instead of the
+    full 1098-feature multi-resolution stack. Paired with a larger
+    ConvStack + Conformer model that learns its own representations.
+
+    Drop-in replacement for GpuEnsembleTranscriber interface.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.initialized = False
+        self.config = None
+        self.extractor = None
+        self.model = None
+
+    def load_from_pt(self, path: str):
+        """Load a trained mel baseline model checkpoint."""
+        checkpoint = torch.load(path, map_location=DEVICE, weights_only=False)
+        config = checkpoint.get('config', {})
+        self.config = config
+
+        from train_mel_baseline import MelFeatureExtractor  # type: ignore
+        from train_mel_baseline import _build_model_from_config # type: ignore
+
+        self.extractor = MelFeatureExtractor(
+            sr=config.get('sample_rate', 16000),
+            hop_length=config.get('hop_length', 256),
+            n_fft=config.get('n_fft', 2048),
+            n_mels=config.get('n_mels', 229),
+            device=DEVICE,
+        )
+
+        self.model = _build_model_from_config(config)
+        self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        self.model.to(DEVICE)
+        self.model.eval()
+
+        self.initialized = True
+        n_params = sum(p.numel() for p in self.model.parameters())
+        print(f"[GPU MelBaseline] Loaded from {path} ({n_params:,} params)")
+
+    @torch.no_grad()
+    def transcribe(self, audio: np.ndarray, onset_threshold: float = 0.4,
+                   frame_threshold: float = 0.5,
+                   min_note_duration: float = 0.05,
+                   min_velocity: int = 15,
+                   filter_harmonics: bool = True) -> Dict:
+        """
+        Transcribe audio to note events.
+
+        Returns dict matching ByteDance/Ensemble format:
+            {'est_note_events': [...], '_inference_timing_ms': {...}}
+        """
+        import time
+        timings = {}
+        t_total = time.perf_counter()
+
+        if not self.initialized:
+            return {'est_note_events': [], '_inference_timing_ms': {'error': 'not_initialized'}}
+
+        sr = self.config.get('sample_rate', 16000)
+        hop = self.config.get('hop_length', 256)
+
+        t0 = time.perf_counter()
+        audio_t = torch.from_numpy(audio).float().to(DEVICE)
+        timings['audio_to_gpu'] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        features = self.extractor.extract(audio_t)  # (1, T, 229)
+        torch.cuda.synchronize() if DEVICE.type == 'cuda' else None
+        timings['feature_extraction'] = (time.perf_counter() - t0) * 1000
+
+        # Process in overlapping chunks for long audio
+        t0 = time.perf_counter()
+        n_frames = features.size(1)
+        chunk_frames = int(10.0 * sr / hop)
+        overlap = chunk_frames // 4
+        step = chunk_frames - overlap
+
+        n_keys = self.config.get('n_keys', 88)
+        n_note_value_classes = self.config.get('n_note_value_classes', 10)
+        all_onset = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_frame = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_vel = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_note_value = np.zeros((n_frames, n_keys, n_note_value_classes), dtype=np.float32)
+        counts = np.zeros(n_frames, dtype=np.float32)
+
+        n_chunks = 0
+        for start in range(0, n_frames, step):
+            end = min(start + chunk_frames, n_frames)
+            chunk = features[:, start:end, :]
+
+            out = self.model(chunk)
+
+            onset_p = torch.sigmoid(out['onset_logits'][0]).cpu().numpy()
+            frame_p = torch.sigmoid(out['frame_logits'][0]).cpu().numpy()
+            vel = out['velocity'][0].cpu().numpy()
+            nv_probs = F.softmax(out['note_value_logits'][0], dim=-1).cpu().numpy()
+
+            actual_nv_classes = nv_probs.shape[-1]
+            if actual_nv_classes != n_note_value_classes:
+                if actual_nv_classes < n_note_value_classes:
+                    pad = np.zeros((*nv_probs.shape[:-1], n_note_value_classes - actual_nv_classes), dtype=np.float32)
+                    nv_probs = np.concatenate([nv_probs, pad], axis=-1)
+                else:
+                    nv_probs = nv_probs[..., :n_note_value_classes]
+
+            actual_len = end - start
+            all_onset[start:end] += onset_p[:actual_len]
+            all_frame[start:end] += frame_p[:actual_len]
+            all_vel[start:end] += vel[:actual_len]
+            all_note_value[start:end] += nv_probs[:actual_len]
+            counts[start:end] += 1.0
+            n_chunks += 1
+
+        torch.cuda.synchronize() if DEVICE.type == 'cuda' else None
+        timings['model_inference'] = (time.perf_counter() - t0) * 1000
+
+        # Average overlapping regions
+        t0 = time.perf_counter()
+        counts = np.maximum(counts, 1.0)
+        all_onset /= counts[:, None]
+        all_frame /= counts[:, None]
+        all_vel /= counts[:, None]
+        all_note_value /= counts[:, None, None]
+
+        from train_ensemble import decode_note_events  # type: ignore
+        events = decode_note_events(
+            all_onset, all_frame, all_vel,
+            note_value_probs=all_note_value,
+            sr=sr, hop=hop,
+            onset_threshold=onset_threshold,
+            frame_threshold=frame_threshold,
+            min_note_duration=min_note_duration,
+            min_velocity=min_velocity,
+            use_peak_picking=True,
+            filter_harmonics=filter_harmonics,
+        )
+        timings['decode_notes'] = (time.perf_counter() - t0) * 1000
+
+        timings['total'] = (time.perf_counter() - t_total) * 1000
+        timings['audio_duration_ms'] = len(audio) / sr * 1000
+        timings['n_frames'] = n_frames
+        timings['n_chunks'] = n_chunks
+        timings['real_time_factor'] = timings['total'] / timings['audio_duration_ms'] if timings['audio_duration_ms'] > 0 else 0
+
+        print(f"[TIMING] MelBaseline.transcribe: audio_to_gpu={timings['audio_to_gpu']:.1f}ms, features={timings['feature_extraction']:.1f}ms, model={timings['model_inference']:.1f}ms, decode={timings['decode_notes']:.1f}ms | TOTAL={timings['total']:.1f}ms for {timings['audio_duration_ms']:.0f}ms audio (RTF={timings['real_time_factor']:.2f}x)")
+
+        return {'est_note_events': events, '_inference_timing_ms': timings}
+
+
+# ─── Mel Baseline Transcriber Singleton ─────────────────────────────────────
+
+_gpu_mel_baseline_transcriber: Optional[GpuMelBaselineTranscriber] = None
+_gpu_mel_baseline_transcriber_loaded = False
+
+
+def get_gpu_mel_baseline_transcriber() -> Optional[GpuMelBaselineTranscriber]:
+    """Lazy-load the GPU mel baseline transcriber (singleton)."""
+    global _gpu_mel_baseline_transcriber, _gpu_mel_baseline_transcriber_loaded
+
+    if _gpu_mel_baseline_transcriber_loaded:
+        return _gpu_mel_baseline_transcriber
+
+    model_paths = [
+        os.path.join(os.path.dirname(__file__), 'rhythm_training', 'mel_baseline_transcription.pt'),
+        os.path.join(os.path.dirname(__file__), 'mel_baseline_transcription.pt'),
+        '/root/rhythm_training/mel_baseline_transcription.pt',
+    ]
+
+    for path in model_paths:
+        if os.path.exists(path):
+            try:
+                _gpu_mel_baseline_transcriber = GpuMelBaselineTranscriber()
+                _gpu_mel_baseline_transcriber.load_from_pt(path)
+                break
+            except Exception as e:
+                print(f"[GPU MelBaseline] Failed to load from {path}: {e}")
+                _gpu_mel_baseline_transcriber = None
+
+    if _gpu_mel_baseline_transcriber is None:
+        print("[GPU MelBaseline] Model not found (not trained yet?)")
+
+    _gpu_mel_baseline_transcriber_loaded = True
+    return _gpu_mel_baseline_transcriber

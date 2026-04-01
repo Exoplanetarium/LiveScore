@@ -220,9 +220,10 @@ async def warmup():
     This ensures the first recording request is fast.
     """
     try:
-        from gpu_ops import get_gpu_ensemble_transcriber, get_gpu_rhythm_model
-        
-        ensemble = get_gpu_ensemble_transcriber()
+        from gpu_ops import (get_gpu_mel_baseline_transcriber,
+                             get_gpu_rhythm_model)
+
+        ensemble = get_gpu_mel_baseline_transcriber()
         rhythm = get_gpu_rhythm_model()
         
         return {
@@ -723,6 +724,173 @@ async def stream_chunk(
         logger.error(f"stream_chunk error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"stream_chunk failed: {str(e)}")
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Live Transcription Endpoints (Low-latency with deferred refinement)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from live_rhythm import LiveTranscriptionSession, cleanup_stale_sessions
+from live_rhythm import delete_session as delete_live_session
+from live_rhythm import get_or_create_session as get_live_session
+
+
+class LiveSessionCreate(BaseModel):
+    session_id: str
+    initial_bpm: float = 120.0
+
+
+class LiveNotesInput(BaseModel):
+    session_id: str
+    notes: List[dict]
+    chords: List[dict] = []
+
+
+class LiveSessionQuery(BaseModel):
+    session_id: str
+
+
+@app.post("/live/session/create")
+async def live_session_create(req: LiveSessionCreate):
+    """
+    Create a new live transcription session.
+    
+    Returns session info with initial tempo settings.
+    """
+    session = get_live_session(req.session_id)
+    if req.initial_bpm:
+        session.tempo_tracker.current_bpm = req.initial_bpm
+        session.tempo_tracker.initial_bpm = req.initial_bpm
+    
+    return {
+        "status": "created",
+        "session_id": req.session_id,
+        "bpm": session.tempo_tracker.current_bpm,
+    }
+
+
+@app.post("/live/session/reset")
+async def live_session_reset(req: LiveSessionQuery):
+    """Reset an existing live session (clears all notes, resets tempo)."""
+    session = get_live_session(req.session_id)
+    session.reset()
+    return {"status": "reset", "session_id": req.session_id}
+
+
+@app.post("/live/session/delete")
+async def live_session_delete(req: LiveSessionQuery):
+    """Delete a live session."""
+    deleted = delete_live_session(req.session_id)
+    return {"status": "deleted" if deleted else "not_found", "session_id": req.session_id}
+
+
+@app.post("/live/process")
+async def live_process_notes(req: LiveNotesInput):
+    """
+    Process notes in live mode with two-stage quantization.
+    
+    Stage 1 (immediate): Coarse quantization for instant display
+    Stage 2 (deferred): Refined quantization ~1s later
+    
+    Returns:
+        - coarse_notes: Immediately quantized notes (display these now)
+        - bpm: Current tempo estimate
+        - bpm_confidence: How confident the tempo estimate is (0-1)
+        - needs_refresh: If true, frontend should reload the score
+        - refined_notes: Notes that were refined (if any)
+        - refinement_version: Version number for cache invalidation
+    """
+    session = get_live_session(req.session_id)
+    
+    result = await run_in_threadpool(
+        session.process_notes, req.notes, req.chords
+    )
+    
+    return JSONResponse(content=make_json_serializable(result))
+
+
+@app.post("/live/check-refinement")
+async def live_check_refinement(req: LiveSessionQuery):
+    """
+    Check if any notes are ready for refinement.
+    
+    Call this periodically (every 500ms-1s) to get refined notes.
+    
+    Returns:
+        - needs_refresh: If true, refined notes are available
+        - refined_notes: List of refined notes (if any)
+        - refinement_version: Current version number
+        - all_notes: Complete list of notes with best available quantization
+    """
+    import time
+    session = get_live_session(req.session_id)
+    
+    bpm, confidence = session.get_current_bpm()
+    refined = session.refinement_state.check_refinement(time.time(), bpm)
+    
+    return JSONResponse(content=make_json_serializable({
+        "needs_refresh": refined is not None and len(refined) > 0,
+        "refined_notes": refined or [],
+        "refinement_version": session.refinement_state.get_refinement_version(),
+        "bpm": bpm,
+        "bpm_confidence": confidence,
+    }))
+
+
+@app.post("/live/get-all-notes")
+async def live_get_all_notes(req: LiveSessionQuery):
+    """
+    Get all notes with best available quantization.
+    
+    Use this when the frontend needs to refresh the full score.
+    """
+    session = get_live_session(req.session_id)
+    all_notes = session.get_all_notes()
+    bpm, confidence = session.get_current_bpm()
+    
+    return JSONResponse(content=make_json_serializable({
+        "notes": all_notes,
+        "chords": session.coarse_chords,
+        "bpm": bpm,
+        "bpm_confidence": confidence,
+        "refinement_version": session.refinement_state.get_refinement_version(),
+    }))
+
+
+@app.post("/live/finalize")
+async def live_finalize_session(req: LiveSessionQuery):
+    """
+    Finalize a live session (e.g., when recording stops).
+    
+    Forces refinement of all pending notes and returns final results.
+    Use this endpoint when the user stops recording.
+    """
+    session = get_live_session(req.session_id)
+    
+    # Force refinement of all pending notes
+    await run_in_threadpool(session.force_refinement)
+    
+    all_notes = session.get_all_notes()
+    bpm, confidence = session.get_current_bpm()
+    
+    return JSONResponse(content=make_json_serializable({
+        "status": "finalized",
+        "notes": all_notes,
+        "chords": session.coarse_chords,
+        "bpm": bpm,
+        "bpm_confidence": confidence,
+        "total_notes": len(all_notes),
+        "total_chords": len(session.coarse_chords),
+        "refinement_version": session.refinement_state.get_refinement_version(),
+    }))
+
+
+@app.get("/live/cleanup")
+async def live_cleanup_sessions(max_age_seconds: float = 3600.0):
+    """Remove stale live sessions."""
+    removed = cleanup_stale_sessions(max_age_seconds)
+    return {"status": "cleaned", "removed_sessions": removed}
+
+
 if __name__ == "__main__":
     # Get port from environment variable (Railway sets this) or default to 8000
     port = int(os.environ.get("PORT", 8000))
@@ -734,3 +902,4 @@ if __name__ == "__main__":
         port=port,
         log_level="info"
     )
+    

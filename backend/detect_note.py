@@ -41,7 +41,8 @@ USE_GPU = _HAS_TORCH and _CUDA_AVAILABLE
 if USE_GPU:
     try:
         from gpu_ops import USE_GPU as _GPU_OPS_READY
-        from gpu_ops import (fused_noise_reduce, get_gpu_ensemble_transcriber,
+        from gpu_ops import (fused_noise_reduce,
+                             get_gpu_mel_baseline_transcriber,
                              get_gpu_rhythm_model, get_gpu_transcriber,
                              get_gpu_transformer_model,
                              gpu_batch_multiband_gate, gpu_compute_stft_once,
@@ -54,6 +55,21 @@ if USE_GPU:
     except ImportError as e:
         print(f"[GPU] gpu_ops import failed: {e}, using CPU fallback")
         USE_GPU = False
+
+#* ─── Note Value Constants ────────────────────────────────────────────────────
+NOTE_VALUE_BEATS = {
+    'whole': 4.0, 'half': 2.0, 'quarter': 1.0, 'eighth': 0.5,
+    '16th': 0.25, '32nd': 0.125,
+}
+NOTE_VALUE_BEATS_WITH_SUBDIVISIONS = {
+    **NOTE_VALUE_BEATS,
+    'quarter_triplet': 2/3, 'eighth_triplet': 1/3, '16th_triplet': 1/6,
+    'dotted_half': 3.0, 'dotted_quarter': 1.5, 'dotted_eighth': 0.75, 'dotted_16th': 0.375,
+}
+NOTE_VALUES_LIST = [
+    ('whole', 4.0), ('half', 2.0), ('quarter', 1.0),
+    ('eighth', 0.5), ('16th', 0.25), ('32nd', 0.125),
+]
 
 #* ─── ML Rhythm Model (lazy loaded) ───────────────────────────────────────────
 _rhythm_model = None
@@ -192,6 +208,10 @@ def duration_to_note_value(duration_seconds, bpm=120, debug=False):
         ('32nd', 0.125, False, False),    # 32nd
     ]
     
+    # Penalty factors: triplets and dotted notes should need stronger evidence
+    TRIPLET_PENALTY = 0.15   # Triplets must be 15% closer (in log distance) to win
+    DOTTED_PENALTY = 0.05    # Small penalty for dotted notes
+    
     # Find the closest note value
     best_match = None
     best_distance = float('inf')
@@ -207,6 +227,12 @@ def duration_to_note_value(duration_seconds, bpm=120, debug=False):
         else:
             # Fallback to linear distance
             log_distance = abs(beats - note_beats)
+        
+        # Apply penalties for less common note values
+        if is_triplet:
+            log_distance += TRIPLET_PENALTY
+        if dotted:
+            log_distance += DOTTED_PENALTY
         
         if log_distance < best_distance:
             best_distance = log_distance
@@ -410,11 +436,13 @@ def detect_ornaments(notes, bpm, debug=False):
             i += 1
     
     # ============ GRACE NOTE DETECTION ============
-    # Very short note immediately before a longer note
-    # Tightened condition: only mark as grace if it doesn't fit well as a 32nd note
-    # (or smaller quantized value). Prefer regular notation when possible.
+    # DISABLED: Grace notes cause more problems than they solve in current pipeline
+    # Very short notes are quantized to 32nd notes instead
+    # To re-enable, set skip_grace_notes = False
+    skip_grace_notes = True
+    
     i = 0
-    while i < len(sorted_notes) - 1:
+    while i < len(sorted_notes) - 1 and not skip_grace_notes:
         if i in notes_to_remove:
             i += 1
             continue
@@ -433,24 +461,41 @@ def detect_ornaments(notes, bpm, debug=False):
         # If the quantization error to 32nd note is small, prefer 32nd note over grace
         thirty_second_beats = 0.125
         quant_error_32nd = abs(duration_beats - thirty_second_beats) / thirty_second_beats if thirty_second_beats > 0 else 999
-        fits_as_32nd = quant_error_32nd < 0.5  # Within 50% of a 32nd note duration
+        fits_as_32nd = quant_error_32nd < 0.7  # More lenient - within 70% of a 32nd note duration
 
-        # Grace notes must be extremely short AND not fit well as a 32nd note:
-        # - Less than half a 32nd note in beats (< 0.0625 beats)
-        # - Under 60ms absolute time
+        # Grace notes must be EXTREMELY short AND meet many strict conditions:
+        # - Less than 1/4 of a 32nd note in beats (< 0.03 beats) 
+        # - Under 30ms absolute time (truly imperceptible as a rhythmic note)
         # - Must NOT fit well as a quantized 32nd note
-        if duration_beats < 0.0625 and duration < 0.06 and not fits_as_32nd:
-            # Check the interval to the next note
+        # - Must NOT be part of a simultaneous chord (check for notes within 20ms)
+        
+        # Check if this note is likely part of a chord (other notes at ~same time)
+        note_time = note.get('time_seconds', 0)
+        is_chord_note = False
+        for j in range(max(0, i - 3), min(len(sorted_notes), i + 3)):
+            if j != i and j not in notes_to_remove:
+                other_time = sorted_notes[j].get('time_seconds', 0)
+                if abs(other_time - note_time) < 0.025:  # Within 25ms = chord
+                    is_chord_note = True
+                    break
+        
+        # Skip grace note detection for chord notes entirely
+        if is_chord_note:
+            i += 1
+            continue
+        
+        if duration_beats < 0.03 and duration < 0.03 and not fits_as_32nd:
+            # Check the interval to the next note - grace notes are STEPWISE only
             pitch1 = note.get('midi_note', 60)
             pitch2 = next_note.get('midi_note', 60)
             interval = abs(pitch2 - pitch1)
 
-            # Grace notes are usually stepwise or small leaps (within an octave)
-            if interval <= 12:
-                # Check that next note is significantly longer (at least 4x)
+            # Grace notes should be stepwise (1-2 semitones) or at most a small skip (3 semitones)
+            if interval <= 3:
+                # Check that next note is MUCH longer (at least 8x)
                 next_dur_beats = next_note.get('duration_seconds', 0.5) / beat_duration
 
-                if next_dur_beats >= duration_beats * 4:
+                if next_dur_beats >= duration_beats * 8:
                     # This is likely a grace note
                     note['ornament'] = 'grace'
                     note['grace_type'] = 'acciaccatura' if interval <= 2 else 'appoggiatura'
@@ -610,6 +655,277 @@ def detect_ornaments(notes, bpm, debug=False):
     return result
 
 
+def post_process_rhythm_unified(notes, bpm, debug=False):
+    """
+    Unified single-pass rhythm post-processing.
+
+    Replaces the previous 4-function chain:
+      fill_gaps_with_ioi -> smooth_rhythm_gaps -> reduce_rest_entropy -> detect_and_normalize_runs
+
+    In a SINGLE pass over the note list, this function:
+      1. Computes all IOIs and builds a sliding-window statistical model
+      2. For each note decides: extend to fill gap, insert rest, or keep as-is
+      3. Detects runs of similar-duration notes and normalizes outliers
+
+    All thresholds are TEMPO-RELATIVE rather than fixed.
+
+    Args:
+        notes: List of note dicts (already quantized with note_value)
+        bpm: Tempo in BPM
+        debug: Print debug info
+
+    Returns:
+        Modified notes with unified post-processing applied
+    """
+    if len(notes) < 2:
+        return notes
+
+    beat_duration = 60.0 / bpm
+
+    # ── Tempo-relative thresholds ──
+    # At 60 BPM beat=1s, at 120 BPM beat=0.5s, at 180 BPM beat=0.33s
+    # "Minimum meaningful gap" scales with tempo: ~1/8 of a beat
+    min_gap_beats = 0.125  # 32nd note — below this, always extend
+    # "Maximum fill gap" — extend notes for gaps up to this size
+    # Larger at slow tempos (more time between notes), smaller at fast tempos
+    max_fill_beats = min(2.0, max(0.5, 2.0 * (120.0 / bpm)))
+    # At 60 BPM -> 4.0 (capped at 2.0), at 120 BPM -> 2.0, at 180 BPM -> 1.33
+    # "Phrase boundary" — gaps above this are always rests
+    phrase_boundary_beats = max(2.0, 6.0 * (60.0 / bpm))
+    # At 60 BPM -> 6.0, at 120 BPM -> 3.0, at 180 BPM -> 2.0
+
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+
+    # ── Pre-compute IOIs for the whole sequence ──
+    n_notes = len(sorted_notes)
+    iois = []
+    for i in range(n_notes - 1):
+        onset_a = sorted_notes[i].get('time_seconds', 0)
+        onset_b = sorted_notes[i + 1].get('time_seconds', 0)
+        iois.append(onset_b - onset_a)
+    iois.append(iois[-1] if iois else beat_duration)  # pad last
+
+    # ── Pre-compute sliding-window statistics (Hampel identifier) ──
+    WINDOW = 8
+    K_THRESHOLD = 3.0
+    MAD_SCALE = 1.4826
+
+    def _is_outlier_ioi(idx):
+        """Return True if IOI[idx] is a statistical outlier in its neighbourhood."""
+        lo = max(0, idx - WINDOW // 2)
+        hi = min(len(iois), idx + WINDOW // 2 + 1)
+        window = sorted(iois[lo:hi])
+        n = len(window)
+        if n < 3:
+            window = sorted(iois)
+            n = len(window)
+        median = window[n // 2]
+        deviations = sorted(abs(x - median) for x in window)
+        mad = deviations[len(deviations) // 2]
+        sigma_est = mad * MAD_SCALE
+        if sigma_est < 1e-6:
+            sigma_est = median * 0.25
+        threshold = median + K_THRESHOLD * sigma_est
+        return iois[idx] > threshold
+
+    # ── Detect runs of similar IOIs (for run normalization) ──
+    IOI_SIMILARITY = 0.20
+
+    # Find contiguous segments where IOIs are similar
+    ioi_runs = []
+    run_start = 0
+    for i in range(1, len(iois) - 1):  # exclude padded last
+        prev_ioi = iois[i - 1]
+        curr_ioi = iois[i]
+        if prev_ioi > 0 and curr_ioi > 0:
+            ratio = curr_ioi / prev_ioi
+            if 1.0 - IOI_SIMILARITY <= ratio <= 1.0 + IOI_SIMILARITY:
+                continue
+        run_len = i - run_start + 1
+        if run_len >= 4:
+            ioi_runs.append((run_start, run_start + run_len))
+        run_start = i
+    # Final run
+    final_run_len = n_notes - run_start
+    if final_run_len >= 3:
+        ioi_runs.append((run_start, n_notes))
+
+    # Also find runs based on assigned note values
+    value_runs = []
+    run_start = 0
+    prev_bts = NOTE_VALUE_BEATS.get(sorted_notes[0].get('note_value', 'quarter'), 1.0)
+    for i in range(1, n_notes):
+        curr_bts = NOTE_VALUE_BEATS.get(sorted_notes[i].get('note_value', 'quarter'), 1.0)
+        if prev_bts > 0 and curr_bts > 0:
+            ratio = curr_bts / prev_bts
+            if 0.67 <= ratio <= 1.5:
+                prev_bts = curr_bts
+                continue
+        if i - run_start >= 4:
+            value_runs.append((run_start, i))
+        run_start = i
+        prev_bts = curr_bts
+    if n_notes - run_start >= 3:
+        value_runs.append((run_start, n_notes))
+
+    # Merge overlapping runs
+    all_runs = sorted(ioi_runs + value_runs, key=lambda x: x[0])
+    merged_runs = []
+    for run in all_runs:
+        if merged_runs and run[0] <= merged_runs[-1][1]:
+            merged_runs[-1] = (merged_runs[-1][0], max(merged_runs[-1][1], run[1]))
+        else:
+            merged_runs.append(run)
+
+    # Build set of notes in runs, with their target value
+    run_targets = {}  # note_index -> (target_type, target_beats, target_dotted)
+    for run_start_idx, run_end_idx in merged_runs:
+        run_notes = sorted_notes[run_start_idx:run_end_idx]
+        run_iois = [iois[i] for i in range(run_start_idx, min(run_end_idx - 1, len(iois)))]
+        if not run_iois:
+            continue
+
+        median_ioi = np.median(run_iois)
+        run_note_val = duration_to_note_value(median_ioi, bpm=bpm, debug=False)
+        run_type = run_note_val['type']
+        run_beats = run_note_val['beats']
+        run_dotted = run_note_val.get('dotted', False)
+
+        # Also check majority vote
+        value_counts = {}
+        for note in run_notes:
+            val = note.get('note_value', 'quarter')
+            dotted = note.get('dotted', False)
+            key = (val, dotted)
+            value_counts[key] = value_counts.get(key, 0) + 1
+
+        most_common = max(value_counts.items(), key=lambda x: x[1])
+        most_common_type, most_common_dotted = most_common[0]
+        most_common_count = most_common[1]
+
+        ioi_error = run_note_val.get('quantization_error', 1.0)
+        majority_pct = most_common_count / len(run_notes)
+
+        if ioi_error < 0.15 and run_type == most_common_type:
+            final_type, final_beats, final_dotted = run_type, run_beats, run_dotted
+        elif majority_pct >= 0.4:
+            final_type = most_common_type
+            final_dotted = most_common_dotted
+            final_beats = NOTE_VALUE_BEATS.get(final_type, 0.5)
+            if final_dotted:
+                final_beats *= 1.5
+        else:
+            final_type, final_beats, final_dotted = run_type, run_beats, run_dotted
+
+        for j in range(run_start_idx, run_end_idx):
+            run_targets[j] = (final_type, final_beats, final_dotted)
+
+    # ── SINGLE PASS: process each note ──
+    fills = 0
+    extensions = 0
+    rest_removals = 0
+    run_normalizations = 0
+
+    for i in range(n_notes):
+        note = sorted_notes[i]
+        note_beats = note.get('note_divisions', 1.0)
+
+        # ── Step A: Run normalization (outlier notes in runs) ──
+        # Skip notes with deliberate rests — their shorter value is intentional
+        if i in run_targets and not note.get('has_rest_after', False):
+            target_type, target_beats, target_dotted = run_targets[i]
+            if note.get('note_value') != target_type or note.get('dotted', False) != target_dotted:
+                note['note_value'] = target_type
+                note['note_divisions'] = target_beats
+                note['dotted'] = target_dotted
+                note['is_triplet'] = False
+                note['run_normalized'] = True
+                note_beats = target_beats
+                run_normalizations += 1
+
+        # ── Step B: Gap analysis (fill, extend, or rest) ──
+        if i >= n_notes - 1:
+            continue  # Last note — no gap to analyze
+
+        ioi = iois[i]
+        ioi_beats = ioi / beat_duration
+        gap_beats = ioi_beats - note_beats
+
+        # B1: Tiny or no gap — nothing to do
+        if gap_beats <= min_gap_beats:
+            note['has_rest_after'] = False
+            note.pop('rest_duration', None)
+            continue
+
+        # B2: Beyond phrase boundary — always keep rest
+        if gap_beats > phrase_boundary_beats:
+            note['has_rest_after'] = True
+            note['rest_duration'] = ioi - note_beats * beat_duration
+            continue
+
+        # B3: Statistical outlier test (from reduce_rest_entropy logic)
+        is_outlier = _is_outlier_ioi(i)
+
+        # B4: If already marked as rest, keep it — deliberate rest assignments
+        # should not be undone by gap filling. Only override if gap is tiny (B1).
+        if note.get('has_rest_after', False):
+            continue
+
+        # B5: Within fillable range — try to extend note
+        if gap_beats <= max_fill_beats:
+            # Try IOI-based re-quantization (from fill_gaps_with_ioi logic)
+            ioi_val = duration_to_note_value(ioi, bpm=bpm, debug=False)
+            ioi_error = ioi_val.get('quantization_error', 1.0)
+
+            if ioi_error < 0.3:
+                # Clean quantization to IOI — extend note
+                note['note_value'] = ioi_val['type']
+                note['note_divisions'] = ioi_val['divisions']
+                note['dotted'] = ioi_val.get('dotted', False)
+                note['has_rest_after'] = False
+                note.pop('rest_duration', None)
+                fills += 1
+                continue
+
+            # Try extending to nearest larger standard value (from smooth_rhythm_gaps logic)
+            new_duration_beats = note_beats + gap_beats
+            new_note_val = extend_to_nearest_value(
+                note_beats, new_duration_beats, note.get('is_triplet', False)
+            )
+            if new_note_val:
+                note['note_value'] = new_note_val['type']
+                note['note_divisions'] = new_note_val['beats']
+                note['dotted'] = new_note_val.get('dotted', False)
+                note['has_rest_after'] = False
+                note.pop('rest_duration', None)
+                extensions += 1
+                continue
+
+        # B6: Medium gap, not an outlier — still try to extend by re-quantizing IOI
+        if not is_outlier:
+            ioi_val = duration_to_note_value(ioi, bpm=bpm, debug=False)
+            ioi_error = ioi_val.get('quantization_error', 1.0)
+            if ioi_error < 0.35:
+                note['note_value'] = ioi_val['type']
+                note['note_divisions'] = ioi_val['divisions']
+                note['dotted'] = ioi_val.get('dotted', False)
+                note['has_rest_after'] = False
+                note.pop('rest_duration', None)
+                note['quantization_method'] = note.get('quantization_method', '') + ' (rest removed)'
+                rest_removals += 1
+                continue
+
+        # B7: Fallback — significant gap that's an outlier or can't be filled cleanly
+        note['has_rest_after'] = True
+        note['rest_duration'] = ioi - note_beats * beat_duration
+
+    if debug:
+        print(f"  [Unified Post-Process] IOI fills: {fills}, extensions: {extensions}, "
+              f"rest removals: {rest_removals}, run normalizations: {run_normalizations}")
+
+    return sorted_notes
+
+
 def detect_and_normalize_runs(notes, bpm, debug=False):
     """
     Detect runs of similar-duration notes and normalize them to the same value.
@@ -641,15 +957,11 @@ def detect_and_normalize_runs(notes, bpm, debug=False):
     iois = []
     for i in range(len(times) - 1):
         iois.append(times[i + 1] - times[i])
-    
+
     # Map note values to their beat duration for comparison
-    note_value_beats = {
-        'whole': 4.0, 'half': 2.0, 'quarter': 1.0, 'eighth': 0.5,
-        '16th': 0.25, '32nd': 0.125
-    }
     
     # APPROACH 1: Find runs based on IOI similarity (within 35%)
-    IOI_SIMILARITY = 0.35
+    IOI_SIMILARITY = 0.20
     
     # Find contiguous segments where IOIs are similar
     runs = []
@@ -669,7 +981,7 @@ def detect_and_normalize_runs(notes, bpm, debug=False):
         
         # End of run
         run_len = i - run_start + 1  # +1 because i is IOI index, we want note count
-        if run_len >= 3:
+        if run_len >= 4:
             runs.append((run_start, run_start + run_len))
         run_start = i
     
@@ -682,20 +994,20 @@ def detect_and_normalize_runs(notes, bpm, debug=False):
     # Group consecutive notes with the same or adjacent note values
     value_runs = []
     run_start = 0
-    prev_beats = note_value_beats.get(sorted_notes[0].get('note_value', 'quarter'), 1.0)
+    prev_beats = NOTE_VALUE_BEATS.get(sorted_notes[0].get('note_value', 'quarter'), 1.0)
     
     for i in range(1, len(sorted_notes)):
-        curr_beats = note_value_beats.get(sorted_notes[i].get('note_value', 'quarter'), 1.0)
+        curr_beats = NOTE_VALUE_BEATS.get(sorted_notes[i].get('note_value', 'quarter'), 1.0)
         
         # Allow notes within factor of 2 to be in same run (handles dotted variants)
         if prev_beats > 0 and curr_beats > 0:
             ratio = curr_beats / prev_beats
-            if 0.5 <= ratio <= 2.0:
+            if 0.67 <= ratio <= 1.5:
                 prev_beats = curr_beats
                 continue
         
         # End of run
-        if i - run_start >= 3:
+        if i - run_start >= 4:
             value_runs.append((run_start, i))
         run_start = i
         prev_beats = curr_beats
@@ -766,7 +1078,7 @@ def detect_and_normalize_runs(notes, bpm, debug=False):
             # Use majority vote
             final_type = most_common_type
             final_dotted = most_common_dotted
-            final_beats = note_value_beats.get(final_type, 0.5)
+            final_beats = NOTE_VALUE_BEATS.get(final_type, 0.5)
             if final_dotted:
                 final_beats *= 1.5
         else:
@@ -879,6 +1191,67 @@ def detect_beats_neural(audio_path_or_array, sr=None, debug=False):
         }
 
 
+def cross_validate_with_acoustic_duration(notes, bpm, debug=False):
+    """
+    Cross-validate quantized note values against acoustic durations.
+
+    After quantization assigns note_value based on IOI/grid, this checks
+    whether the acoustic duration (how long the key was actually held)
+    is consistent with the assigned value. If the note_value implies
+    2 beats but the key was only held for ~1 beat, the note should
+    probably be shorter with a rest after.
+    """
+    if len(notes) < 2:
+        return notes
+
+    beat_duration = 60.0 / bpm
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+    corrections = 0
+
+    for note in sorted_notes:
+        assigned_beats = note.get('note_divisions', 1.0)
+        acoustic_dur = note.get('duration_seconds', 0.5)
+        acoustic_beats = acoustic_dur / beat_duration
+
+        # Skip grace notes or notes already marked with acoustic method
+        if note.get('is_grace_note', False):
+            continue
+        method = note.get('quantization_method', '')
+        if 'acoustic' in method:
+            continue
+
+        # Check: does the acoustic duration justify the assigned note value?
+        # If the note rings for less than 60% of the assigned duration,
+        # AND the assigned value is at least 1 beat,
+        # consider correcting.
+        ratio = acoustic_beats / assigned_beats if assigned_beats > 0 else 1.0
+
+        if ratio < 0.60 and assigned_beats >= 1.0:
+            acoustic_val = duration_to_note_value(acoustic_dur, bpm=bpm, debug=False)
+            acoustic_error = acoustic_val.get('quantization_error', 1.0)
+
+            # Only correct if the acoustic value quantizes cleanly
+            if acoustic_error < 0.20:
+                gap_dur = (assigned_beats - acoustic_val['beats']) * beat_duration
+                gap_val = duration_to_note_value(gap_dur, bpm=bpm, debug=False)
+                gap_error = gap_val.get('quantization_error', 1.0)
+
+                # Both the note AND the rest must quantize cleanly
+                if gap_error < 0.25:
+                    note['note_value'] = acoustic_val['type']
+                    note['note_divisions'] = acoustic_val['beats']
+                    note['dotted'] = acoustic_val.get('dotted', False)
+                    note['has_rest_after'] = True
+                    note['rest_duration'] = gap_dur
+                    note['quantization_method'] = method + ' (acoustic-corrected)'
+                    corrections += 1
+
+    if debug and corrections > 0:
+        print(f"  [Acoustic Cross-Validation] Corrected {corrections} notes")
+
+    return sorted_notes
+
+
 def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=False):
     """
     Quantize note timings to a detected beat grid for more accurate rhythm.
@@ -966,13 +1339,16 @@ def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=F
         gap_beats = gap / beat_duration
         
         # Only consider it a rest if:
-        # 1. Gap is at least 1.0 beats (quarter note) - prevents stuttering rests
-        # 2. Acoustic duration is less than 30% of IOI (very clear intentional lift)
+        # 1. Gap is significant relative to tempo - prevents stuttering rests
+        # 2. Acoustic duration is less than 65% of IOI (note not truly sustained)
         # 3. The resulting note value would be a "normal" subdivision
-        # Rationale: most mid-phrase gaps are artifacts of timing jitter or
-        # early key release; extending the note creates smoother, more musical notation.
+        # Rationale: Piano notes naturally sustain to ~85-95% of their full duration
+        # when truly held. Notes sustaining < 65% of IOI likely have a rest after.
+        # Tempo-relative rest threshold: at least a quarter beat, scaled to tempo
+        rest_threshold_beats = max(0.25, 0.5 * (120.0 / bpm))
+        # At 60 BPM -> 1.0, at 120 BPM -> 0.5, at 180 BPM -> 0.33
 
-        if gap_beats >= 1.0 and acoustic_duration < ioi * 0.3:
+        if gap_beats >= rest_threshold_beats and acoustic_duration < ioi * 0.65:
             # Potential rest - but check if it creates sensible notation
             # Try quantizing the acoustic duration alone
             acoustic_note_val = duration_to_note_value_contextual(
@@ -990,12 +1366,13 @@ def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=F
             acoustic_error = acoustic_note_val.get('quantization_error', 1.0)
             ioi_error = ioi_note_val.get('quantization_error', 1.0)
 
-            # Calculate how many rests would be needed for the gap
-            rest_beats = gap / beat_duration
-            # Prefer extending note over inserting rests for gaps up to 3 beats
-            would_need_multiple_rests = rest_beats > 0.5 and rest_beats < 3.0
+            # Check if the rest gap maps cleanly to a standard rest value
+            rest_val = duration_to_note_value(gap, bpm=bpm, debug=False)
+            rest_quantizes_cleanly = rest_val.get('quantization_error', 1.0) < 0.2
 
-            if ioi_error < acoustic_error * 0.8 or would_need_multiple_rests:
+            # Only extend the note if IOI is dramatically cleaner AND
+            # the rest would be an awkward non-standard value
+            if ioi_error < acoustic_error * 0.5 and not rest_quantizes_cleanly:
                 # Use IOI as duration (no rest)
                 effective_duration = grid_ioi
                 method = 'ioi (extended)'
@@ -1077,23 +1454,7 @@ def detect_dominant_subdivisions(notes, bpm, debug=False, window_seconds=4.0):
     all_intervals = list(iois) + durations
     
     # Define subdivision templates (in beats)
-    subdivisions = {
-        'whole': 4.0,
-        'half': 2.0,
-        'quarter': 1.0,
-        'eighth': 0.5,
-        '16th': 0.25,
-        '32nd': 0.125,
-        # Triplets
-        'quarter_triplet': 2/3,
-        'eighth_triplet': 1/3,
-        '16th_triplet': 1/6,
-        # Dotted
-        'dotted_half': 3.0,
-        'dotted_quarter': 1.5,
-        'dotted_eighth': 0.75,
-        'dotted_16th': 0.375,
-    }
+    subdivisions = NOTE_VALUE_BEATS_WITH_SUBDIVISIONS
     
     # Count how many intervals fall near each subdivision
     # Use TIGHT tolerance (15%) to avoid false positives
@@ -1268,15 +1629,15 @@ def duration_to_note_value_contextual(duration_seconds, bpm, subdivision_info, d
         # STRONG context boost: common subdivisions get big bonus
         # Rare subdivisions get penalty if context weight is low
         if context_weight > 0.15:
-            context_boost = 1.0 + context_weight * 4  # Up to 4x boost for dominant patterns
+            context_boost = 1.0 + context_weight * 2  # Max ~1.8x for dominant patterns
         elif context_weight > 0.05:
-            context_boost = 0.8 + context_weight * 2
+            context_boost = 0.9 + context_weight * 1.5
         else:
-            context_boost = 0.3  # Heavy penalty for subdivisions not seen locally
-        
-        # Primary subdivision gets extra boost
+            context_boost = 0.6  # Mild penalty, not harsh exclusion
+
+        # Primary subdivision gets modest boost
         if note_type == primary and not dotted and not is_triplet:
-            context_boost *= 1.5
+            context_boost *= 1.2
         
         # Apply complexity penalty (prefer simpler rhythms when ambiguous)
         complexity_factor = 1.0 - complexity
@@ -1316,9 +1677,12 @@ def duration_to_note_value_contextual(duration_seconds, bpm, subdivision_info, d
     return result
 
 
-def quantize_rhythm_ml(notes, bpm, debug=False):
+def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.70):
     """
     Quantize note rhythms using the trained ML model.
+
+    If notes already have 'note_value' from ensemble model with high confidence,
+    those predictions are preserved. Otherwise, transformer/MLP refinement is used.
 
     Uses GPU-batched inference when CUDA is available, otherwise falls back
     to CPU numpy model. Falls back to heuristic if model is not available.
@@ -1327,6 +1691,7 @@ def quantize_rhythm_ml(notes, bpm, debug=False):
         notes: List of note dicts with 'time_seconds', 'duration_seconds', 'midi_note'
         bpm: Detected tempo in BPM
         debug: Print debug info
+        ensemble_confidence_threshold: Notes with ensemble confidence >= this are kept
 
     Returns:
         Modified notes list with ML-based note_value assignments
@@ -1336,6 +1701,10 @@ def quantize_rhythm_ml(notes, bpm, debug=False):
 
     # Sort notes by time
     sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+    
+    # Map ensemble note_value names to standard names (they match already)
+    # ensemble uses: ['32nd', '16th', 'eighth', 'quarter', 'half', 'whole']
+    # transformer expects same names
 
     # ── GPU Path: Try Transformer (sequence-aware) first, then MLP fallback ──
     if USE_GPU:
@@ -1350,35 +1719,55 @@ def quantize_rhythm_ml(notes, bpm, debug=False):
 
             predictions = transformer_model.predict_batch(features)
 
+            n_kept_ensemble = 0
+            n_refined = 0
             for i, (note, pred) in enumerate(zip(sorted_notes, predictions)):
-                note['note_value'] = pred['note_type']
-                note['note_divisions'] = pred['beats']
-                note['dotted'] = pred['dotted']
-                note['is_triplet'] = pred['is_triplet']
-                note['has_rest_after'] = pred['has_rest']
-                note['quantization_method'] = 'transformer_gpu'
-                note['quantization_confidence'] = pred['confidence']
-                note['rest_confidence'] = pred.get('rest_confidence', 0)
+                ensemble_conf = note.get('note_value_confidence', 0)
+                has_ensemble_nv = note.get('note_value_source') == 'ensemble' and 'note_value' in note
+                
+                if has_ensemble_nv and ensemble_conf >= ensemble_confidence_threshold:
+                    # Keep ensemble prediction, add transformer's extra fields
+                    note['dotted'] = pred['dotted']
+                    note['is_triplet'] = pred['is_triplet']
+                    note['has_rest_after'] = pred['has_rest']
+                    note['quantization_method'] = 'ensemble_kept'
+                    note['quantization_confidence'] = ensemble_conf
+                    note['rest_confidence'] = pred.get('rest_confidence', 0)
+                    note['note_divisions'] = NOTE_VALUE_BEATS.get(note['note_value'], 1.0)
+                    n_kept_ensemble += 1
+                else:
+                    # Use transformer prediction (refine or replace)
+                    note['note_value'] = pred['note_type']
+                    note['note_divisions'] = pred['beats']
+                    note['dotted'] = pred['dotted']
+                    note['is_triplet'] = pred['is_triplet']
+                    note['has_rest_after'] = pred['has_rest']
+                    note['quantization_method'] = 'transformer_gpu'
+                    note['quantization_confidence'] = pred['confidence']
+                    note['rest_confidence'] = pred.get('rest_confidence', 0)
+                    n_refined += 1
 
                 if pred['has_rest'] and i < len(sorted_notes) - 1:
                     next_onset = sorted_notes[i + 1].get('time_seconds', 0)
                     onset = note.get('time_seconds', 0)
                     ioi = next_onset - onset
-                    note['rest_duration'] = max(ioi - pred['beats'] * (60.0 / bpm), 0)
+                    note['rest_duration'] = max(ioi - note['note_divisions'] * (60.0 / bpm), 0)
 
                 if debug and i < 10:
                     dur = note.get('duration_seconds', 0) * 1000
-                    rest_str = " [REST]" if pred['has_rest'] else ""
-                    print(f"  Note {i}: {dur:.0f}ms -> {pred['note_type']}"
-                          f"{' (dotted)' if pred['dotted'] else ''}"
-                          f"{' (triplet)' if pred['is_triplet'] else ''}"
-                          f" (conf={pred['confidence']:.2f}){rest_str}")
+                    rest_str = " [REST]" if note.get('has_rest_after') else ""
+                    src = "ENSEMBLE" if note.get('quantization_method') == 'ensemble_kept' else "TRANS"
+                    print(f"  Note {i}: {dur:.0f}ms -> {note['note_value']}"
+                          f"{' (dotted)' if note.get('dotted') else ''}"
+                          f"{' (triplet)' if note.get('is_triplet') else ''}"
+                          f" [{src}] (conf={note.get('quantization_confidence', 0):.2f}){rest_str}")
+
+            if debug:
+                print(f"  [Summary] Kept {n_kept_ensemble} ensemble predictions, "
+                      f"refined {n_refined} with transformer")
 
             sorted_notes = enforce_triplet_groups(sorted_notes, debug=debug)
-            sorted_notes = fill_gaps_with_ioi(sorted_notes, bpm, debug=debug)
-            sorted_notes = smooth_rhythm_gaps(sorted_notes, bpm, debug=debug)
-            # Transformer already predicts rests — still run statistical check as safety net
-            sorted_notes = reduce_rest_entropy(sorted_notes, bpm, debug=debug)
+            sorted_notes = post_process_rhythm_unified(sorted_notes, bpm, debug=debug)
             return sorted_notes
 
         # --- MLP fallback: per-note inference ---
@@ -1393,14 +1782,27 @@ def quantize_rhythm_ml(notes, bpm, debug=False):
             # Single batched forward pass on GPU for ALL notes
             predictions = gpu_model.predict_batch(features)
 
-            # Update notes
+            # Update notes (MLP path also respects high-confidence ensemble)
+            n_kept_ensemble = 0
             for i, (note, pred) in enumerate(zip(sorted_notes, predictions)):
-                note['note_value'] = pred['note_type']
-                note['note_divisions'] = pred['beats']
-                note['dotted'] = pred['dotted']
-                note['is_triplet'] = pred['is_triplet']
-                note['quantization_method'] = 'ml_gpu'
-                note['quantization_confidence'] = pred['confidence']
+                ensemble_conf = note.get('note_value_confidence', 0)
+                has_ensemble_nv = note.get('note_value_source') == 'ensemble' and 'note_value' in note
+                
+                if has_ensemble_nv and ensemble_conf >= ensemble_confidence_threshold:
+                    # Keep ensemble prediction
+                    note['dotted'] = pred['dotted']
+                    note['is_triplet'] = pred['is_triplet']
+                    note['quantization_method'] = 'ensemble_kept'
+                    note['quantization_confidence'] = ensemble_conf
+                    note['note_divisions'] = NOTE_VALUE_BEATS.get(note['note_value'], 1.0)
+                    n_kept_ensemble += 1
+                else:
+                    note['note_value'] = pred['note_type']
+                    note['note_divisions'] = pred['beats']
+                    note['dotted'] = pred['dotted']
+                    note['is_triplet'] = pred['is_triplet']
+                    note['quantization_method'] = 'ml_gpu'
+                    note['quantization_confidence'] = pred['confidence']
 
                 if debug and i < 10:
                     dur = note.get('duration_seconds', 0) * 1000
@@ -1409,10 +1811,11 @@ def quantize_rhythm_ml(notes, bpm, debug=False):
                           f"{' (triplet)' if pred['is_triplet'] else ''}"
                           f" (conf={pred['confidence']:.2f})")
 
+            if debug:
+                print(f"  [Summary] Kept {n_kept_ensemble} ensemble predictions")
+
             sorted_notes = enforce_triplet_groups(sorted_notes, debug=debug)
-            sorted_notes = fill_gaps_with_ioi(sorted_notes, bpm, debug=debug)
-            sorted_notes = smooth_rhythm_gaps(sorted_notes, bpm, debug=debug)
-            sorted_notes = reduce_rest_entropy(sorted_notes, bpm, debug=debug)
+            sorted_notes = post_process_rhythm_unified(sorted_notes, bpm, debug=debug)
             return sorted_notes
 
     # ── CPU Path: Original sequential inference ──
@@ -1456,9 +1859,11 @@ def quantize_rhythm_ml(notes, bpm, debug=False):
                   f" (conf={pred['confidence']:.2f})")
 
     sorted_notes = enforce_triplet_groups(sorted_notes, debug=debug)
-    sorted_notes = fill_gaps_with_ioi(sorted_notes, bpm, debug=debug)
-    sorted_notes = smooth_rhythm_gaps(sorted_notes, bpm, debug=debug)
-    sorted_notes = reduce_rest_entropy(sorted_notes, bpm, debug=debug)
+    sorted_notes = post_process_rhythm_unified(sorted_notes, bpm, debug=debug)
+
+    # Apply rhythm coherence smoothing to reduce erratic sections
+    sorted_notes = apply_coherence_smoothing(sorted_notes, bpm, debug=debug)
+
     return sorted_notes
 
 
@@ -1785,6 +2190,314 @@ def reduce_rest_entropy(notes, bpm, debug=False):
     return sorted_notes
 
 
+def apply_coherence_smoothing(notes, bpm, debug=False):
+    """Apply rhythm coherence analysis and smooth erratic sections."""
+    coherence_info = compute_rhythm_coherence(notes, window_size=8, bpm=bpm, debug=debug)
+    if coherence_info['erratic_indices']:
+        notes = smooth_erratic_rhythm(notes, coherence_info, bpm, debug=debug)
+    return notes
+
+
+def compute_rhythm_coherence(notes, window_size=8, bpm=120.0, debug=False):
+    """
+    Compute a rhythm coherence score over sliding windows.
+    
+    Inspired by the brain's predictive pulse model: the auditory system maintains
+    an internal rhythm expectation and detects "surprises" when notes deviate.
+    This function quantifies that deviation as a coherence score.
+    
+    Metrics computed per window:
+      1. Note value entropy: Shannon entropy of note value distribution (0=uniform, low=consistent)
+      2. IOI variance: Coefficient of variation of inter-onset intervals
+      3. Beat grid deviation: How far notes fall from quantized beat positions
+    
+    Returns a score in [0, 1] where 1 = perfectly coherent, 0 = maximally erratic.
+    Also returns per-note scores for targeted smoothing.
+    
+    Args:
+        notes: List of note dicts with 'note_value', 'note_divisions', 'time_seconds'
+        window_size: Number of notes in the sliding window
+        bpm: Tempo in BPM (used for beat grid deviation calculation)
+        debug: Print debug info
+        
+    Returns:
+        dict with:
+          - 'global_coherence': Overall coherence score [0, 1]
+          - 'per_note_coherence': List of per-note coherence values
+          - 'erratic_indices': List of note indices flagged as erratic
+          - 'window_coherences': List of per-window coherence scores
+    """
+    if len(notes) < 3:
+        return {
+            'global_coherence': 1.0,
+            'per_note_coherence': [1.0] * len(notes),
+            'erratic_indices': [],
+            'window_coherences': []
+        }
+    
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+    
+    # Standard note value to numeric mapping for entropy calculation
+    
+    def _compute_window_coherence(window_notes):
+        """Compute coherence metrics for a single window."""
+        if len(window_notes) < 2:
+            return 1.0, {}
+        
+        # ── 1. Note value entropy ──
+        # Count note value frequencies
+        value_counts = {}
+        for n in window_notes:
+            nv = n.get('note_value', 'quarter')
+            is_dotted = n.get('dotted', False)
+            key = f"{nv}_dotted" if is_dotted else nv
+            value_counts[key] = value_counts.get(key, 0) + 1
+        
+        # Shannon entropy: H = -sum(p * log2(p))
+        total = sum(value_counts.values())
+        entropy = 0.0
+        for count in value_counts.values():
+            if count > 0:
+                p = count / total
+                entropy -= p * np.log2(p)
+        
+        # Normalize entropy: max entropy = log2(n) when all values different
+        max_entropy = np.log2(len(window_notes)) if len(window_notes) > 1 else 1.0
+        normalized_entropy = entropy / max_entropy if max_entropy > 0 else 0.0
+        
+        # Convert to coherence (1 - normalized_entropy) so low entropy = high coherence
+        entropy_coherence = 1.0 - normalized_entropy
+        
+        # ── 2. IOI coefficient of variation ──
+        onsets = [n.get('time_seconds', 0) for n in window_notes]
+        iois = [onsets[i+1] - onsets[i] for i in range(len(onsets)-1)]
+        
+        if len(iois) > 0:
+            ioi_mean = np.mean(iois)
+            ioi_std = np.std(iois)
+            cv = ioi_std / ioi_mean if ioi_mean > 0 else 0  # coefficient of variation
+            # CV of 0 = perfectly regular; CV > 1 = very erratic
+            # Map to coherence: use sigmoid-like transformation
+            ioi_coherence = 1.0 / (1.0 + cv * 2)  # cv=0 -> 1.0, cv=0.5 -> 0.5, cv=1 -> 0.33
+        else:
+            ioi_coherence = 1.0
+        
+        # ── 3. Beat grid deviation ──
+        # How well do note_divisions align with the IOIs?
+        deviations = []
+        for i in range(len(window_notes) - 1):
+            n = window_notes[i]
+            expected_beats = n.get('note_divisions', 1.0)
+            actual_ioi = iois[i] if i < len(iois) else 0
+            # Compare in relative terms
+            if actual_ioi > 0 and expected_beats > 0:
+                beat_dur = 60.0 / bpm
+                actual_beats = actual_ioi / beat_dur
+                ratio = min(actual_beats, expected_beats) / max(actual_beats, expected_beats)
+                deviations.append(ratio)
+        
+        if deviations:
+            grid_coherence = np.mean(deviations)
+        else:
+            grid_coherence = 1.0
+        
+        # ── Combined coherence ──
+        # Weight: entropy matters most (note value consistency), then IOI regularity
+        combined = (
+            0.5 * entropy_coherence + 
+            0.3 * ioi_coherence + 
+            0.2 * grid_coherence
+        )
+        
+        metrics = {
+            'entropy': entropy,
+            'normalized_entropy': normalized_entropy,
+            'entropy_coherence': entropy_coherence,
+            'ioi_cv': cv if len(iois) > 0 else 0,
+            'ioi_coherence': ioi_coherence,
+            'grid_coherence': grid_coherence,
+            'value_distribution': value_counts
+        }
+        
+        return combined, metrics
+    
+    # ── Compute per-window coherence ──
+    window_coherences = []
+    half_window = window_size // 2
+    
+    for i in range(len(sorted_notes)):
+        lo = max(0, i - half_window)
+        hi = min(len(sorted_notes), i + half_window + 1)
+        window = sorted_notes[lo:hi]
+        coherence, _ = _compute_window_coherence(window)
+        window_coherences.append(coherence)
+    
+    # ── Detect erratic notes using z-score ──
+    # Notes with coherence significantly below the local median are flagged
+    per_note_coherence = window_coherences.copy()
+    erratic_indices = []
+    
+    if len(window_coherences) >= 4:
+        median_coherence = np.median(window_coherences)
+        mad = np.median([abs(c - median_coherence) for c in window_coherences])
+        sigma = mad * 1.4826  # MAD to std conversion
+        
+        # Use TWO criteria - either statistical outlier OR absolute low coherence
+        # 1. Statistical: coherence more than 1.5σ below median (lowered from 2σ)
+        stat_threshold = median_coherence - 1.5 * sigma if sigma > 0.01 else median_coherence * 0.8
+        # 2. Absolute: coherence below 0.65 is always erratic
+        abs_threshold = 0.65
+        
+        for i, coherence in enumerate(window_coherences):
+            if coherence < stat_threshold or coherence < abs_threshold:
+                erratic_indices.append(i)
+    
+    # Also flag notes whose value differs from both neighbors (isolated oddities)
+    for i in range(1, len(sorted_notes) - 1):
+        if i in erratic_indices:
+            continue
+        curr_val = sorted_notes[i].get('note_value', 'quarter')
+        prev_val = sorted_notes[i-1].get('note_value', 'quarter')
+        next_val = sorted_notes[i+1].get('note_value', 'quarter')
+        if curr_val != prev_val and curr_val != next_val and prev_val == next_val:
+            # This note is a lone outlier sandwiched between matching values
+            erratic_indices.append(i)
+    
+    erratic_indices = sorted(set(erratic_indices))  # Remove duplicates
+    
+    global_coherence = np.mean(window_coherences) if window_coherences else 1.0
+    
+    if debug:
+        print(f"  [Rhythm Coherence] Global: {global_coherence:.3f}, "
+              f"Erratic notes: {len(erratic_indices)}/{len(notes)}")
+        if erratic_indices and len(erratic_indices) <= 5:
+            for idx in erratic_indices[:5]:
+                print(f"    Note {idx}: coherence={window_coherences[idx]:.3f}, "
+                      f"value={sorted_notes[idx].get('note_value', '?')}")
+    
+    return {
+        'global_coherence': global_coherence,
+        'per_note_coherence': per_note_coherence,
+        'erratic_indices': erratic_indices,
+        'window_coherences': window_coherences
+    }
+
+
+def smooth_erratic_rhythm(notes, coherence_info, bpm, debug=False):
+    """
+    Smooth erratic rhythm sections by promoting locally dominant note values.
+    
+    When the rhythm becomes "erratic" (coherence drops), this re-quantizes
+    those notes to match the most common note value in their neighborhood,
+    mimicking how the brain's predictive pulse snaps outliers to the expected beat.
+    
+    Only applies smoothing if:
+      1. The note is flagged as erratic
+      2. There's a reasonably dominant note value in the local window (>35% occurrence)
+      3. The change doesn't wildly increase quantization error (within 50%)
+    
+    Args:
+        notes: List of note dicts
+        coherence_info: Dict from compute_rhythm_coherence()
+        bpm: Tempo in BPM
+        debug: Print debug info
+        
+    Returns:
+        Modified notes with erratic rhythms smoothed
+    """
+    erratic_indices = coherence_info.get('erratic_indices', [])
+    if not erratic_indices:
+        return notes
+    
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+    beat_duration = 60.0 / bpm
+    smoothed = 0
+    
+    # Standard note values and their beat durations
+    
+    for idx in erratic_indices:
+        if idx < 0 or idx >= len(sorted_notes):
+            continue
+        
+        note = sorted_notes[idx]
+        
+        # Skip grace notes
+        if note.get('is_grace_note', False):
+            continue
+
+        # Skip notes with deliberate rests — their shorter value is intentional
+        if note.get('has_rest_after', False):
+            continue
+        
+        # Get local window (±4 notes)
+        lo = max(0, idx - 4)
+        hi = min(len(sorted_notes), idx + 5)
+        window = sorted_notes[lo:hi]
+        
+        # Count note values in window (excluding current note)
+        value_counts = {}
+        for i, n in enumerate(window):
+            if lo + i == idx:  # Skip current note
+                continue
+            nv = n.get('note_value', 'quarter')
+            dotted = n.get('dotted', False)
+            key = (nv, dotted)
+            value_counts[key] = value_counts.get(key, 0) + 1
+        
+        if not value_counts:
+            continue
+        
+        # Find dominant value (lowered to >35% of window, was 50%)
+        total = sum(value_counts.values())
+        dominant_key, dominant_count = max(value_counts.items(), key=lambda x: x[1])
+        
+        if dominant_count / total < 0.35:
+            # No clear dominant value - don't smooth
+            continue
+        
+        dominant_value, dominant_dotted = dominant_key
+        
+        # Find the beat duration for dominant value
+        dominant_beats = None
+        for nv, beats in NOTE_VALUES_LIST:
+            if nv == dominant_value:
+                dominant_beats = beats * (1.5 if dominant_dotted else 1.0)
+                break
+        
+        if dominant_beats is None:
+            continue
+        
+        # Check if changing to dominant value is reasonable
+        # (raw duration should be within 50% of dominant value - was 40%)
+        raw_beats = note.get('raw_beats', note.get('note_divisions', 1.0))
+        ratio = min(raw_beats, dominant_beats) / max(raw_beats, dominant_beats) if dominant_beats > 0 else 0
+        
+        if ratio < 0.5:
+            # Too different - don't force the change
+            continue
+        
+        # Apply smoothing
+        old_value = note.get('note_value', 'quarter')
+        old_dotted = note.get('dotted', False)
+        
+        if old_value != dominant_value or old_dotted != dominant_dotted:
+            note['note_value'] = dominant_value
+            note['note_divisions'] = dominant_beats
+            note['dotted'] = dominant_dotted
+            note['quantization_method'] = note.get('quantization_method', '') + ' (coherence-smoothed)'
+            smoothed += 1
+            
+            if debug and smoothed <= 5:
+                print(f"  [Coherence Smooth] Note {idx}: {old_value}{'.' if old_dotted else ''} -> "
+                      f"{dominant_value}{'.' if dominant_dotted else ''} "
+                      f"(dominant: {dominant_count}/{total} in window)")
+    
+    if debug and smoothed > 0:
+        print(f"  [Coherence Smooth] Smoothed {smoothed} erratic notes")
+    
+    return sorted_notes
+
+
 def enforce_triplet_groups(notes, debug=False):
     """
     Ensure triplets only appear in valid groups of exactly 3 consecutive notes
@@ -1917,63 +2630,89 @@ def quantize_rhythm_from_ioi(notes, bpm, debug=False):
         return notes
     
     beat_duration = 60.0 / bpm
-    
+
     # Sort notes by time
     sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
-    
-    # Calculate IOIs
+
+    # ── Compute per-hand IOIs ──
+    # Cross-hand IOI captures inter-hand spacing, not note duration.
+    # Per-hand IOI is a much better proxy for the musical note duration.
+    hand_indices = {}  # hand -> list of indices in sorted_notes
+    for i, note in enumerate(sorted_notes):
+        hand = note.get('hand', 'treble')
+        if hand not in hand_indices:
+            hand_indices[hand] = []
+        hand_indices[hand].append(i)
+
+    per_hand_ioi = [None] * len(sorted_notes)
+    for hand, indices in hand_indices.items():
+        for j in range(len(indices) - 1):
+            curr_idx = indices[j]
+            next_idx = indices[j + 1]
+            ioi = (sorted_notes[next_idx].get('time_seconds', 0)
+                   - sorted_notes[curr_idx].get('time_seconds', 0))
+            per_hand_ioi[curr_idx] = ioi
+
+    # Global IOI as fallback (for last-in-hand notes)
     times = [n.get('time_seconds', 0) for n in sorted_notes]
-    iois = np.diff(times)
-    
+    global_iois = np.diff(times)
+
+    # ── Tempo-relative thresholds ──
+    min_ioi_sec = max(0.05, beat_duration * 0.2)
+    min_ioi_beats = min_ioi_sec / beat_duration
+    min_acoustic_beats = max(0.1, 0.2 * (120.0 / bpm))
+    MAX_NOTE_BEATS = 6.0
+
     if debug:
         print(f"\n[IOI Quantization] {len(notes)} notes, BPM={bpm}")
         print(f"  Beat duration: {beat_duration*1000:.1f}ms")
-        print(f"  Using IOI-primary approach (minimize rests)")
-    
+        print(f"  Hands: {', '.join(f'{h}={len(idx)}' for h, idx in hand_indices.items())}")
+        print(f"  Using per-hand IOI as primary duration")
+
     # Process each note
     for i, note in enumerate(sorted_notes):
         acoustic_dur = note.get('duration_seconds', 0.5)
-        
-        if i < len(iois):
-            ioi_sec = iois[i]
-            gap = ioi_sec - acoustic_dur
-            gap_beats = gap / beat_duration
-            
-            # Use IOI as duration UNLESS there's a clear intentional rest:
-            # - Gap must be at least 1.0 beats (quarter note) - avoids stuttering
-            # - Acoustic duration must be less than 30% of IOI (clear lift-off)
+        acoustic_beats = acoustic_dur / beat_duration
 
-            if gap_beats >= 1.0 and acoustic_dur < ioi_sec * 0.3:
-                # Potential rest - but check if IOI gives cleaner notation
-                ioi_val = duration_to_note_value(ioi_sec, bpm=bpm)
-                acoustic_val = duration_to_note_value(acoustic_dur, bpm=bpm)
-
-                # Prefer IOI if it gives lower quantization error
-                if ioi_val.get('quantization_error', 1) < acoustic_val.get('quantization_error', 1) * 0.8:
-                    note_val = ioi_val
-                    method = 'ioi (extended)'
-                    note['has_rest_after'] = False
-                else:
-                    note_val = acoustic_val
-                    method = 'acoustic (rest follows)'
-                    note['has_rest_after'] = True
-                    note['rest_duration'] = gap
+        # Prefer per-hand IOI; fall back to global IOI; fall back to acoustic
+        ioi_sec = per_hand_ioi[i]
+        if ioi_sec is None:
+            # Last note in this hand — use global IOI if available
+            if i < len(global_iois):
+                ioi_sec = global_iois[i]
             else:
-                # Use IOI as duration (normal case)
-                note_val = duration_to_note_value(ioi_sec, bpm=bpm, debug=False)
-                method = 'ioi'
-                note['has_rest_after'] = False
-            
-            if debug:
-                print(f"  Note {i}: acoustic={acoustic_dur*1000:.0f}ms, ioi={ioi_sec*1000:.0f}ms "
-                      f"-> {note_val['type']} ({method})")
+                ioi_sec = acoustic_dur  # last note overall
+        ioi_beats = ioi_sec / beat_duration
+
+        if ioi_beats < min_ioi_beats or ioi_sec < 0.03:
+            # Near-simultaneous / overlapping — use max of acoustic and IOI
+            use_dur = max(acoustic_dur, ioi_sec)
+            note_val = duration_to_note_value(use_dur, bpm=bpm, debug=False)
+            method = 'acoustic (overlap)'
+            note['has_rest_after'] = False
+        elif ioi_beats > MAX_NOTE_BEATS:
+            # Very long gap — cap at max note duration, rest after
+            capped = beat_duration * MAX_NOTE_BEATS
+            note_val = duration_to_note_value(capped, bpm=bpm, debug=False)
+            method = 'ioi-capped (long gap)'
+            note['has_rest_after'] = True
+            note['rest_duration'] = ioi_sec - capped
+        elif acoustic_beats < min_acoustic_beats:
+            # Grace note / very short — extend to IOI but cap at half beat
+            note_val = duration_to_note_value(min(ioi_sec, beat_duration * 0.5), bpm=bpm, debug=False)
+            method = 'ioi (short note)'
+            note['has_rest_after'] = False
         else:
-            # Last note: use acoustic duration
-            note_val = duration_to_note_value(acoustic_dur, bpm=bpm, debug=False)
-            method = 'acoustic (last)'
-            
-            if debug:
-                print(f"  Note {i}: acoustic={acoustic_dur*1000:.0f}ms -> {note_val['type']} ({method})")
+            # DEFAULT: Use per-hand IOI as note duration.
+            # This matches real notation: notes extend to next onset.
+            note_val = duration_to_note_value(ioi_sec, bpm=bpm, debug=False)
+            method = 'ioi'
+            note['has_rest_after'] = False
+
+        if debug:
+            ph = "ph" if per_hand_ioi[i] is not None else "gl"
+            print(f"  Note {i}: acoustic={acoustic_dur*1000:.0f}ms, ioi={ioi_sec*1000:.0f}ms({ph}) "
+                  f"-> {note_val['type']} ({method})")
         
         note['note_value'] = note_val['type']
         note['note_divisions'] = note_val['divisions']
@@ -1981,10 +2720,17 @@ def quantize_rhythm_from_ioi(notes, bpm, debug=False):
         note['quantization_method'] = method
         note['raw_beats'] = note_val.get('raw_beats', 0)
         note['quantization_error'] = note_val.get('quantization_error', 0)
+        # Store acoustic-based value separately (never overwritten by post-processing)
+        # This is useful for accuracy evaluation against MIDI ground truth
+        acoustic_val = duration_to_note_value(acoustic_dur, bpm=bpm, debug=False)
+        note['acoustic_note_value'] = acoustic_val['type']
+        note['acoustic_dotted'] = acoustic_val.get('dotted', False)
 
-    sorted_notes = fill_gaps_with_ioi(sorted_notes, bpm, debug=debug)
-    sorted_notes = smooth_rhythm_gaps(sorted_notes, bpm, debug=debug)
-    sorted_notes = reduce_rest_entropy(sorted_notes, bpm, debug=debug)
+    sorted_notes = post_process_rhythm_unified(sorted_notes, bpm, debug=debug)
+
+    # Apply rhythm coherence smoothing to reduce erratic sections
+    sorted_notes = apply_coherence_smoothing(sorted_notes, bpm, debug=debug)
+
     return sorted_notes
 
 
@@ -2051,122 +2797,187 @@ def quantize_rhythm_sequence(notes, chords, bpm, debug=False, use_ml=True):
     return all_notes, all_chords
 
 
-def detect_tempo_from_onsets(onset_times, min_bpm=50, max_bpm=200):
+def detect_tempo_from_onsets(onset_times, velocities=None, min_bpm=50, max_bpm=200):
     """
-    Detect tempo from onset times using Inter-Onset Interval (IOI) analysis.
-    
-    This uses a histogram-based approach to find the most common beat interval.
-    Since the user can adjust by 2x or 0.5x, we only need to get within that range.
-    
+    Detect tempo from onset times using velocity-weighted autocorrelation.
+
+    For polyphonic music (e.g. piano with both hands), raw onset spacing picks
+    up inter-hand note density rather than the musical beat.  This function:
+    1. Builds a velocity-weighted pulse train (louder notes = stronger pulse)
+    2. Autocorrelates via FFT to find periodic peaks
+    3. Generates sub-harmonic candidates (BPM/2) for every fast peak
+    4. Scores candidates by IOI alignment to integer beat multiples
+    5. Strongly prefers musically natural tempos (60-160 BPM range)
+
     Args:
         onset_times: List/array of onset times in seconds
+        velocities:  Optional list/array of velocities (0-127) per onset.
+                     Louder onsets weight more heavily in autocorrelation.
         min_bpm: Minimum BPM to consider (default 50)
         max_bpm: Maximum BPM to consider (default 200)
-    
+
     Returns:
         dict with 'bpm' (detected tempo), 'confidence' (0-1), 'beat_interval' (seconds)
     """
     if len(onset_times) < 3:
-        # Not enough onsets to detect tempo
         return {'bpm': 120, 'confidence': 0.0, 'beat_interval': 0.5}
-    
-    onset_times = np.sort(np.array(onset_times))
-    
-    # Calculate Inter-Onset Intervals (IOIs)
+
+    onset_times = np.sort(np.array(onset_times, dtype=float))
+
+    # Normalize velocities (default = uniform)
+    if velocities is not None:
+        vel = np.array(velocities, dtype=float)
+        vel = vel / (vel.max() + 1e-12)
+        # Floor at 0.3 so quiet notes still contribute
+        vel = np.clip(vel, 0.3, 1.0)
+    else:
+        vel = np.ones(len(onset_times))
+
+    # ── Step 1: IOIs ──
     iois = np.diff(onset_times)
-    
-    # Filter out very short intervals (likely grace notes or detection errors)
-    # and very long intervals (likely rests or held notes)
-    min_interval = 60.0 / max_bpm  # e.g., 0.3s at 200 BPM
-    max_interval = 60.0 / min_bpm  # e.g., 1.2s at 50 BPM
-    
-    valid_iois = iois[(iois >= min_interval * 0.5) & (iois <= max_interval * 2)]
-    
+    min_interval = 60.0 / max_bpm * 0.25
+    max_interval = 60.0 / min_bpm * 4
+    valid_iois = iois[(iois >= min_interval) & (iois <= max_interval)]
+
     if len(valid_iois) < 2:
         return {'bpm': 120, 'confidence': 0.0, 'beat_interval': 0.5}
-    
-    # Use histogram to find the most common interval
-    # Bin width of ~25ms gives good resolution while clustering similar intervals
-    bin_width = 0.025
-    bins = np.arange(min_interval * 0.5, max_interval * 2 + bin_width, bin_width)
-    hist, bin_edges = np.histogram(valid_iois, bins=bins)
-    
-    # Also consider half and double intervals (for eighth notes / half notes)
-    # This helps when the piece uses mostly eighth notes or half notes
-    half_iois = valid_iois / 2
-    double_iois = valid_iois * 2
-    
-    # Filter extended IOIs to valid range
-    half_iois = half_iois[(half_iois >= min_interval) & (half_iois <= max_interval)]
-    double_iois = double_iois[(double_iois >= min_interval) & (double_iois <= max_interval)]
-    
-    # Create weighted histogram including half/double intervals
-    all_candidate_iois = np.concatenate([
-        valid_iois[(valid_iois >= min_interval) & (valid_iois <= max_interval)],
-        half_iois,
-        double_iois
-    ])
-    
-    if len(all_candidate_iois) < 2:
-        # Fallback: use median of valid IOIs
-        beat_interval = float(np.median(valid_iois))
-        bpm = 60.0 / beat_interval
-        bpm = np.clip(bpm, min_bpm, max_bpm)
-        return {'bpm': round(bpm), 'confidence': 0.3, 'beat_interval': beat_interval}
-    
-    # Histogram on all candidates
-    hist_all, _ = np.histogram(all_candidate_iois, bins=bins)
-    
-    # Find the peak (most common interval)
-    peak_idx = np.argmax(hist_all)
-    peak_interval = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
-    
-    # Refine by taking weighted average around the peak
-    peak_start = max(0, peak_idx - 2)
-    peak_end = min(len(hist_all), peak_idx + 3)
-    weights = hist_all[peak_start:peak_end]
-    intervals = (bin_edges[peak_start:peak_end] + bin_edges[peak_start+1:peak_end+1]) / 2
-    
-    if np.sum(weights) > 0:
-        refined_interval = np.average(intervals, weights=weights)
+
+    # ── Step 2: Velocity-weighted autocorrelation ──
+    duration = onset_times[-1] - onset_times[0]
+    if duration <= 0:
+        return {'bpm': 120, 'confidence': 0.0, 'beat_interval': 0.5}
+
+    bin_size = 0.005  # 5ms resolution
+    n_bins = int(duration / bin_size) + 1
+    pulse = np.zeros(n_bins)
+    for j, t in enumerate(onset_times):
+        idx = int((t - onset_times[0]) / bin_size)
+        if 0 <= idx < n_bins:
+            pulse[idx] = vel[j]  # Velocity-weighted (not binary)
+
+    n_fft = 1
+    while n_fft < 2 * n_bins:
+        n_fft *= 2
+    F = np.fft.rfft(pulse, n=n_fft)
+    ac = np.fft.irfft(F * np.conj(F))[:n_bins]
+    ac = ac / (ac[0] + 1e-12)
+
+    # ── Step 3: Find peaks in autocorrelation ──
+    min_lag = int(60.0 / max_bpm / bin_size)
+    max_lag = int(60.0 / min_bpm / bin_size)
+    max_lag = min(max_lag, n_bins - 1)
+
+    if min_lag >= max_lag or min_lag >= len(ac):
+        median_ioi = float(np.median(valid_iois))
+        bpm = int(np.clip(60.0 / median_ioi, min_bpm, max_bpm))
+        return {'bpm': bpm, 'confidence': 0.2, 'beat_interval': 60.0 / bpm}
+
+    ac_segment = ac[min_lag:max_lag + 1]
+    lags = np.arange(min_lag, max_lag + 1)
+
+    peaks = []
+    for i in range(1, len(ac_segment) - 1):
+        if ac_segment[i] > ac_segment[i - 1] and ac_segment[i] > ac_segment[i + 1]:
+            if ac_segment[i] > 0.05:
+                lag = lags[i]
+                period = lag * bin_size
+                bpm_candidate = 60.0 / period
+                peaks.append((bpm_candidate, period, ac_segment[i]))
+
+    if not peaks:
+        median_ioi = float(np.median(valid_iois))
+        bpm = int(np.clip(60.0 / median_ioi, min_bpm, max_bpm))
+        return {'bpm': bpm, 'confidence': 0.2, 'beat_interval': 60.0 / bpm}
+
+    # ── Step 4: Generate sub-harmonic candidates ──
+    # For every fast peak (>100 BPM), also evaluate BPM/2 as a candidate.
+    # In polyphonic piano, the autocorrelation often fires at the note-density
+    # level (fast) rather than the beat level (slower).
+    all_candidates = list(peaks)
+    for bpm_c, period, ac_str in peaks:
+        if bpm_c > 100:
+            half_bpm = bpm_c / 2
+            half_period = period * 2
+            if half_bpm >= min_bpm:
+                # Check AC strength at the sub-harmonic lag
+                half_lag = int(half_period / bin_size)
+                if half_lag < len(ac):
+                    ac_at_half = ac[half_lag]
+                else:
+                    ac_at_half = 0.0
+                all_candidates.append((half_bpm, half_period, max(ac_at_half, ac_str * 0.5)))
+        # Also try 2/3 of BPM for triplet-related tempos
+        if bpm_c > 130:
+            two_thirds_bpm = bpm_c * 2 / 3
+            two_thirds_period = period * 1.5
+            if two_thirds_bpm >= min_bpm:
+                t3_lag = int(two_thirds_period / bin_size)
+                if t3_lag < len(ac):
+                    ac_at_t3 = ac[t3_lag]
+                else:
+                    ac_at_t3 = 0.0
+                all_candidates.append((two_thirds_bpm, two_thirds_period, max(ac_at_t3, ac_str * 0.4)))
+
+    # ── Step 5: Score all candidates by IOI alignment ──
+    def score_candidate(period):
+        """Score how well IOIs align to multiples of this beat period."""
+        total_score = 0.0
+        for ioi in valid_iois:
+            ratio = ioi / period
+            nearest_half = round(ratio * 2) / 2
+            if nearest_half < 0.25:
+                continue
+            dist = abs(ratio - nearest_half)
+            alignment = math.exp(-(dist ** 2) / (2 * 0.08 ** 2))
+            if abs(nearest_half - round(nearest_half)) < 0.01:
+                alignment *= 1.3
+            total_score += alignment
+        return total_score / len(valid_iois)
+
+    scored = []
+    for bpm_c, period, ac_strength in all_candidates:
+        alignment_score = score_candidate(period)
+        combined = 0.4 * ac_strength + 0.6 * alignment_score
+        scored.append((bpm_c, period, combined, ac_strength, alignment_score))
+
+    scored.sort(key=lambda x: -x[2])
+
+    # ── Step 6: Prefer musically sensible tempo ──
+    # Widen tolerance to 70%: if anything in 60-160 BPM scores within 30%
+    # of the best, strongly prefer it (fast tempos are usually subdivisions)
+    best = scored[0]
+    for candidate in scored[:8]:
+        bpm_c, period, combined, _, _ = candidate
+        if 60 <= bpm_c <= 160 and combined >= best[2] * 0.70:
+            best = candidate
+            break
+
+    best_bpm = best[0]
+    best_confidence = min(1.0, best[2] * 2)
+
+    # ── Step 7: Snap to nearest common BPM ──
+    common_bpms = [50, 54, 58, 60, 63, 66, 69, 72, 76, 80, 84, 88, 92, 96,
+                   100, 104, 108, 112, 116, 120, 126, 132, 138, 144, 152,
+                   160, 168, 176, 184, 192, 200]
+    closest_common = min(common_bpms, key=lambda x: abs(x - best_bpm))
+    if abs(closest_common - best_bpm) / best_bpm < 0.05:
+        best_bpm = closest_common
     else:
-        refined_interval = peak_interval
-    
-    # Calculate BPM
-    bpm = 60.0 / refined_interval
-    
-    # Snap to "nice" BPM values (multiples of 2 or 5)
-    # Common tempos: 60, 72, 80, 90, 100, 108, 120, 132, 140, 160, 180
-    nice_bpms = [50, 54, 58, 60, 63, 66, 69, 72, 76, 80, 84, 88, 92, 96, 
-                 100, 104, 108, 112, 116, 120, 126, 132, 138, 144, 150, 
-                 156, 160, 168, 176, 184, 192, 200]
-    
-    # Find closest nice BPM
-    closest_bpm = min(nice_bpms, key=lambda x: abs(x - bpm))
-    
-    # Only snap if we're close (within 5%)
-    if abs(closest_bpm - bpm) / bpm < 0.05:
-        bpm = closest_bpm
-    else:
-        bpm = round(bpm)
-    
-    # Ensure BPM is in valid range
-    bpm = int(np.clip(bpm, min_bpm, max_bpm))
-    
-    # Calculate confidence based on how concentrated the histogram peak is
-    peak_count = hist_all[peak_idx]
-    total_count = np.sum(hist_all)
-    confidence = min(1.0, (peak_count / total_count) * 3)  # Scale so 33% concentration = 1.0
-    
-    # Boost confidence if half/double intervals also cluster at the same beat
+        best_bpm = round(best_bpm / 2) * 2
+
+    bpm = int(np.clip(best_bpm, min_bpm, max_bpm))
     beat_interval = 60.0 / bpm
-    
-    print(f"[Tempo] Detected {bpm} BPM (beat = {beat_interval:.3f}s, confidence = {confidence:.2f})")
+
+    print(f"[Tempo] Detected {bpm} BPM (beat = {beat_interval:.3f}s, confidence = {best_confidence:.2f})")
     print(f"[Tempo] IOI stats: {len(valid_iois)} intervals, median={np.median(valid_iois):.3f}s, mean={np.mean(valid_iois):.3f}s")
-    
+    if len(scored) >= 3:
+        print(f"[Tempo] Top candidates: {scored[0][0]:.0f}BPM(score={scored[0][2]:.3f}) "
+              f"{scored[1][0]:.0f}BPM(score={scored[1][2]:.3f}) "
+              f"{scored[2][0]:.0f}BPM(score={scored[2][2]:.3f})")
+
     return {
         'bpm': bpm,
-        'confidence': round(confidence, 2),
+        'confidence': round(best_confidence, 2),
         'beat_interval': round(beat_interval, 4)
     }
 
@@ -5852,14 +6663,14 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     use_ensemble = False
     ensemble_sr = 16000
     if USE_GPU:
-        ensemble_model = get_gpu_ensemble_transcriber()
+        ensemble_model = get_gpu_mel_baseline_transcriber()
         if ensemble_model is not None and ensemble_model.initialized:
             use_ensemble = True
             ensemble_sr = ensemble_model.config.get('sample_rate', 16000)
 
     if use_ensemble:
         print(f"\n{'='*70}")
-        print("NEURAL TRANSCRIPTION (Multi-Resolution Ensemble)")
+        print("NEURAL TRANSCRIPTION (Mel Baseline)")
         print(f"   Device: {device}")
         print(f"{'='*70}\n")
 
@@ -5887,10 +6698,10 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             print(f"[Neural] Audio duration: {duration_seconds:.2f}s")
 
             t0 = time.perf_counter()
-            print(f"[Neural] Running ensemble inference (373 features, GPU-parallel)...")
+            print(f"[Neural] Running mel baseline inference...")
             transcribed_dict = ensemble_model.transcribe(
                 audio,
-                onset_threshold=0.7,
+                onset_threshold=0.4,
                 frame_threshold=0.5,
             )
             neural_timings['transcribe_ms'] = (time.perf_counter() - t0) * 1000
@@ -5901,12 +6712,12 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 print(f"[Neural] Inference breakdown: {transcribed_dict['_inference_timing_ms']}")
 
             note_events = transcribed_dict.get('est_note_events', [])
-            print(f"[Neural] Ensemble detected {len(note_events)} note events in {neural_timings['transcribe_ms']:.1f}ms")
+            print(f"[Neural] Mel baseline detected {len(note_events)} note events in {neural_timings['transcribe_ms']:.1f}ms")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"[Neural] Ensemble failed: {e}, falling back to custom model")
+            print(f"[Neural] Mel baseline failed: {e}, falling back to custom model")
             use_ensemble = False
 
     # ── Try custom trained model second (velocity-weighted, better soft detect) ──
@@ -5993,7 +6804,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     
     # Convert note_events to our format
     # Group simultaneous notes into chords
-    TIME_TOLERANCE = 0.05  # 50ms - notes within this window are considered simultaneous
+    TIME_TOLERANCE = 0.03  # 30ms - notes within this window are considered simultaneous
     
     # Sort by onset time
     note_events_sorted = sorted(note_events, key=lambda x: x['onset_time'])
@@ -6050,7 +6861,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         if len(midi_notes) == 1:
             # Single note
             m = midi_notes[0]
-            notes.append({
+            note_dict = {
                 "time_seconds": round(avg_onset, 3),
                 "midi_note": m,
                 "note_name": note_to_name(m),
@@ -6060,14 +6871,20 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 "offset_seconds": round(min_offset, 3),
                 "duration_seconds": round(duration, 3),
                 "hand": hand,
-            })
+            }
+            # Copy ensemble note_value predictions if available
+            if 'note_value_name' in group[0]:
+                note_dict['note_value'] = group[0]['note_value_name']
+                note_dict['note_value_confidence'] = group[0].get('note_value_confidence', 0.5)
+                note_dict['note_value_source'] = 'ensemble'
+            notes.append(note_dict)
         else:
             # Chord (2+ simultaneous notes)
             # Calculate octave from lowest note (MIDI octave: note // 12 - 1)
             octave = (lowest_midi // 12) - 1
             
             # Try to identify chord quality using existing chord detection logic
-            chords.append({
+            chord_dict = {
                 "time_seconds": round(avg_onset, 3),
                 "midi_notes": midi_notes,
                 "note_names": [note_to_name(m) for m in midi_notes],
@@ -6080,7 +6897,15 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 "duration_seconds": round(duration, 3),
                 "hand": hand,
                 "label": _identify_chord_label(midi_notes),
-            })
+            }
+            # Copy ensemble note_value predictions if available (use most confident from group)
+            nv_events = [e for e in group if 'note_value_name' in e]
+            if nv_events:
+                best_nv = max(nv_events, key=lambda e: e.get('note_value_confidence', 0))
+                chord_dict['note_value'] = best_nv['note_value_name']
+                chord_dict['note_value_confidence'] = best_nv.get('note_value_confidence', 0.5)
+                chord_dict['note_value_source'] = 'ensemble'
+            chords.append(chord_dict)
     
     print(f"[Neural] Converted to: {len(notes)} single notes, {len(chords)} chords")
     neural_timings['note_conversion_ms'] = (time.perf_counter() - t0) * 1000
@@ -6173,14 +6998,13 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         bass_chords = [c for c in chords if c.get('hand') == 'bass']
         treble_chords = [c for c in chords if c.get('hand') == 'treble']
 
-        # Parallel beat-grid quantization + run normalization for bass/treble
+        # Parallel beat-grid quantization + unified post-processing for bass/treble
         if USE_GPU and bass_notes and treble_notes:
             def _quantize_and_normalize(notes_list, bt, bpm, si, debug_flag):
                 result = quantize_to_beat_grid(notes_list, bt, bpm, si, debug=debug_flag)
-                result = fill_gaps_with_ioi(result, bpm, debug=debug_flag)
-                result = smooth_rhythm_gaps(result, bpm, debug=debug_flag)
-                result = reduce_rest_entropy(result, bpm, debug=debug_flag)
-                return detect_and_normalize_runs(result, bpm, debug=debug_flag)
+                result = cross_validate_with_acoustic_duration(result, bpm, debug=debug_flag)
+                result = post_process_rhythm_unified(result, bpm, debug=debug_flag)
+                return apply_coherence_smoothing(result, bpm, debug=debug_flag)
 
             bass_notes, treble_notes = parallel_process_hands(
                 _quantize_and_normalize, _quantize_and_normalize,
@@ -6190,23 +7014,22 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         else:
             if bass_notes:
                 bass_notes = quantize_to_beat_grid(bass_notes, beat_times, detected_bpm, subdivision_info, debug=debug)
-                bass_notes = fill_gaps_with_ioi(bass_notes, detected_bpm, debug=debug)
-                bass_notes = smooth_rhythm_gaps(bass_notes, detected_bpm, debug=debug)
-                bass_notes = reduce_rest_entropy(bass_notes, detected_bpm, debug=debug)
-                bass_notes = detect_and_normalize_runs(bass_notes, detected_bpm, debug=debug)
+                bass_notes = cross_validate_with_acoustic_duration(bass_notes, detected_bpm, debug=debug)
+                bass_notes = post_process_rhythm_unified(bass_notes, detected_bpm, debug=debug)
+                bass_notes = apply_coherence_smoothing(bass_notes, detected_bpm, debug=debug)
             if treble_notes:
                 treble_notes = quantize_to_beat_grid(treble_notes, beat_times, detected_bpm, subdivision_info, debug=debug)
-                treble_notes = fill_gaps_with_ioi(treble_notes, detected_bpm, debug=debug)
-                treble_notes = smooth_rhythm_gaps(treble_notes, detected_bpm, debug=debug)
-                treble_notes = reduce_rest_entropy(treble_notes, detected_bpm, debug=debug)
-                treble_notes = detect_and_normalize_runs(treble_notes, detected_bpm, debug=debug)
+                treble_notes = cross_validate_with_acoustic_duration(treble_notes, detected_bpm, debug=debug)
+                treble_notes = post_process_rhythm_unified(treble_notes, detected_bpm, debug=debug)
+                treble_notes = apply_coherence_smoothing(treble_notes, detected_bpm, debug=debug)
 
         # Chords can also run in parallel
         if USE_GPU and bass_chords and treble_chords:
             def _quantize_chords(chords_list, bt, bpm, si, debug_flag):
                 result = quantize_to_beat_grid(chords_list, bt, bpm, si, debug=debug_flag)
-                result = fill_gaps_with_ioi(result, bpm, debug=debug_flag)
-                return reduce_rest_entropy(result, bpm, debug=debug_flag)
+                result = cross_validate_with_acoustic_duration(result, bpm, debug=debug_flag)
+                result = post_process_rhythm_unified(result, bpm, debug=debug_flag)
+                return apply_coherence_smoothing(result, bpm, debug=debug_flag)
 
             bass_chords, treble_chords = parallel_process_hands(
                 _quantize_chords, _quantize_chords,
@@ -6216,12 +7039,14 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         else:
             if bass_chords:
                 bass_chords = quantize_to_beat_grid(bass_chords, beat_times, detected_bpm, subdivision_info, debug=debug)
-                bass_chords = fill_gaps_with_ioi(bass_chords, detected_bpm, debug=debug)
-                bass_chords = reduce_rest_entropy(bass_chords, detected_bpm, debug=debug)
+                bass_chords = cross_validate_with_acoustic_duration(bass_chords, detected_bpm, debug=debug)
+                bass_chords = post_process_rhythm_unified(bass_chords, detected_bpm, debug=debug)
+                bass_chords = apply_coherence_smoothing(bass_chords, detected_bpm, debug=debug)
             if treble_chords:
                 treble_chords = quantize_to_beat_grid(treble_chords, beat_times, detected_bpm, subdivision_info, debug=debug)
-                treble_chords = fill_gaps_with_ioi(treble_chords, detected_bpm, debug=debug)
-                treble_chords = reduce_rest_entropy(treble_chords, detected_bpm, debug=debug)
+                treble_chords = cross_validate_with_acoustic_duration(treble_chords, detected_bpm, debug=debug)
+                treble_chords = post_process_rhythm_unified(treble_chords, detected_bpm, debug=debug)
+                treble_chords = apply_coherence_smoothing(treble_chords, detected_bpm, debug=debug)
         
         notes = sorted(bass_notes + treble_notes, key=lambda x: x.get('time_seconds', 0))
         chords = sorted(bass_chords + treble_chords, key=lambda x: x.get('time_seconds', 0))
@@ -6232,17 +7057,8 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         method_name = "ML" if use_ml_rhythm else "IOI"
         print(f"[Rhythm] Using {method_name}-based quantization (no beat grid available)")
         notes, chords = quantize_rhythm_sequence(notes, chords, detected_bpm, debug=debug, use_ml=use_ml_rhythm)
-        
-        # Only apply run normalization for IOI-based (heuristic) quantization
-        # ML model already makes context-aware decisions, don't override them
-        if not use_ml_rhythm:
-            bass_notes = [n for n in notes if n.get('hand') == 'bass']
-            treble_notes = [n for n in notes if n.get('hand') == 'treble']
-            if bass_notes:
-                bass_notes = detect_and_normalize_runs(bass_notes, detected_bpm, debug=debug)
-            if treble_notes:
-                treble_notes = detect_and_normalize_runs(treble_notes, detected_bpm, debug=debug)
-            notes = sorted(bass_notes + treble_notes, key=lambda x: x.get('time_seconds', 0))
+        # post_process_rhythm_unified (including run normalization) is already
+        # called inside quantize_rhythm_from_ioi / quantize_rhythm_ml
         neural_timings['rhythm_quantization_ms'] = (time.perf_counter() - t_quant_start) * 1000
         print(f"[TIMING] rhythm_quantization={neural_timings['rhythm_quantization_ms']:.1f}ms ({method_name}-based)")
     
@@ -7218,5 +8034,6 @@ if __name__ == "__main__":
             print("  No notes or chords detected")
         
         if not results["notes"] and not results["chords"]:
+            print("  No notes or chords detected")
             print("  No notes or chords detected")
             print("  No notes or chords detected")
