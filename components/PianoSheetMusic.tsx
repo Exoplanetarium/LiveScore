@@ -113,6 +113,17 @@ interface AnalysisResult {
 interface PianoSheetMusicProps {
   results?: AnalysisResult;
   timeSignature?: "4/4" | "3/4" | "6/8"; // Time signature for measure grouping
+  /**
+   * Version number for live refinement updates.
+   * When this changes, the component will re-render the score even if
+   * the note count hasn't changed (useful for rhythm refinement).
+   */
+  refinementVersion?: number;
+  /**
+   * Callback when the WebView has finished rendering the score.
+   * Useful for tracking when live updates are visible to the user.
+   */
+  onScoreRendered?: (measureCount: number) => void;
 }
 
 // Helper function to convert MIDI note to step and octave
@@ -194,50 +205,49 @@ function generateMeasureXmls(
     }
     if (dotted) beats *= 1.5;
     // Triplet: 3 notes in time of 2, so each note is 2/3 of normal
-    // Use floor to ensure triplets don't overflow (3 triplet notes should fit in 2 normal notes' time)
-    // E.g., 3 eighth note triplets: floor(0.5 * 2/3 * 8) / 8 = floor(2.67) / 8 = 2/8 = 0.25 per note
-    // Total: 0.25 * 3 = 0.75 beats (slightly less than 1 beat, but avoids overflow)
-    if (triplet) beats = Math.floor(beats * (2 / 3) * 8) / 8;
+    // Round to nearest 1/24 of a beat for triplet-exact precision
+    // E.g., 3 eighth note triplets: round(0.5 * 2/3 * 24) / 24 = round(8) / 24 = 1/3 per note
+    // Total: 1/3 * 3 = 1.0 beats (exact)
+    if (triplet) beats = Math.round(beats * (2 / 3) * 24) / 24;
     return beats;
   };
 
-  // Helper to get MusicXML duration (divisions=8, or 24 for triplet-friendly)
-  // For triplets: duration is 2/3 of normal
-  // IMPORTANT: Use floor for triplets to avoid measure overflow (3 notes must fit in time of 2)
+  // Helper to get MusicXML duration (divisions=24 for triplet-exact arithmetic)
+  // With divisions=24, all note values AND triplet values are exact integers:
+  //   quarter=24, triplet quarter=16, eighth=12, triplet eighth=8, etc.
   const getNoteDuration = (
     noteType?: string,
     dotted?: boolean,
     triplet?: boolean,
   ): number => {
-    let duration = 8;
+    let duration = 24;
     switch (noteType) {
       case "whole":
-        duration = 32;
+        duration = 96;
         break;
       case "half":
-        duration = 16;
+        duration = 48;
         break;
       case "quarter":
-        duration = 8;
+        duration = 24;
         break;
       case "eighth":
-        duration = 4;
+        duration = 12;
         break;
       case "16th":
-        duration = 2;
+        duration = 6;
         break;
       case "32nd":
-        duration = 1;
+        duration = 3;
         break;
       default:
-        duration = 8;
+        duration = 24;
         break;
     }
-    if (dotted) duration = Math.floor(duration * 1.5);
-    // Triplet: 3 notes in time of 2
-    // Use floor to ensure 3 triplet notes don't exceed 2 normal notes
-    // E.g., half note triplet: floor(16 * 2/3) = 10, and 10*3 = 30 < 32 (ok)
-    if (triplet) duration = Math.floor((duration * 2) / 3);
+    if (dotted) duration = duration * 1.5;
+    // Triplet: 3 notes in time of 2 — exact with divisions=24
+    // E.g., triplet quarter: 24 * 2/3 = 16, and 16*3 = 48 = 2*24 (exact)
+    if (triplet) duration = (duration * 2) / 3;
     return duration;
   };
 
@@ -249,15 +259,15 @@ function generateMeasureXmls(
     const result: { noteType: string; duration: number; beats: number }[] = [];
     // Note values from largest to smallest
     const noteValues = [
-      { beats: 4, noteType: "whole", duration: 32 },
-      { beats: 3, noteType: "half", duration: 24, dotted: true }, // dotted half
-      { beats: 2, noteType: "half", duration: 16 },
-      { beats: 1.5, noteType: "quarter", duration: 12, dotted: true }, // dotted quarter
-      { beats: 1, noteType: "quarter", duration: 8 },
-      { beats: 0.75, noteType: "eighth", duration: 6, dotted: true }, // dotted eighth
-      { beats: 0.5, noteType: "eighth", duration: 4 },
-      { beats: 0.25, noteType: "16th", duration: 2 },
-      { beats: 0.125, noteType: "32nd", duration: 1 },
+      { beats: 4, noteType: "whole", duration: 96 },
+      { beats: 3, noteType: "half", duration: 72, dotted: true }, // dotted half
+      { beats: 2, noteType: "half", duration: 48 },
+      { beats: 1.5, noteType: "quarter", duration: 36, dotted: true }, // dotted quarter
+      { beats: 1, noteType: "quarter", duration: 24 },
+      { beats: 0.75, noteType: "eighth", duration: 18, dotted: true }, // dotted eighth
+      { beats: 0.5, noteType: "eighth", duration: 12 },
+      { beats: 0.25, noteType: "16th", duration: 6 },
+      { beats: 0.125, noteType: "32nd", duration: 3 },
     ];
 
     let remaining = Math.round(beats * 8) / 8; // Round to 32nd note precision
@@ -385,12 +395,12 @@ function generateMeasureXmls(
     // Round to nearest 32nd note to avoid floating-point issues
     let remaining = Math.round(beats * 8) / 8; // Round to 1/8 beat precision
     const restValues = [
-      { beats: 4, type: "whole", duration: 32 },
-      { beats: 2, type: "half", duration: 16 },
-      { beats: 1, type: "quarter", duration: 8 },
-      { beats: 0.5, type: "eighth", duration: 4 },
-      { beats: 0.25, type: "16th", duration: 2 },
-      { beats: 0.125, type: "32nd", duration: 1 },
+      { beats: 4, type: "whole", duration: 96 },
+      { beats: 2, type: "half", duration: 48 },
+      { beats: 1, type: "quarter", duration: 24 },
+      { beats: 0.5, type: "eighth", duration: 12 },
+      { beats: 0.25, type: "16th", duration: 6 },
+      { beats: 0.125, type: "32nd", duration: 3 },
     ];
     while (remaining >= 0.125 - 0.001) {
       let found = false;
@@ -479,7 +489,7 @@ function generateMeasureXmls(
       return `<note>${graceType}${chordTag}${pitchXml}<voice>${staff}</voice><type>eighth</type><staff>${staff}</staff></note>`;
     }
 
-    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${timeModXml}${dotXml}<staff>${staff}</staff>${notationsXml}</note>`;
+    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${notationsXml}</note>`;
   };
 
   // Helper to construct chord note MIDI list from ChordResult
@@ -578,7 +588,7 @@ function generateMeasureXmls(
       const tripletNotationsXml = first
         ? getTripletNotations(tripletPosition, actualNotes, normalNotes)
         : "";
-      const noteXml = `<note>${chordTag}${pitchInner}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${timeModXml}${dotXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
+      const noteXml = `<note>${chordTag}${pitchInner}<duration>${duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
       xmlParts.push(noteXml);
       first = false;
     }
@@ -630,9 +640,7 @@ function generateMeasureXmls(
     // Grace notes have 0 beats - they don't take up time in the measure
     // Grace notes also cannot have triplet markings
     const isGrace = n.ornament === "grace";
-    const beats = isGrace
-      ? 0
-      : getNoteBeats(n.note_value, n.dotted, n.triplet);
+    const beats = isGrace ? 0 : getNoteBeats(n.note_value, n.dotted, n.triplet);
     const xml = [noteToXmlWithVoice(n, false)];
     timeline.push({
       time,
@@ -734,7 +742,13 @@ function generateMeasureXmls(
   // Sort timeline by time
   timeline.sort((a, b) => a.time - b.time);
 
-  // Group events by time (events within TIME_TOLERANCE are considered simultaneous)
+  // Group events by time for rendering.
+  // Use a tight tolerance so that only truly simultaneous notes share a beat
+  // position. Cross-staff (bass/treble) events use the wider TIME_TOLERANCE
+  // because independent onset detection can offset them by ~20ms, but notes
+  // on the SAME staff must be within 5ms to be grouped (otherwise they are
+  // sequential notes, not a chord).
+  const SAME_STAFF_TOLERANCE = 0.005; // 5ms — perceptual simultaneity threshold
   type TimeGroup = {
     time: number;
     treble: TimelineEvent[];
@@ -743,9 +757,22 @@ function generateMeasureXmls(
   const timeGroups: TimeGroup[] = [];
 
   for (const ev of timeline) {
-    let group = timeGroups.find(
-      (g) => Math.abs(g.time - ev.time) < TIME_TOLERANCE,
-    );
+    // For cross-staff grouping keep the wider tolerance so treble+bass align.
+    // For same-staff grouping use the tight tolerance to avoid false chords.
+    let group = timeGroups.find((g) => {
+      const dt = Math.abs(g.time - ev.time);
+      // Always allow cross-staff grouping at the wider tolerance
+      if (dt < TIME_TOLERANCE) {
+        const sameStaffEvents = ev.staff === 1 ? g.treble : g.bass;
+        // If this staff already has events in the group, require tight tolerance
+        if (sameStaffEvents.length > 0) {
+          return dt < SAME_STAFF_TOLERANCE;
+        }
+        // No same-staff events yet — safe to join (cross-staff sync)
+        return true;
+      }
+      return false;
+    });
     if (!group) {
       group = { time: ev.time, treble: [], bass: [] };
       timeGroups.push(group);
@@ -951,49 +978,6 @@ function generateMeasureXmls(
   }
 
   // ============================================================================
-  // RHYTHM SMOOTHING: Fill small gaps to ensure natural flow
-  // If there's a tiny gap between notes (< 0.25 beats), extend the previous note
-  // ============================================================================
-  const smoothTimelineGaps = (
-    events: TimelineEvent[],
-    maxGapBeats: number = 0.5,
-  ): void => {
-    if (events.length < 2) return;
-
-    // Sort by time first
-    events.sort((a, b) => a.time - b.time);
-
-    const quarterDuration = 60 / bpm; // seconds per beat
-
-    for (let i = 0; i < events.length - 1; i++) {
-      const curr = events[i];
-      const next = events[i + 1];
-
-      // Calculate beat positions
-      const currStartBeat = curr.time / quarterDuration;
-      const currEndBeat = currStartBeat + curr.beats;
-      const nextStartBeat = next.time / quarterDuration;
-
-      const gapBeats = nextStartBeat - currEndBeat;
-
-      // If there's a small positive gap, extend this note
-      if (gapBeats > 0.001 && gapBeats <= maxGapBeats) {
-        // Extend the beats to fill the gap
-        curr.beats = nextStartBeat - currStartBeat;
-
-        // Update the XML duration if possible
-        // The XML already has a duration, we'll rely on the measure builder's gap filling
-      }
-    }
-  };
-
-  // Smooth gaps within each time group's staff
-  for (const group of timeGroups) {
-    smoothTimelineGaps(group.treble);
-    smoothTimelineGaps(group.bass);
-  }
-
-  // ============================================================================
   // TRIPLET VALIDATION: Ensure triplets are valid before building measures
   // Rules:
   // 1. Grace notes can never be triplets
@@ -1006,7 +990,10 @@ function generateMeasureXmls(
   const stripTripletFromXml = (xmlArr: string[]): string[] => {
     return xmlArr.map((xml) => {
       // Remove time-modification
-      let result = xml.replace(/<time-modification>.*?<\/time-modification>/g, "");
+      let result = xml.replace(
+        /<time-modification>.*?<\/time-modification>/g,
+        "",
+      );
       // Remove tuplet elements (may be inside notations with other content)
       result = result.replace(/<tuplet[^>]*\/>/g, "");
       // Clean up empty notations tags
@@ -1099,6 +1086,7 @@ function generateMeasureXmls(
     beats: number;
     midiNotes: number[];
     staff: number;
+    time: number; // original onset time in seconds, for chord merge decisions
   };
   type MeasureData = {
     trebleEvents: MeasureEventData[];
@@ -1163,6 +1151,7 @@ function generateMeasureXmls(
         beats: beatsThisMeasure,
         midiNotes: tie.midiNotes,
         staff: 1,
+        time: -1,
       });
 
       tie.remainingBeats -= beatsThisMeasure;
@@ -1215,6 +1204,7 @@ function generateMeasureXmls(
         beats: beatsThisMeasure,
         midiNotes: tie.midiNotes,
         staff: 2,
+        time: -1,
       });
 
       tie.remainingBeats -= beatsThisMeasure;
@@ -1238,6 +1228,7 @@ function generateMeasureXmls(
         beats: ev.beats,
         midiNotes: ev.midiNotes || [],
         staff: ev.staff,
+        time: ev.time,
       });
     } else {
       // Event overflows - split with ties
@@ -1284,6 +1275,7 @@ function generateMeasureXmls(
           beats: beatsThisMeasure,
           midiNotes: ev.midiNotes,
           staff: ev.staff,
+          time: ev.time,
         });
 
         // Queue the remainder for the next measure
@@ -1389,7 +1381,7 @@ function generateMeasureXmls(
           : timeSignature === "3/4"
             ? ["3", "4"]
             : ["4", "4"];
-      measureContent += `<attributes><divisions>8</divisions><key><fifths>0</fifths></key><time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`;
+      measureContent += `<attributes><divisions>24</divisions><key><fifths>0</fifths></key><time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`;
       // Add tempo marking for playback
       measureContent += `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${Math.round(bpm)}</per-minute></metronome></direction-type><sound tempo="${Math.round(bpm)}"/></direction>`;
     }
@@ -1398,9 +1390,9 @@ function generateMeasureXmls(
     mData.trebleEvents.sort((a, b) => a.beatPos - b.beatPos);
     mData.bassEvents.sort((a, b) => a.beatPos - b.beatPos);
 
-    // RHYTHM SMOOTHING: For small gaps, extend the previous note instead of adding rests
-    // Only add rests for gaps >= one full beat (quarter note or larger)
-    const MIN_REST_GAP = 0.99; // Only add rests for gaps >= one beat (quarter note)
+    // Minimum gap size to insert a rest (must be at least a 32nd note = 0.125 beats)
+    // All gaps need rests for correct playback timing — skipping rests causes duration drift
+    const MIN_REST_GAP = 0.12; // ~32nd note — smallest representable rest
 
     // ============================================================================
     // CRITICAL FIX: Ensure total beats in measure don't exceed BEATS_PER_MEASURE
@@ -1476,12 +1468,21 @@ function generateMeasureXmls(
           beats: maxBeats,
           midiNotes: mergedMidi,
           staff: group[0].staff,
+          time: group[0].time,
         });
       };
 
       for (let i = 1; i < events.length; i++) {
         const ev = events[i];
-        if (Math.abs(ev.beatPos - currentGroup[0].beatPos) < 0.001) {
+        // Only merge events that are at the same beat position AND from the same
+        // original onset time. This prevents sequential notes that ended up at the
+        // same beatPos (because they were in the same time group) from being
+        // incorrectly merged into chords.
+        const sameBeatPos =
+          Math.abs(ev.beatPos - currentGroup[0].beatPos) < 0.001;
+        const sameTime =
+          Math.abs(ev.time - currentGroup[0].time) < SAME_STAFF_TOLERANCE; // 5ms
+        if (sameBeatPos && sameTime) {
           // Same beat position - add to current group
           currentGroup.push(ev);
         } else {
@@ -1573,6 +1574,7 @@ function generateMeasureXmls(
             beats: truncatedBeats,
             midiNotes: ev.midiNotes,
             staff: ev.staff,
+            time: ev.time,
           });
           currentBeatEnd = BEATS_PER_MEASURE;
         }
@@ -1592,12 +1594,11 @@ function generateMeasureXmls(
       const gap = ev.beatPos - trebleBeatPos;
 
       if (gap > MIN_REST_GAP) {
-        // Significant gap - add a rest
+        // Add a rest for the gap
         measureContent += generateRestXml(gap, 1).join("");
         trebleBeatPos = ev.beatPos;
-      } else if (gap > 0.001 && evIdx > 0) {
-        // Small gap - we already extend the previous note's duration in XML
-        // Just update our position tracking
+      } else if (gap > 0.001) {
+        // Sub-32nd-note gap — too small for a rest, just absorb it
         trebleBeatPos = ev.beatPos;
       }
 
@@ -1616,7 +1617,7 @@ function generateMeasureXmls(
     }
 
     // Backup to start of measure for bass staff
-    const backupDuration = Math.round(trebleBeatPos * 8);
+    const backupDuration = Math.round(trebleBeatPos * 24);
     if (backupDuration > 0) {
       measureContent += `<backup><duration>${backupDuration}</duration></backup>`;
     }
@@ -1632,11 +1633,11 @@ function generateMeasureXmls(
       const gap = ev.beatPos - bassBeatPos;
 
       if (gap > MIN_REST_GAP) {
-        // Significant gap - add a rest
+        // Add a rest for the gap
         measureContent += generateRestXml(gap, 2).join("");
         bassBeatPos = ev.beatPos;
-      } else if (gap > 0.001 && evIdx > 0) {
-        // Small gap - just update position tracking
+      } else if (gap > 0.001) {
+        // Sub-32nd-note gap — too small for a rest, just absorb it
         bassBeatPos = ev.beatPos;
       }
 
@@ -1681,17 +1682,17 @@ const FALLBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
   <part id="P1">
     <measure number="1">
       <attributes>
-        <divisions>8</divisions>
+        <divisions>24</divisions>
         <key><fifths>0</fifths></key>
         <time><beats>4</beats><beat-type>4</beat-type></time>
         <staves>2</staves>
         <clef number="1"><sign>G</sign><line>2</line></clef>
         <clef number="2"><sign>F</sign><line>4</line></clef>
       </attributes>
-      <note><pitch><step>C</step><octave>4</octave></pitch><duration>8</duration><type>quarter</type><staff>1</staff></note>
-      <note><pitch><step>D</step><octave>4</octave></pitch><duration>8</duration><type>quarter</type><staff>1</staff></note>
-      <note><pitch><step>E</step><octave>4</octave></pitch><duration>8</duration><type>quarter</type><staff>1</staff></note>
-      <note><pitch><step>F</step><octave>4</octave></pitch><duration>8</duration><type>quarter</type><staff>1</staff></note>
+      <note><pitch><step>C</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
+      <note><pitch><step>D</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
+      <note><pitch><step>E</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
+      <note><pitch><step>F</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
     </measure>
   </part>
 </score-partwise>`;
@@ -1700,11 +1701,14 @@ const FALLBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
 export default function PianoSheetMusic({
   results,
   timeSignature = "4/4",
+  refinementVersion,
+  onScoreRendered,
 }: PianoSheetMusicProps) {
   // accumulate incoming note blocks so live updates append to the end
   const [accumulatedNotes, setAccumulatedNotes] = useState<NoteResult[]>([]);
   const [accumulatedChords, setAccumulatedChords] = useState<ChordResult[]>([]);
   const hasReceivedDataRef = useRef<boolean>(false);
+  const lastRefinementVersionRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     // If results is null and we've previously received data, this is a reset signal
@@ -1720,6 +1724,25 @@ export default function PianoSheetMusic({
 
     const incomingNotes = results.notes ?? [];
     const incomingChords = results.chords ?? [];
+
+    // Check if this is a refinement update (version changed)
+    const isRefinementUpdate =
+      refinementVersion !== undefined &&
+      refinementVersion !== lastRefinementVersionRef.current;
+    lastRefinementVersionRef.current = refinementVersion;
+
+    // If it's a refinement update, replace all notes/chords instead of appending
+    // This ensures the refined rhythm values are used
+    if (
+      isRefinementUpdate &&
+      (incomingNotes.length > 0 || incomingChords.length > 0)
+    ) {
+      hasReceivedDataRef.current = true;
+      setAccumulatedNotes(incomingNotes);
+      setAccumulatedChords(incomingChords);
+      return;
+    }
+
     if (incomingNotes.length === 0 && incomingChords.length === 0) return;
 
     // Mark that we've received data
@@ -1761,7 +1784,7 @@ export default function PianoSheetMusic({
       }
       return [...prev, ...toAdd];
     });
-  }, [results]);
+  }, [results, refinementVersion]);
 
   // Get detected BPM from results, default to 120
   const detectedBPM = results?.analysis_summary?.detected_bpm ?? 120;
@@ -1846,8 +1869,11 @@ export default function PianoSheetMusic({
         }
         if (msg.type === "rendered") {
           // initial main render completed; mark how many measures are present
-          if (typeof msg.measures === "number")
+          if (typeof msg.measures === "number") {
             measuresSentRef.current = msg.measures;
+            // Notify parent that score has been rendered
+            onScoreRendered?.(msg.measures);
+          }
           // The webview has finished rendering the previously-sent xml; promote pending -> last
           if (pendingXmlRef.current) {
             lastXmlRef.current = pendingXmlRef.current;
@@ -1912,7 +1938,7 @@ export default function PianoSheetMusic({
         console.warn("webview message parse error", err);
       }
     },
-    [isLandscape, score, post, playbackBPM],
+    [isLandscape, score, post, playbackBPM, onScoreRendered],
   );
 
   // If the score changes (for example after live recording produces results), send the new XML

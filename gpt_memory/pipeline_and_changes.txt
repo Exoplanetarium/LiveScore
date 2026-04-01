@@ -1,0 +1,473 @@
+===============================================================================
+LiveScore - Transcription Pipeline & Change Log
+===============================================================================
+
+LAST UPDATED: 2026-03-17
+
+===============================================================================
+PIPELINE OVERVIEW
+===============================================================================
+
+LiveScore is a real-time piano transcription app that converts audio into
+rendered sheet music. The pipeline flows:
+
+  Audio Input -> Backend (Python/FastAPI) -> JSON Notes -> Frontend (React Native)
+  -> MusicXML -> OpenSheetMusicDisplay (OSMD) rendering
+
+--- BACKEND NOTE DETECTION (backend/detect_note.py, ~7800 lines) ---
+
+Three detection paths dispatched via analyze_audio():
+  1. Neural (primary): analyze_audio_neural()
+     - Uses GpuEnsembleTranscriber (PitchAwareTranscriber model)
+     - Conformer-based architecture with multi-resolution features
+     - Processes 10-second overlapping chunks (75% overlap)
+     - Has onset, frame, velocity, and note_value output heads
+     - Note value head: 10-class softmax (32nd thru dotted whole)
+  2. DSP + hand separation: analyze_audio_independent_hands()
+  3. DSP only: analyze_audio_optimized()
+
+--- ENSEMBLE MODEL (backend/rhythm_training/train_ensemble.py) ---
+
+PitchAwareTranscriber architecture:
+  - Input: 1098 features/frame (3 mel specs x 88 bins x 3 resolutions,
+    88 CQT bins, 12 chroma, 9 onset functions, 176 HPSS)
+  - Per-key shared MLP -> Key-axis Conv1d -> 4 Conformer blocks
+  - Per-key temporal Conv1d (dilated, kernel 7, dilations 1,2,4)
+  - Output heads: onset, frame, velocity, note_value (10 classes), tempo
+  - Note value head now supervised at ALL active frames (not just onsets)
+  - Tempo head: pools Conformer output -> Linear -> Softplus -> BPM
+  - Trained on MAESTRO dataset at 16kHz, hop=512 (~32ms/frame)
+  - Model checkpoint: ensemble_transcription.pt (~9.4 MB)
+  - Best onset F1: 0.72
+
+--- MEL BASELINE MODEL (backend/rhythm_training/train_mel_baseline.py) ---
+
+MelBaselineTranscriber architecture (~7M+ params):
+  - Input: 229-bin log-mel spectrogram only (single STFT, n_fft=2048, hop=256)
+  - NO CQT, chroma, onset functions, or HPSS — just mel
+  - ConvStack: 3 blocks of 2D conv (32->64->128 ch) with freq-only MaxPool
+  - Conformer backbone: 6 layers, d_model=192, 4 attention heads
+  - Per-key projection (d_model -> 88 * key_dim) + dilated temporal conv
+  - Output heads: onset (velocity-gated), frame, velocity, note_value (10 classes)
+  - Regression onset targets: tent-shaped ±50ms (Kong et al. 2020 technique)
+  - Velocity-gated onset refinement: BiGRU combines raw onset + velocity
+  - pos_weight reduced from 5.0 to 2.0 (regression targets handle imbalance)
+  - Default onset threshold lowered from 0.7 to 0.4 (peakier outputs)
+  - Note value loss computed at ONSET FRAMES ONLY (not all active frames)
+  - Trained on same MAESTRO data, 16kHz, hop=256 (~16ms/frame)
+  - Model checkpoint: mel_baseline_transcription.pt
+  - Best onset F1 (v1, binary targets): 0.73
+  - V2 (regression + velocity-gating + lower pos_weight): not yet trained
+
+Key finding: simpler features (229 mel bins) outperform the complex
+1098-feature multi-resolution stack, validating the hypothesis that
+redundant hand-crafted features constrain rather than help the model.
+
+--- RHYTHM QUANTIZATION (backend/detect_note.py) ---
+
+Cascade: Transformer -> MLP -> CPU MLP -> IOI heuristic
+  - quantize_rhythm_ml(): Primary rhythm quantization
+  - High-confidence ensemble note values (>=0.70) preserved as-is
+  - Others refined by GpuRhythmTransformer or GpuRhythmMLP
+
+Post-processing pipeline (in order):
+  1. enforce_triplet_groups() - triplets come in groups of 3
+  2. post_process_rhythm_unified() - run normalization, gap filling
+  3. compute_rhythm_coherence() - sliding window coherence analysis
+  4. smooth_erratic_rhythm() - re-quantize erratic notes to local dominant
+  5. detect_ornaments() - trills, grace notes, turns, mordents
+
+--- TEMPO DETECTION (backend/detect_note.py) ---
+
+detect_tempo_from_onsets():
+  - Velocity-weighted pulse train at 5ms resolution
+  - FFT-based autocorrelation for periodic peaks
+  - Sub-harmonic candidates for fast tempos
+  - IOI alignment scoring, prefers 60-160 BPM range
+
+--- GPU OPS (backend/gpu_ops.py, ~1550 lines) ---
+
+  - GpuRhythmMLP: 8 features -> note_type(6) + dotted(2) + triplet(2)
+  - GpuRhythmTransformer: Sequence-aware, adds rest_after prediction
+  - GpuEnsembleTranscriber: Full transcription with multi-res features
+  - GpuMelBaselineTranscriber: Mel-only transcription (229-bin log-mel)
+  - fused_noise_reduce(): GPU STFT/ISTFT noise reduction
+
+--- LIVE RHYTHM (backend/live_rhythm.py) ---
+
+Two-stage real-time architecture:
+  - Stage 1 (Coarse, <50ms): Snaps to 8 standard durations
+  - Stage 2 (Deferred, ~1s behind): 17 refined candidates w/ triplets
+  - IncrementalTempoTracker: BPM from IOI histograms, smoothed
+
+--- FRONTEND (components/PianoSheetMusic.tsx, components/osmdHTML.ts) ---
+
+  - MusicXML generation with divisions=24 (exact integer for all values)
+  - Triplet validation (complete groups of 3, same type, same measure)
+  - Tie handling for cross-measure notes
+  - OSMD v1.9.2 for rendering
+  - Playback via Tone.js with duration recalculation from MusicXML
+
+--- API (backend/main.py) ---
+
+  - /analyze: Full transcription (neural by default)
+  - /stream/chunk: Streaming with 4096-sample overlap
+  - /live/process: Two-stage live quantization
+  - /analyze-second-pass: Find soft notes missed in gaps
+
+===============================================================================
+KNOWN ACCURACY BOTTLENECKS (identified 2026-03-15)
+===============================================================================
+
+1. [FIXED] Note value head uses single onset frame - now pools across onset→offset
+2. [FIXED] Tempo detection via autocorrelation - now has neural tempo head too
+3. [FIXED] Hardcoded beat_dur=0.5 in coherence scoring - wrong for != 120 BPM
+4. Coarse temporal resolution (32ms/frame) - 32nd notes only ~2 frames wide
+5. Hand split at MIDI 60 - fails for crossed-hand passages
+6. No measure-level constraint enforcement - note values don't sum to 4/4
+7. [FIXED] Evaluation used same IOI+pitch60 bias as predictions
+8. MLP rhythm model sees only 8 features, notes independently (no context)
+9. Streaming chunk overlap only 93ms - truncates notes at boundaries
+
+===============================================================================
+CHANGES MADE
+===============================================================================
+
+--- 2026-03-15: Fix #3 - Coherence scoring beat_dur bug ---
+
+File: backend/detect_note.py
+  - compute_rhythm_coherence() now accepts `bpm` parameter (default 120.0)
+  - Replaced hardcoded `beat_dur = 0.5` with `beat_dur = 60.0 / bpm`
+  - Updated apply_coherence_smoothing() to pass bpm through
+  - Updated docstring to document the new parameter
+
+File: backend/test_ensemble_accuracy.py
+  - Updated all 3 call sites to pass detected_bpm or bpm
+
+Impact: Beat grid deviation scoring now correctly calibrated for any tempo.
+Previously, at 60 BPM a perfectly on-beat note looked off-beat, and at
+180 BPM off-beat notes looked correct. This affected which notes the
+coherence smoother flagged as "erratic" and re-quantized.
+
+
+--- 2026-03-15: Fix #7 - Decoupled evaluation metrics ---
+
+File: backend/test_ensemble_accuracy.py
+
+  1. load_midi_notes() now preserves `midi_track` index per note, enabling
+     track-based (instead of pitch-based) hand assignment for GT IOI computation.
+
+  2. compute_rhythm_metrics() now reports THREE separate accuracy metrics:
+     - ioi_note_value_accuracy: IOI-based with MIDI track hand assignment
+       (decoupled from prediction pipeline's pitch-60 split)
+     - pitch_split_ioi_accuracy: IOI-based with pitch-60 split
+       (backward compatible, shows the old metric for comparison)
+     - sustain_note_value_accuracy: MIDI key-release duration
+       (completely independent of IOI methodology)
+
+  3. New "beat sum validity" metric: measures what fraction of predicted
+     measures sum to exactly 4 beats (within 10% tolerance). This catches
+     the problem where individual note values are "correct" but don't form
+     valid measures.
+
+  4. New "EVALUATION BIAS CHECK" section in summary output that shows:
+     - Gap between pitch-split and track-split IOI accuracy
+       (if nonzero, the old evaluation was hiding hand-split errors)
+     - Gap between IOI and sustain accuracy
+       (reveals systematic IOI vs. acoustic duration disagreement)
+
+  5. Updated all per-piece and summary print output to show the new metrics.
+
+Impact: Can now detect when accuracy numbers are inflated by shared bias
+between prediction and evaluation. Track-based hand assignment gives a more
+honest IOI ground truth. Sustain-based metrics reveal a different axis of
+error entirely. Beat sum validity catches rhythm quantization failures that
+per-note accuracy misses.
+
+
+--- 2026-03-15: Fix #1 - Note value onset-to-offset temporal pooling ---
+
+Approach: Instead of changing the model architecture to pool hidden states
+(which would require scatter operations and inference pipeline changes),
+we took a simpler approach: train the note_value_head at ALL active frames,
+then pool its predictions across onset→offset at inference.
+
+File: backend/rhythm_training/train_ensemble.py
+
+  1. _create_labels(): note_value class is now set at ALL frames of a note
+     (onset_f to offset_f), not just the 2-frame onset window. This gives
+     the head supervision at every frame so it learns duration-aware features.
+
+  2. EnsembleLoss.forward(): NV loss mask changed from onset_gt > 0.5 to
+     frame_gt > 0.5. All active frames now contribute to the NV classification
+     loss. ~10-20x more training samples but .mean() keeps magnitude stable.
+
+  3. decode_note_events(): Note value probs are now POOLED across onset_f to
+     offset_f via mean, instead of reading a single onset frame. This makes
+     predictions more robust — a half note gets averaged over ~15 frames of
+     predictions, reducing single-frame noise.
+
+File: backend/gpu_ops.py
+  - No changes needed — note_value_probs per-frame still accumulated and
+    averaged across chunks as before. The pooling happens in decode_note_events.
+
+Memory impact: Zero. No new tensors, no architecture changes. The only
+difference is label generation and loss masking.
+
+Backward compat: Old checkpoints load fine. But the note_value_head was
+trained with onset-only supervision, so predictions at non-onset frames
+will initially be poor. Retraining is needed for full benefit.
+
+
+--- 2026-03-15: Fix #2 - Neural tempo prediction head ---
+
+Added a lightweight BPM regression head to PitchAwareTranscriber.
+
+File: backend/rhythm_training/train_ensemble.py
+
+  1. PitchAwareTranscriber.__init__(): New tempo_head:
+     Linear(temporal_hidden → temporal_hidden) → GELU →
+     Linear(temporal_hidden → 1) → Softplus
+     ~2K extra parameters. Negligible memory.
+
+  2. PitchAwareTranscriber.forward(): Conformer output saved as conformer_h
+     before broadcasting to keys. Mean-pooled across time → tempo_head →
+     BPM prediction. Output: tempo_bpm (B,) in the return dict.
+
+  3. EnsembleLoss: New tempo_weight param (default 0.1). Tempo loss = L1
+     on log-BPM (log-scale so 60→120 and 120→240 have equal error).
+     New --tempo-weight CLI flag.
+
+  4. _create_labels(): Now returns BPM as 5th element (extracted from MIDI).
+
+  5. EnsembleTranscriptionDataset.__getitem__(): Returns 'bpm' tensor.
+
+  6. PrecomputedDataset.__getitem__(): Returns 'bpm' with fallback to 120.0
+     for old precomputed files that lack the key.
+
+  7. precompute_features(): Saves 'bpm' in .pt files.
+
+  8. Training loop: Passes bpm_gt and out['tempo_bpm'] to criterion.
+
+  9. Validation loop: Computes and reports tempo MAE (mean absolute error).
+
+  10. Checkpoint: Saves has_tempo_head=True and nv_pooled=True in config.
+      Saves tempo_mae in checkpoint metrics.
+
+File: backend/gpu_ops.py
+
+  1. GpuEnsembleTranscriber.transcribe(): Collects tempo_bpm from each chunk,
+     averages across chunks, returns as 'neural_bpm' in result dict.
+
+File: backend/test_ensemble_accuracy.py
+
+  1. Extracts neural_bpm from model output during testing.
+  2. Prints neural BPM alongside DSP BPM per piece.
+  3. Runs rhythm quantization with neural BPM as an additional test path.
+  4. Summary shows neural BPM accuracy vs DSP accuracy.
+
+Memory impact: ~2K parameters, one (B, temporal_hidden) pooled tensor,
+one (B,) output. Effectively zero.
+
+Backward compat: Old checkpoints load with strict=False. The tempo_head
+initializes randomly (untrained). DSP tempo detection remains the fallback.
+
+
+--- 2026-03-17: Mel-only baseline experiment ---
+
+Hypothesis: SOTA transcription models (Onsets & Frames, Kong et al.) use
+far fewer input features (single mel/CQT) than the 1098-feature ensemble.
+Simpler input + larger model may outperform hand-crafted feature stacking.
+
+File: backend/rhythm_training/train_mel_baseline.py (NEW)
+
+  1. MelFeatureExtractor: Single STFT (n_fft=2048, hop=256) -> 229-bin
+     mel filterbank (fmin=30Hz) -> log scale. Precomputed on GPU.
+     229 features per frame vs 1098 in the ensemble.
+
+  2. ConvStack: 2D convolutional stack treating mel as an image.
+     3 blocks (1->32->64->128 channels), 3x3 kernels, BatchNorm, GELU,
+     frequency-only MaxPool (2x), Dropout2d. Learns local time-frequency
+     patterns that the ensemble hand-crafts (onset functions, HPSS, etc.)
+
+  3. MelBaselineTranscriber (~7M params): ConvStack output -> Linear
+     projection to d_model=192 -> sinusoidal positional encoding ->
+     6 Conformer blocks (4 heads, ff_expansion=4, conv_kernel=31) ->
+     per-key projection (88 * key_dim) -> dilated temporal conv (k=7,
+     dilations 1,2,4) -> 4 output heads (onset, frame, velocity, note_value).
+     Onset-frame coupling preserved (onset logits fed to frame head).
+
+  4. Same training infrastructure as train_ensemble.py:
+     - MAESTRO dataset, same segment index (reuses --prepare)
+     - Precomputation support (--precompute, saves to precomputed_features_mel/)
+     - AMP mixed precision, gradient checkpointing
+     - Noam LR schedule, AdamW, ETA estimation
+     - Resume capability (--resume): model + optimizer + scheduler state
+     - Threshold sweep after training
+     - Data augmentation: gain, noise, SpecAugment, pitch shift, mixup
+
+  5. Datasets: MelTranscriptionDataset (on-the-fly) and
+     PrecomputedMelDataset (from disk). Both support augmentation.
+
+File: backend/gpu_ops.py
+
+  1. GpuMelBaselineTranscriber: Inference wrapper matching
+     GpuEnsembleTranscriber interface. Loads MelFeatureExtractor +
+     MelBaselineTranscriber from checkpoint. Same chunked inference with
+     overlap, timing instrumentation, and decode_note_events() call.
+
+  2. get_gpu_mel_baseline_transcriber(): Singleton loader, searches
+     rhythm_training/mel_baseline_transcription.pt and fallback paths.
+
+  3. TYPE_CHECKING imports updated.
+
+Result: onset F1 = 0.73 (vs 0.72 for 1098-feature ensemble). Validates
+that simpler features + larger model outperforms complex feature engineering.
+However, convergence pattern shows fast plateau (0.668 by epoch 4, then
+very slow crawl to 0.73 by epoch 40).
+
+
+--- 2026-03-17: Note value loss mask change (onset-only supervision) ---
+
+Problem: Note value loss was computed on ALL active frames (frame_gt > 0.5).
+This caused two issues:
+  - Long notes dominated the NV loss: a whole note contributed ~250
+    frame-level losses vs ~8 for a 32nd note (32x bias toward long notes)
+  - NV loss magnitude dominated the total loss due to sheer frame count,
+    pulling the shared Conformer backbone toward rhythm representation
+    at the expense of onset/frame accuracy
+
+File: backend/rhythm_training/train_mel_baseline.py
+
+  1. EnsembleLoss.forward(): NV loss mask changed from frame_gt > 0.5
+     to onset_gt > 0.5. Now each note event contributes ~2 frame-losses
+     (the 2-frame onset window) regardless of duration.
+
+Impact:
+  - NV loss magnitude drops ~50-100x (60-100 onset frames vs 5-10K active)
+  - Short and long notes get equal gradient weight
+  - Onset/frame/velocity losses now dominate total loss (backbone freed
+    from NV gradient pressure)
+  - Training and validation NV metric now aligned (validation already
+    computed NV accuracy at onset frames only)
+  - May need to increase --nv-weight (to 5-10) if NV accuracy drops,
+    but try as-is first
+
+--- 2026-03-30: V2 onset improvements — regression targets + velocity gating ---
+
+Research-backed changes to reduce false positive onset rate while preserving
+recall. Inspired by Kong et al. (2020) which achieves 96.72% onset F1.
+
+Three changes applied to train_mel_baseline.py:
+
+  1. Regression onset targets (tent-shaped, ±50ms window)
+     - _create_labels(): onset targets changed from binary spikes (2-frame
+       window, values 0 or 1) to tent-shaped regression targets.
+     - Peak = 1.0 at true onset frame, linear decay to 0.0 at ±50ms.
+     - At hop=256/sr=16000 (~16ms/frame), tent spans ~6 frames total.
+     - Uses max() for overlapping onsets from different notes on same key.
+     - Constant: ONSET_TENT_SEC = 0.05
+
+     Why: Binary targets force hard yes/no at every frame. A frame right
+     next to an onset is labeled 0 but looks spectrally identical → model
+     learns to fire broadly → false positives. Tent targets say "close
+     but not quite" for neighboring frames → model outputs sharp peaks.
+
+  2. EnsembleLoss onset loss adapted for continuous targets
+     - Removed focal loss weighting (incompatible with continuous targets).
+     - pos_weight now applied proportionally to target value:
+       weight = 1.0 + (pos_weight - 1.0) * onset_gt
+       This smoothly scales from 1.0 (background) to pos_weight (peak).
+     - Default pos_weight lowered from 5.0 to 2.0 (regression targets
+       naturally handle class imbalance better than binary targets).
+     - Validation F1 computation binarizes onset_gt at 0.5 threshold.
+     - Threshold sweep extended to lower values [0.1, 0.15, ..., 0.7]
+       since regression outputs are naturally peakier.
+
+  3. Velocity-gated onset refinement BiGRU
+     - MelBaselineTranscriber.onset_head renamed to onset_head_raw.
+     - New velocity_head produces raw velocity predictions as before.
+     - New onset_refine_gru: 1-layer BiGRU(input=176, hidden=128)
+       Input = concat(sigmoid(raw_onset), sqrt(sigmoid(raw_onset)) * velocity.detach())
+       This modulates onset activations with velocity — low-velocity
+       "onsets" are likely false positives and get suppressed.
+     - onset_refine_fc: Linear(256 -> 88) produces final refined logits.
+     - Frame head now conditioned on REFINED onset logits (not raw).
+     - velocity.detach() prevents onset gradients from breaking velocity head.
+
+     Adds ~200K parameters (GRU + FC). Minor inference cost.
+
+File: backend/gpu_ops.py
+  - GpuMelBaselineTranscriber.transcribe(): default onset_threshold
+    lowered from 0.7 to 0.4 (peakier outputs don't need high threshold).
+  - No other changes needed — model.forward() returns same dict keys.
+
+Backward compat: Old checkpoints load with strict=False. onset_head
+  weights map to nothing (renamed to onset_head_raw), so the raw onset
+  head initializes randomly. onset_refine_gru and onset_refine_fc are
+  new. Full retraining is required (cannot resume from old checkpoint
+  meaningfully). Precomputed features must be regenerated (--precompute)
+  since onset labels changed from binary to tent-shaped regression.
+
+Config checkpoint additions: regression_onset=True, velocity_gated_onset=True,
+  onset_tent_sec=0.05, pos_weight=2.0.
+
+===============================================================================
+PLANNED IMPROVEMENTS (not yet implemented)
+===============================================================================
+
+Priority order:
+
+4. Higher temporal resolution for onset/note-value heads (asymmetric
+   hop: keep hop=512 for sustain, add hop=128 path for onset/note-value)
+
+5. Voice separation for hand assignment (minimum-cost voice-leading
+   algorithm instead of MIDI-60 pitch threshold)
+
+6. Measure-constrained decoding (beam search/Viterbi over note value
+   predictions with constraint that measures sum to time signature)
+
+
+===============================================================================
+TRAINING INSIGHTS (empirically validated)
+===============================================================================
+
+- Simpler features beat complex feature stacking (229 mel > 1098 multi-res)
+- Focal loss gamma > 0 causes worse plateau in this setup (leave at 0.0)
+- Cosine annealing with warm restarts causes loss spikes (Noam is better)
+- Precision << recall for onset F1 (many false positives, catches most notes)
+- Note value accuracy plateaus at ~75%, biggest loss component
+- Fast convergence pattern: most learning in first ~5 epochs, then slow crawl
+- Multi-STFT (adding n_fft=4096) NOT beneficial: causes 256ms temporal smearing,
+  and the ensemble's 1098 multi-res features already proved worse than 229 mel.
+  Kong et al. achieves 96.72% onset F1 with a single STFT (n_fft=2048, 229 mel).
+- Regression onset targets (tent-shaped ±50ms) are proven by Kong et al. (2020):
+  teaches model to output sharp peaks instead of broad blobs, reducing FP rate.
+  Combined with velocity-gated onset refinement BiGRU for further FP suppression.
+- Transkun (Semi-CRF) achieves 98.32% onset F1 via event-based (not frame-level)
+  detection — represents a completely different paradigm worth investigating.
+
+===============================================================================
+IMPORTANT NOTES
+===============================================================================
+
+- Model checkpoint uses strict=False for loading, so new heads (tempo,
+  onset_refine_gru) initialize randomly and old checkpoints still load.
+  Retraining is needed.
+
+- Precomputed features (.pt files) may not contain 'bpm'. The
+  PrecomputedDataset falls back to 120.0 BPM if missing. Run --precompute
+  again to regenerate with BPM labels for full tempo head training.
+
+- CRITICAL: After the 2026-03-30 regression onset change, precomputed mel
+  features in precomputed_features_mel/ have OLD binary onset labels.
+  Must run `python train_mel_baseline.py --precompute` to regenerate with
+  tent-shaped regression onset targets before training V2.
+
+- The mel baseline V2 model has a renamed onset_head (now onset_head_raw)
+  plus new onset_refine_gru and onset_refine_fc layers. Old V1 checkpoints
+  will have onset_head weights that don't map. Training must start fresh.
+
+- The mel baseline (train_mel_baseline.py) uses onset-only NV loss masking
+  (onset_gt > 0.5). The ensemble (train_ensemble.py) still uses frame_gt
+  masking for backward compat with its existing checkpoint.

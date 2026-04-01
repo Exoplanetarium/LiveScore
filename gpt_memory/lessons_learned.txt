@@ -1,0 +1,21 @@
+LESSONS LEARNED - Things NOT to do on this project
+===================================================
+
+1. Do NOT use mixup augmentation (--mixup-alpha > 0) for training.
+   - This project does dense per-frame multi-label detection (onset, frame, velocity, note_value).
+   - Mixup blends two samples and their labels together, which destroys the sharp binary onset targets.
+   - Result: F1 score stuck around 0.58-0.65, unstable, unable to improve even after 26 epochs.
+   - Mixup is designed for whole-input classification tasks, not frame-level detection.
+   - Default was changed back to 0.0 after wasting a full training run.
+
+2. Do NOT use multi-resolution STFT (adding n_fft=4096) to improve bass note separation.
+   - Already empirically proven: 1098-feature ensemble (3 STFT sizes + CQT + HPSS)
+     performed WORSE (onset F1=0.72) than 229 mel bins alone (onset F1=0.73).
+   - n_fft=4096 at 16kHz means 256ms window — smears onsets across quarter second.
+   - Kong et al. achieves 96.72% onset F1 with a SINGLE STFT (n_fft=2048, 229 mel).
+   - Mel filterbank at 229 bins with fmin=30Hz already has fine resolution at bass.
+   - Better to spend model capacity on larger models than multi-res features.
+
+3. Do NOT use focal loss (gamma > 0) for this task — empirically causes worse plateau.
+
+4. Do NOT use cosine annealing with warm restarts — causes loss spikes. Noam schedule is better.

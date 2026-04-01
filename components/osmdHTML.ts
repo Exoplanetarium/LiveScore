@@ -197,6 +197,21 @@ export const OSMD_HTML = `
             await osmd.render();
           } catch (e) {
             console.warn('Re-render error:', e);
+            // If tuplet-related, strip tuplet markup and retry
+            const errStr = String(e);
+            if (errStr.includes('setTuplet') || errStr.includes('tuplet') || errStr.includes('Tuplet')) {
+              try {
+                let safeXml = currentXml
+                  .replace(/<time-modification>.*?<\\/time-modification>/g, '')
+                  .replace(/<tuplet[^>]*\\/>/g, '')
+                  .replace(/<notations>\\s*<\\/notations>/g, '');
+                currentXml = safeXml;
+                await osmd.load(safeXml);
+                await osmd.render();
+              } catch (e2) {
+                console.warn('Fallback re-render also failed:', e2);
+              }
+            }
           }
         }, 100);
       }
@@ -439,10 +454,12 @@ export const OSMD_HTML = `
       const parser = new DOMParser();
       const doc = parser.parseFromString(xmlString, "text/xml");
       const notes = [];
-      
-      // Get divisions (typically 8 in our case)
+      // Track active ties: MIDI pitch -> index in notes[] of the note that started the tie
+      const activeTies = {};
+
+      // Get divisions (24 for triplet-exact arithmetic)
       const divisionsEl = doc.querySelector('divisions');
-      const divisions = divisionsEl ? parseInt(divisionsEl.textContent) : 8;
+      const divisions = divisionsEl ? parseInt(divisionsEl.textContent) : 24;
       
       // Get time signature
       const beatsEl = doc.querySelector('beats');
@@ -532,6 +549,16 @@ export const OSMD_HTML = `
                   }
                 }
                 
+                // Check for ties
+                const tieEls = el.querySelectorAll('tie');
+                let hasTieStop = false;
+                let hasTieStart = false;
+                for (let t = 0; t < tieEls.length; t++) {
+                  const tieType = tieEls[t].getAttribute('type');
+                  if (tieType === 'stop') hasTieStop = true;
+                  if (tieType === 'start') hasTieStart = true;
+                }
+
                 // Handle grace notes - play very quickly before the main note
                 if (isGrace) {
                   const graceNoteDuration = 0.08; // 80ms grace note
@@ -542,6 +569,13 @@ export const OSMD_HTML = `
                     midi: midi,
                     isOrnament: true
                   });
+                } else if (hasTieStop && activeTies[midi] !== undefined && notes[activeTies[midi]]) {
+                  // This note is the continuation of a tied note — extend the original, don't re-attack
+                  notes[activeTies[midi]].duration += durationSeconds;
+                  if (!hasTieStart) {
+                    // Tie ends here — remove from active ties
+                    delete activeTies[midi];
+                  }
                 } else if (ornamentType) {
                   // Expand ornament into multiple notes
                   const expandedNotes = expandOrnament(ornamentType, midi, noteStartTime, durationSeconds, playbackBPM);
@@ -554,6 +588,10 @@ export const OSMD_HTML = `
                     duration: Math.max(0.1, durationSeconds * 0.9), // slightly shorter for separation
                     midi: midi
                   });
+                  // If this note starts a tie, track it
+                  if (hasTieStart) {
+                    activeTies[midi] = notes.length - 1;
+                  }
                 }
                 
                 // Update last note time for this voice (for chord detection)
@@ -840,7 +878,24 @@ export const OSMD_HTML = `
         await osmd.render();
         post({ type: "rendered", measures: osmd.Sheet?.Measures?.length || 0 });
       } catch (e) {
-        post({ type: "error", error: String(e) });
+        const errStr = String(e);
+        // If the error is tuplet-related, strip all tuplet markup and retry
+        if (errStr.includes('setTuplet') || errStr.includes('tuplet') || errStr.includes('Tuplet')) {
+          try {
+            let safeXml = xml
+              .replace(/<time-modification>.*?<\\/time-modification>/g, '')
+              .replace(/<tuplet[^>]*\\/>/g, '')
+              .replace(/<notations>\\s*<\\/notations>/g, '');
+            currentXml = safeXml;
+            await osmd.load(safeXml);
+            await osmd.render();
+            post({ type: "rendered", measures: osmd.Sheet?.Measures?.length || 0 });
+          } catch (e2) {
+            post({ type: "error", error: String(e2) });
+          }
+        } else {
+          post({ type: "error", error: errStr });
+        }
       }
     }
 
