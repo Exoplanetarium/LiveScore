@@ -18,11 +18,12 @@ rendered sheet music. The pipeline flows:
 
 Three detection paths dispatched via analyze_audio():
   1. Neural (primary): analyze_audio_neural()
-     - Uses GpuEnsembleTranscriber (PitchAwareTranscriber model)
-     - Conformer-based architecture with multi-resolution features
+     - Uses GpuMelBaselineTranscriber (MelBaselineTranscriber model)
+     - Conformer-based architecture with single mel spectrogram input (229 bins)
      - Processes 10-second overlapping chunks (75% overlap)
-     - Has onset, frame, velocity, and note_value output heads
-     - Note value head: 10-class softmax (32nd thru dotted whole)
+     - Has onset (velocity-gated), frame, velocity, and note_value output heads
+     - Note value head: 12-class softmax (32nd thru dotted whole, incl dotted 32nd/16th)
+     - Onset threshold: 0.4 (peakier regression outputs)
   2. DSP + hand separation: analyze_audio_independent_hands()
   3. DSP only: analyze_audio_optimized()
 
@@ -57,7 +58,8 @@ MelBaselineTranscriber architecture (~7M+ params):
   - Trained on same MAESTRO data, 16kHz, hop=256 (~16ms/frame)
   - Model checkpoint: mel_baseline_transcription.pt
   - Best onset F1 (v1, binary targets): 0.73
-  - V2 (regression + velocity-gating + lower pos_weight): not yet trained
+  - V2 (regression + velocity-gating + lower pos_weight): onset F1=0.976, note F1=0.976
+  - Note value head: 12 classes (added dotted_32nd 0.1875 beats, dotted_16th 0.375 beats)
 
 Key finding: simpler features (229 mel bins) outperform the complex
 1098-feature multi-resolution stack, validating the hypothesis that
@@ -471,3 +473,59 @@ IMPORTANT NOTES
 - The mel baseline (train_mel_baseline.py) uses onset-only NV loss masking
   (onset_gt > 0.5). The ensemble (train_ensemble.py) still uses frame_gt
   masking for backward compat with its existing checkpoint.
+
+
+--- 2026-04-06: Switched production to mel baseline V2 model ---
+
+Replaced ensemble model with mel baseline V2 across the entire app.
+
+Files changed:
+  - backend/detect_note.py: get_gpu_ensemble_transcriber -> get_gpu_mel_baseline_transcriber,
+    onset_threshold 0.7 -> 0.4, updated print messages
+  - backend/main.py: warmup endpoint uses mel baseline
+  - backend/modal_deploy.py: container preloads mel baseline
+
+Results: onset F1 0.976, note F1 0.976 (up from 0.72 with ensemble).
+
+
+--- 2026-04-06: Disabled coherence smoothing ---
+
+apply_coherence_smoothing() in detect_note.py now returns notes unchanged.
+Empirical testing showed it degrades IOI accuracy by -8.2% (0.522 -> 0.440).
+Coherence measures consistency, not correctness — it flattens intentional
+rhythmic variety to the locally dominant note value.
+
+
+--- 2026-04-06: BPM octave disambiguation ---
+
+Added octave disambiguation to both batch and live tempo detection.
+
+Files changed:
+  - backend/detect_note.py: detect_tempo_from_onsets() — after autocorrelation
+    peak selection, tests 0.5x and 2.0x candidates via IOI alignment scoring.
+    Alternative wins if it scores >5% better.
+  - backend/live_rhythm.py: IncrementalTempoTracker._update_bpm() — doubled
+    histogram bins (40->80) for finer resolution, added same octave
+    disambiguation with _alignment_score() static method.
+
+Impact: Fixes cases where piano note density causes tempo lock at 2x true BPM.
+GT BPM accuracy improved by +6.1%.
+
+
+--- 2026-04-06: Expanded note value classes (10 -> 12) ---
+
+Added dotted_32nd (0.1875 beats) and dotted_16th (0.375 beats) to the
+model's note value classification head.
+
+File: backend/rhythm_training/train_mel_baseline.py
+  - NOTE_VALUE_CLASSES: 10 -> 12
+  - NOTE_VALUE_BEATS and NOTE_VALUE_NAMES updated
+  - n_note_value_classes made configurable in constructor for backward compat
+
+File: backend/test_ensemble_accuracy.py
+  - compute_model_head_metrics() accepts model_nv_beats/model_nv_names to
+    align GT quantization with model's own class boundaries
+  - compute_rhythm_metrics() uses only pipeline note_value (not model head)
+
+Motivation: 16% of GT notes fall between 32nd and 16th, or between 16th
+and eighth — forcing guaranteed wrong predictions with 10 classes.

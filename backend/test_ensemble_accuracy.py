@@ -23,19 +23,21 @@ def _load_model_module(model_type: str):
     """Return (MODEL_PATH, build_fn, extractor_cls, constants) for the chosen model."""
     if model_type == "mel":
         from rhythm_training.train_mel_baseline import (
-            HOP_LENGTH, MIDI_OFFSET, MODEL_PATH, NOTE_VALUE_CLASSES,
-            NOTE_VALUE_NAMES, PIANO_KEYS, SAMPLE_RATE, MelFeatureExtractor,
-            _build_model_from_config)
+            HOP_LENGTH, MIDI_OFFSET, MODEL_PATH, NOTE_VALUE_BEATS,
+            NOTE_VALUE_CLASSES, NOTE_VALUE_NAMES, PIANO_KEYS, SAMPLE_RATE,
+            MelFeatureExtractor, _build_model_from_config)
         return dict(
             MODEL_PATH=MODEL_PATH, build=_build_model_from_config,
             ExtractorClass=MelFeatureExtractor, extractor_kwargs={},
             HOP_LENGTH=HOP_LENGTH, MIDI_OFFSET=MIDI_OFFSET,
             NOTE_VALUE_CLASSES=NOTE_VALUE_CLASSES, NOTE_VALUE_NAMES=NOTE_VALUE_NAMES,
+            NOTE_VALUE_BEATS=NOTE_VALUE_BEATS,
             PIANO_KEYS=PIANO_KEYS, SAMPLE_RATE=SAMPLE_RATE,
         )
     else:
         from rhythm_training.train_ensemble import (HOP_LENGTH, MIDI_OFFSET,
                                                     MODEL_PATH,
+                                                    NOTE_VALUE_BEATS,
                                                     NOTE_VALUE_CLASSES,
                                                     NOTE_VALUE_NAMES,
                                                     PIANO_KEYS, SAMPLE_RATE,
@@ -46,6 +48,7 @@ def _load_model_module(model_type: str):
             ExtractorClass=MultiResFeatureExtractor, extractor_kwargs={},
             HOP_LENGTH=HOP_LENGTH, MIDI_OFFSET=MIDI_OFFSET,
             NOTE_VALUE_CLASSES=NOTE_VALUE_CLASSES, NOTE_VALUE_NAMES=NOTE_VALUE_NAMES,
+            NOTE_VALUE_BEATS=NOTE_VALUE_BEATS,
             PIANO_KEYS=PIANO_KEYS, SAMPLE_RATE=SAMPLE_RATE,
         )
 
@@ -223,6 +226,143 @@ def normalize_note_value(note_type, dotted=False):
     return note_type, dotted
 
 
+def compute_model_head_metrics(pred_notes, gt_notes, bpm, onset_tol=0.05,
+                                model_nv_beats=None, model_nv_names=None):
+    """Evaluate the model's note_value head directly against GT.
+
+    Only considers notes that have a 'model_note_value' field.
+    Compares against track-based IOI GT using the MODEL's own class system
+    (not dn_duration_to_note_value) to avoid train/eval boundary mismatch.
+    Also reports per-class accuracy breakdown.
+    """
+    beat_duration = 60.0 / bpm
+
+    # Build the model's class lookup for beats
+    base_note_value_beats = {
+        'whole': 4.0, 'half': 2.0, 'quarter': 1.0, 'eighth': 0.5,
+        '16th': 0.25, '32nd': 0.125,
+    }
+
+    # If model class system provided, use it for GT quantization
+    if model_nv_beats is not None and model_nv_names is not None:
+        import numpy as _np
+        log_nv = _np.log2(model_nv_beats)
+
+        def _quantize_gt(dur_sec):
+            """Quantize GT duration using the model's own class boundaries."""
+            ioi_beats = max(0.0625, min(8.0, dur_sec / beat_duration))
+            class_idx = int(_np.argmin(_np.abs(log_nv - _np.log2(ioi_beats))))
+            name = model_nv_names[class_idx]
+            if name.startswith('dotted_'):
+                return name[7:], True, name
+            return name, False, name
+    else:
+        def _quantize_gt(dur_sec):
+            """Fallback: use dn_duration_to_note_value."""
+            result = dn_duration_to_note_value(dur_sec, bpm=bpm)
+            base = result['type']
+            dot = result.get('dotted', False)
+            label = f"{'dotted_' if dot else ''}{base}"
+            return base, dot, label
+
+    # Build track-based IOI map for GT
+    gt_sorted = sorted(gt_notes, key=lambda n: n['onset_time'])
+    has_track_info = any('midi_track' in n for n in gt_sorted)
+    gt_hand_indices = {}
+    for i, n in enumerate(gt_sorted):
+        hand = f'track_{n.get("midi_track", 0)}' if has_track_info else (
+            'bass' if n['midi_note'] < 60 else 'treble')
+        gt_hand_indices.setdefault(hand, []).append(i)
+
+    gt_ioi_map = {}
+    for hand, indices in gt_hand_indices.items():
+        for j in range(len(indices) - 1):
+            curr, nxt = gt_sorted[indices[j]], gt_sorted[indices[j + 1]]
+            gt_ioi_map[(curr['onset_time'], curr['midi_note'])] = nxt['onset_time'] - curr['onset_time']
+
+    # Match pred to GT and compare
+    matched_pairs = []
+    gt_matched = set()
+    for pred in pred_notes:
+        if 'model_note_value' not in pred:
+            continue
+        for i, gt in enumerate(gt_notes):
+            if i in gt_matched:
+                continue
+            if (abs(pred['onset_time'] - gt['onset_time']) <= onset_tol
+                    and pred['midi_note'] == gt['midi_note']):
+                matched_pairs.append((pred, gt))
+                gt_matched.add(i)
+                break
+
+    if not matched_pairs:
+        return {'n_matched': 0, 'ioi_accuracy': 0.0, 'sustain_accuracy': 0.0,
+                'avg_beat_error': 0.0, 'per_class': {}}
+
+    exact_ioi = 0
+    exact_sustain = 0
+    beat_errors = []
+    per_class_correct = {}
+    per_class_total = {}
+    confusion = {}  # (pred, gt) -> count
+
+    for pred, gt in matched_pairs:
+        # Parse model prediction
+        raw_name = pred['model_note_value']
+        if raw_name.startswith('dotted_'):
+            pred_base, pred_dot = raw_name[7:], True
+        else:
+            pred_base, pred_dot = raw_name, False
+        pred_beats = base_note_value_beats.get(pred_base, 1.0) * (1.5 if pred_dot else 1.0)
+
+        # GT: IOI-based (track-aware) — quantized using MODEL's class system
+        gt_ioi = gt_ioi_map.get((gt['onset_time'], gt['midi_note']))
+        if gt_ioi is not None and gt_ioi > 0.03:
+            gt_ioi_dur = min(gt_ioi, beat_duration * 6.0)
+        else:
+            gt_ioi_dur = gt.get('duration', gt['offset_time'] - gt['onset_time'])
+        gt_base, gt_dot, gt_label = _quantize_gt(gt_ioi_dur)
+        gt_beats = base_note_value_beats.get(gt_base, 1.0) * (1.5 if gt_dot else 1.0)
+
+        # GT: sustain-based
+        gt_sus_dur = gt.get('original_duration', gt.get('duration', gt['offset_time'] - gt['onset_time']))
+        gt_sus_base, gt_sus_dot, _ = _quantize_gt(gt_sus_dur)
+
+        # Exact match
+        if pred_base == gt_base and pred_dot == gt_dot:
+            exact_ioi += 1
+        if pred_base == gt_sus_base and pred_dot == gt_sus_dot:
+            exact_sustain += 1
+        beat_errors.append(abs(pred_beats - gt_beats))
+
+        # Per-class tracking
+        per_class_total[gt_label] = per_class_total.get(gt_label, 0) + 1
+        if pred_base == gt_base and pred_dot == gt_dot:
+            per_class_correct[gt_label] = per_class_correct.get(gt_label, 0) + 1
+
+        # Confusion
+        confusion[(raw_name, gt_label)] = confusion.get((raw_name, gt_label), 0) + 1
+
+    n = len(matched_pairs)
+    per_class = {}
+    for cls in sorted(per_class_total, key=lambda c: -per_class_total[c]):
+        total = per_class_total[cls]
+        correct = per_class_correct.get(cls, 0)
+        per_class[cls] = {'correct': correct, 'total': total, 'accuracy': correct / total}
+
+    # Top confusions
+    top_confusions = sorted(confusion.items(), key=lambda x: -x[1])[:10]
+
+    return {
+        'n_matched': n,
+        'ioi_accuracy': exact_ioi / n,
+        'sustain_accuracy': exact_sustain / n,
+        'avg_beat_error': np.mean(beat_errors) if beat_errors else 0.0,
+        'per_class': per_class,
+        'top_confusions': top_confusions,
+    }
+
+
 def compute_rhythm_metrics(pred_notes, gt_notes, bpm, onset_tol=0.05, debug=False):
     """
     Compute rhythm-specific metrics comparing quantized note values.
@@ -298,11 +438,24 @@ def compute_rhythm_metrics(pred_notes, gt_notes, bpm, onset_tol=0.05, debug=Fals
             ioi = nxt['onset_time'] - curr['onset_time']
             gt_pitch_ioi_map[(curr['onset_time'], curr['midi_note'])] = ioi
 
-    # Note value to beats mapping
+    # Note value to beats mapping (includes dotted variants from model head)
     note_value_beats = {
         'whole': 4.0, 'half': 2.0, 'quarter': 1.0, 'eighth': 0.5,
-        '16th': 0.25, '32nd': 0.125
+        '16th': 0.25, '32nd': 0.125,
+        'dotted_whole': 6.0, 'dotted_half': 3.0, 'dotted_quarter': 1.5,
+        'dotted_eighth': 0.75, 'dotted_16th': 0.375, 'dotted_32nd': 0.1875,
     }
+
+    def _parse_note_value(name, dotted_flag):
+        """Parse a note value name into (base_type, is_dotted) for comparison.
+
+        Handles both formats:
+          - model head: 'dotted_quarter' with dotted_flag ignored
+          - pipeline: 'quarter' with dotted_flag=True
+        """
+        if name and name.startswith('dotted_'):
+            return name[len('dotted_'):], True
+        return name, dotted_flag
 
     ioi_exact_match = 0
     sustain_exact_match = 0
@@ -314,16 +467,17 @@ def compute_rhythm_metrics(pred_notes, gt_notes, bpm, onset_tol=0.05, debug=Fals
         print(f"    [DEBUG] First 5 rhythm comparisons (BPM={bpm}, track-based hand={'yes' if has_track_info else 'no'}):")
 
     for idx, (pred, gt) in enumerate(matched_pairs):
-        # --- Prediction note value ---
-        pred_val = pred.get('model_note_value') or pred.get('note_value')
+        # --- Prediction note value (pipeline only, ignore model head) ---
+        pred_val = pred.get('note_value')
         pred_dotted = pred.get('dotted', False)
-        if pred.get('model_note_value'):
-            pred_dotted = False
         if pred_val is None:
             pred_dur = pred.get('duration', pred.get('offset_time', pred['onset_time'] + 0.5) - pred['onset_time'])
             pred_result = dn_duration_to_note_value(pred_dur, bpm=bpm)
             pred_val = pred_result['type']
             pred_dotted = pred_result.get('dotted', False)
+
+        # Normalize combined dotted names (e.g. 'dotted_quarter' -> 'quarter', True)
+        pred_val, pred_dotted = _parse_note_value(pred_val, pred_dotted)
 
         pred_beats_val = note_value_beats.get(pred_val, 1.0)
         if pred_dotted:
@@ -709,7 +863,29 @@ def test_on_sample(model_type: str = "ensemble"):
         if rhythm_metrics_neural is not None:
             neural_improvement = rhythm_metrics_neural['note_value_accuracy'] - rhythm_metrics_coh['note_value_accuracy']
             print(f"    Neural BPM vs DSP:    {neural_improvement:+.3f}")
-        
+
+        # Model note_value head evaluation (zero-cost predictions from forward pass)
+        model_head_metrics = None
+        if has_nv_head:
+            model_head_metrics = compute_model_head_metrics(
+                pred_notes, gt_notes, gt_bpm,
+                model_nv_beats=mod.get('NOTE_VALUE_BEATS'),
+                model_nv_names=mod.get('NOTE_VALUE_NAMES'),
+            )
+            print(f"  MODEL NOTE-VALUE HEAD (direct, no pipeline):")
+            print(f"    IOI accuracy (track):   {model_head_metrics['ioi_accuracy']:.3f}")
+            print(f"    Sustain accuracy:       {model_head_metrics['sustain_accuracy']:.3f}")
+            print(f"    Avg beat error:         {model_head_metrics['avg_beat_error']:.3f}")
+            print(f"    Notes evaluated:        {model_head_metrics['n_matched']}")
+            if model_head_metrics['per_class']:
+                print(f"    Per-class accuracy:")
+                for cls, info in model_head_metrics['per_class'].items():
+                    print(f"      {cls:>20s}: {info['accuracy']:.3f}  ({info['correct']}/{info['total']})")
+            if model_head_metrics.get('top_confusions'):
+                print(f"    Top confusions (pred -> gt):")
+                for (p, g), count in model_head_metrics['top_confusions'][:5]:
+                    print(f"      {p:>20s} -> {g:<20s}: {count}")
+
         # Store metrics
         metrics['rhythm_no_coherence'] = rhythm_metrics_no_coh
         metrics['rhythm_with_coherence'] = rhythm_metrics_coh
@@ -721,6 +897,7 @@ def test_on_sample(model_type: str = "ensemble"):
         metrics['detected_bpm'] = detected_bpm
         metrics['neural_bpm'] = neural_bpm
         metrics['gt_bpm'] = gt_bpm
+        metrics['model_head'] = model_head_metrics
         all_metrics.append(metrics)
     
     # Average metrics
@@ -808,11 +985,48 @@ def test_on_sample(model_type: str = "ensemble"):
         ioi_vs_sustain = (avg_ioi_coh - avg_sustain_coh) * 100
         print(f"  IOI vs sustain accuracy gap (with coh):        {ioi_vs_sustain:+.1f}% points")
 
+        # Model head results
+        head_results = [m for m in all_metrics if m.get('model_head') is not None]
+        if head_results:
+            avg_head_ioi = np.mean([m['model_head']['ioi_accuracy'] for m in head_results])
+            avg_head_sustain = np.mean([m['model_head']['sustain_accuracy'] for m in head_results])
+            avg_head_err = np.mean([m['model_head']['avg_beat_error'] for m in head_results])
+            pipeline_vs_head = (avg_head_ioi - avg_ioi_coh) * 100
+
+            print(f"\nMODEL NOTE-VALUE HEAD (zero-cost, from forward pass):")
+            print(f"  Avg IOI accuracy (track):   {avg_head_ioi:.3f}")
+            print(f"  Avg sustain accuracy:       {avg_head_sustain:.3f}")
+            print(f"  Avg beat error:             {avg_head_err:.3f}")
+            print(f"  vs pipeline (IOI track):    {pipeline_vs_head:+.1f}% points")
+
+            # Aggregate per-class
+            all_cls_correct = {}
+            all_cls_total = {}
+            for m in head_results:
+                for cls, info in m['model_head']['per_class'].items():
+                    all_cls_total[cls] = all_cls_total.get(cls, 0) + info['total']
+                    all_cls_correct[cls] = all_cls_correct.get(cls, 0) + info['correct']
+            print(f"  Per-class accuracy (aggregated):")
+            for cls in sorted(all_cls_total, key=lambda c: -all_cls_total[c]):
+                total = all_cls_total[cls]
+                correct = all_cls_correct.get(cls, 0)
+                print(f"    {cls:>20s}: {correct/total:.3f}  ({correct}/{total})")
+
+            # Aggregate top confusions
+            all_conf = {}
+            for m in head_results:
+                for (p, g), count in m['model_head'].get('top_confusions', []):
+                    all_conf[(p, g)] = all_conf.get((p, g), 0) + count
+            top_conf = sorted(all_conf.items(), key=lambda x: -x[1])[:10]
+            if top_conf:
+                print(f"  Top confusions (pred -> gt):")
+                for (p, g), count in top_conf:
+                    print(f"    {p:>20s} -> {g:<20s}: {count}")
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test transcription model accuracy")
     parser.add_argument('--model', choices=['ensemble', 'mel'], default='ensemble',
                         help='Which model to test (default: ensemble)')
     args = parser.parse_args()
-    test_on_sample(model_type=args.model)
     test_on_sample(model_type=args.model)

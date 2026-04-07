@@ -65,11 +65,13 @@ SEGMENT_FRAMES = int(SEGMENT_SECONDS * SAMPLE_RATE / HOP_LENGTH)  # 625
 # Peak=1.0 at true onset, linear decay to 0.0 at ±ONSET_TENT_SEC seconds
 ONSET_TENT_SEC = 0.05  # ±50ms tent window
 
-# Note-value classes (same as train_ensemble.py)
-NOTE_VALUE_CLASSES = 10
+# Note-value classes
+NOTE_VALUE_CLASSES = 12
 NOTE_VALUE_BEATS = [
     0.125,   # 32nd
+    0.1875,  # dotted 32nd
     0.25,    # 16th
+    0.375,   # dotted 16th
     0.5,     # eighth
     0.75,    # dotted eighth
     1.0,     # quarter
@@ -80,7 +82,8 @@ NOTE_VALUE_BEATS = [
     6.0,     # dotted whole
 ]
 NOTE_VALUE_NAMES = [
-    '32nd', '16th', 'eighth', 'dotted_eighth',
+    '32nd', 'dotted_32nd', '16th', 'dotted_16th',
+    'eighth', 'dotted_eighth',
     'quarter', 'dotted_quarter', 'half', 'dotted_half',
     'whole', 'dotted_whole'
 ]
@@ -361,10 +364,11 @@ class MelBaselineTranscriber(nn.Module):
                  ff_expansion: int = 4,
                  conv_kernel: int = 31,
                  dropout: float = 0.1,
-                 use_checkpoint: bool = False):
+                 use_checkpoint: bool = False,
+                 n_note_value_classes: int = NOTE_VALUE_CLASSES):
         super().__init__()
         self.n_keys = PIANO_KEYS
-        self.n_nv = NOTE_VALUE_CLASSES
+        self.n_nv = n_note_value_classes
 
         # 1. ConvStack: mel -> per-frame features
         self.conv_stack = ConvStack(n_mels, conv_out, dropout)
@@ -442,7 +446,7 @@ class MelBaselineTranscriber(nn.Module):
         )
         self.note_value_head = nn.Sequential(
             nn.Linear(key_dim, key_dim), nn.GELU(), nn.Dropout(dropout),
-            nn.Linear(key_dim, NOTE_VALUE_CLASSES),
+            nn.Linear(key_dim, n_note_value_classes),
         )
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -497,7 +501,7 @@ class MelBaselineTranscriber(nn.Module):
         frame_in = torch.cat([key_h, onset_logits.unsqueeze(-1).detach()], dim=-1)
         frame_logits = self.frame_head(frame_in).squeeze(-1)  # (B, T, 88)
 
-        nv_logits = self.note_value_head(key_h)  # (B, T, 88, 10)
+        nv_logits = self.note_value_head(key_h)  # (B, T, 88, N_NV)
 
         return {
             'onset_logits': onset_logits,
@@ -864,6 +868,7 @@ def _build_model_from_config(config: dict) -> nn.Module:
         conv_kernel=config.get('conv_kernel', 31),
         dropout=config.get('dropout', 0.1),
         use_checkpoint=config.get('use_checkpoint', False),
+        n_note_value_classes=config.get('n_note_value_classes', NOTE_VALUE_CLASSES),
     )
 
 

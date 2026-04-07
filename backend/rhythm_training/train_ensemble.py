@@ -1436,9 +1436,28 @@ def decode_note_events(
             if vel_int < min_velocity:
                 continue
 
+            # Sub-frame onset refinement via parabolic interpolation
+            onset_refined = float(onset_f)
+            if 0 < onset_f < n_frames - 1:
+                y_prev = onset_probs[onset_f - 1, key]
+                y_curr = onset_probs[onset_f, key]
+                y_next = onset_probs[onset_f + 1, key]
+                denom = 2.0 * y_curr - y_prev - y_next
+                if denom > 1e-6:
+                    onset_refined = onset_f + 0.5 * (y_next - y_prev) / denom
+
+            # Sub-frame offset: interpolate where frame prob crosses threshold
+            offset_refined = float(offset_f)
+            if 0 < offset_f < n_frames:
+                y_before = frame_probs[offset_f - 1, key]
+                y_at = frame_probs[min(offset_f, n_frames - 1), key]
+                if y_before > frame_threshold and y_before > y_at + 1e-6:
+                    frac = (y_before - frame_threshold) / (y_before - y_at)
+                    offset_refined = (offset_f - 1) + min(frac, 1.0)
+
             event = {
-                'onset_time': float(onset_f * frame_time),
-                'offset_time': float(offset_f * frame_time),
+                'onset_time': float(onset_refined * frame_time),
+                'offset_time': float(offset_refined * frame_time),
                 'midi_note': int(key + MIDI_OFFSET),
                 'velocity': vel_int,
                 'onset_prob': float(onset_probs[onset_f, key]),  # Keep for filtering

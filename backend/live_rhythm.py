@@ -127,15 +127,15 @@ class IncrementalTempoTracker:
         return (self.current_bpm, self.confidence)
     
     def _update_bpm(self):
-        """Update BPM estimate from IOI histogram."""
+        """Update BPM estimate from IOI histogram with octave disambiguation."""
         if len(self.ioi_buffer) < 4:
             return
-        
+
         iois = np.array(self.ioi_buffer)
-        
+
         # Find clusters of similar IOIs using a simple histogram approach
         # Convert IOIs to potential beat durations (could be 1/4, 1/2, 1, 2, 4 beats)
-        
+
         candidates = []
         for ioi in iois:
             # Try each possible beat mapping
@@ -144,18 +144,18 @@ class IncrementalTempoTracker:
                 bpm = 60.0 / beat_dur
                 if self.min_bpm <= bpm <= self.max_bpm:
                     candidates.append(bpm)
-        
+
         if not candidates:
             return
-        
+
         candidates = np.array(candidates)
-        
-        # Simple clustering: find the mode via histogram
-        hist, bin_edges = np.histogram(candidates, bins=40, 
+
+        # Finer histogram (80 bins instead of 40) for better resolution
+        hist, bin_edges = np.histogram(candidates, bins=80,
                                         range=(self.min_bpm, self.max_bpm))
         peak_idx = np.argmax(hist)
         peak_bpm = (bin_edges[peak_idx] + bin_edges[peak_idx + 1]) / 2
-        
+
         # Confidence based on how concentrated the histogram is
         total = hist.sum()
         peak_count = hist[peak_idx]
@@ -164,19 +164,44 @@ class IncrementalTempoTracker:
             peak_count += hist[peak_idx - 1]
         if peak_idx < len(hist) - 1:
             peak_count += hist[peak_idx + 1]
-        
+
         self.confidence = min(1.0, peak_count / max(total, 1) * 1.5)
-        
+
+        # Octave disambiguation: check if 0.5x or 2x gives better IOI alignment
+        best_bpm = peak_bpm
+        best_score = self._alignment_score(iois, 60.0 / peak_bpm)
+        for mult in [0.5, 2.0]:
+            alt_bpm = peak_bpm * mult
+            if self.min_bpm <= alt_bpm <= self.max_bpm:
+                alt_score = self._alignment_score(iois, 60.0 / alt_bpm)
+                if alt_score > best_score * 1.05:
+                    best_bpm = alt_bpm
+                    best_score = alt_score
+
         # Smooth BPM transitions (don't jump suddenly)
         alpha = 0.3 if self.confidence > 0.5 else 0.1
-        self.current_bpm = self.current_bpm * (1 - alpha) + peak_bpm * alpha
-        
+        self.current_bpm = self.current_bpm * (1 - alpha) + best_bpm * alpha
+
         # Snap to common tempos if very close
         common_tempos = [60, 72, 80, 90, 100, 108, 120, 132, 140, 160, 180, 200]
         for ct in common_tempos:
             if abs(self.current_bpm - ct) < 3:
                 self.current_bpm = ct
                 break
+
+    @staticmethod
+    def _alignment_score(iois, beat_period):
+        """Score how well IOIs align to integer/half-integer multiples of beat."""
+        import math
+        score = 0.0
+        for ioi in iois:
+            ratio = ioi / beat_period
+            nearest = round(ratio * 2) / 2
+            if nearest < 0.25:
+                continue
+            dist = abs(ratio - nearest)
+            score += math.exp(-(dist ** 2) / (2 * 0.08 ** 2))
+        return score / len(iois)
     
     def get_beat_duration(self) -> float:
         """Get current beat duration in seconds."""

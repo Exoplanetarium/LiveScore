@@ -1,0 +1,229 @@
+===============================================================================
+LiveScore - Key Technical Explanations (Research Paper Reference)
+===============================================================================
+
+LAST UPDATED: 2026-04-06
+
+===============================================================================
+1. WHY SINGLE MEL SPECTROGRAM OUTPERFORMS MULTI-RESOLUTION STFT ENSEMBLE
+===============================================================================
+
+Empirical result: 229-bin log-mel spectrogram (onset F1=0.976) dramatically
+outperforms 1098-feature multi-resolution stack (onset F1=0.72), even when
+both models have comparable parameter counts (~7M).
+
+Three complementary reasons:
+
+A) LOSS OF 2D SPATIAL STRUCTURE
+
+   A mel spectrogram is a 2D image (time x frequency) with smooth local
+   correlations — neighboring bins represent nearby frequencies, neighboring
+   frames represent nearby time. 2D ConvStack layers exploit this with 3x3
+   kernels to detect local time-frequency patterns (harmonics, transients).
+
+   The ensemble restructures its 1098 features into (88 keys, 12 channels),
+   but those 12 channels are semantically heterogeneous: mel-1024, mel-2048,
+   mel-4096, CQT, HPSS-harmonic, HPSS-percussive, onset-flux, onset-HFC,
+   etc. Conv layers operating across this axis would combine data that don't
+   make sense together — a spectral flux value convolved with an HPSS
+   harmonic bin has no meaningful interpretation. The spatial coherence in
+   the frequency dimension is destroyed by stacking unrelated features.
+
+B) CONFLICTING TEMPORAL SIGNALS
+
+   Different STFT window sizes produce different temporal smearing:
+     - n_fft=1024: ~23ms window — sharp onsets
+     - n_fft=4096: ~93ms window — smeared onsets over 4+ frames
+
+   When concatenated at the same time step, the model receives contradictory
+   signals: "onset happened right here" (from 1024) vs "onset is smeared
+   across these frames" (from 4096). The model must waste capacity learning
+   to reconcile these conflicting views instead of learning useful patterns.
+
+   A single n_fft=2048 gives one coherent temporal view. The Conformer's
+   multi-scale temporal convolutions (dilation 1, 2, 4) and self-attention
+   learn to capture different temporal contexts internally — without
+   conflicting input signals at the same time step.
+
+C) REDUNDANCY WASTES PARAMETER CAPACITY
+
+   Three mel spectrograms at different STFT sizes + CQT + HPSS are highly
+   correlated — they're all derived from the same audio. Two hop sizes
+   (256, 512) add near-duplicate information. Even with ~7M parameters,
+   capacity goes toward learning that features are redundant rather than
+   learning musically useful representations.
+
+   The mel baseline invests all its parameters into depth (6 Conformer
+   layers vs 4), width (d_model=192 vs 64), and attention (4 heads vs 2)
+   — the parts that actually improve representation learning.
+
+Analogy: This mirrors the trajectory of computer vision (raw pixels + deep
+CNN beat hand-crafted SIFT/HOG features) and NLP (raw tokens + transformers
+beat hand-crafted POS/dependency features). A sufficiently powerful model
+learns better internal multi-resolution representations than hand-crafted
+external ones.
+
+
+===============================================================================
+2. ONSET DETECTION: BINARY vs TENT-SHAPED REGRESSION TARGETS
+===============================================================================
+
+Old approach (ensemble): Binary onset labels — frame is either 1 (onset)
+or 0 (not onset), with a 2-frame tolerance window.
+
+Problem: A frame immediately adjacent to an onset is labeled 0 but looks
+spectrally identical to the onset frame. The model learns to fire broadly
+to avoid missing onsets, creating false positives. Binary classification
+yields broad activation blobs that are hard to threshold cleanly.
+
+New approach (mel baseline): Tent-shaped regression targets — peak of 1.0
+at the true onset frame, linear decay to 0.0 at +/-50ms (~4 frames).
+
+Effect: Neighboring frames get partial credit (e.g., 0.7, 0.4) instead
+of being punished as completely wrong. The model learns to output sharp
+peaks centered on true onsets, since it's rewarded for being close and
+penalized proportionally for being far. This is from Kong et al. (2020)
+which achieves 96.72% onset F1.
+
+Combined with pos_weight reduction (5.0 -> 2.0) since regression targets
+naturally handle class imbalance better than binary targets.
+
+
+===============================================================================
+3. VELOCITY-GATED ONSET REFINEMENT
+===============================================================================
+
+Architecture: Raw onset probabilities are combined with velocity predictions
+through a BiGRU second stage (Kong et al. 2020 technique).
+
+  vel_gated = sqrt(raw_onset_prob) * velocity.detach()
+  input = concat(raw_onset_prob, vel_gated)  →  BiGRU  →  refined logits
+
+Intuition: Real note onsets have measurable velocity (key strike energy).
+False positive onset activations typically have low velocity. By gating
+onset activations with velocity, the BiGRU learns to suppress false
+positives that lack physical plausibility. The detach() prevents onset
+gradients from corrupting the velocity head.
+
+Cost: ~200K extra parameters, minor inference overhead. Major precision
+improvement.
+
+
+===============================================================================
+4. COHERENCE SMOOTHING: WHY IT HURTS
+===============================================================================
+
+The coherence smoother (apply_coherence_smoothing) uses a sliding window
+to measure rhythm consistency and re-quantizes "erratic" sections to the
+locally dominant note value.
+
+Empirical result: Degrades IOI accuracy by -8.2% on MAESTRO test set
+(0.522 without -> 0.440 with coherence smoothing).
+
+Why: Coherence measures consistency, not correctness. If the pipeline
+already quantized a passage correctly but with intentional rhythmic
+variety (e.g., mixed eighths and quarters), the smoother labels it
+"erratic" and flattens it to the dominant value. It trades correctness
+for uniformity.
+
+Disabled in production by making apply_coherence_smoothing() return
+notes unchanged.
+
+
+===============================================================================
+5. BPM DETECTION: OCTAVE ERROR PROBLEM
+===============================================================================
+
+Piano autocorrelation often locks onto note density (2x true tempo) rather
+than the actual beat level, because:
+  - Dense passages (e.g., running eighth notes at 120 BPM) create strong
+    periodicity at 240 BPM (inter-onset interval of the running notes)
+  - The autocorrelation peak at 240 BPM can be stronger than at 120 BPM
+  - This is called an "octave error" — the detected tempo is 2x or 0.5x
+    the true tempo
+
+Fix: Added octave disambiguation step that tests 0.5x and 2.0x the
+detected BPM. Each candidate is scored by how well onset times align to
+its beat grid (IOI alignment scoring). If the alternative aligns 5% better,
+it wins. Applied in both detect_tempo_from_onsets() (batch) and
+IncrementalTempoTracker._update_bpm() (live).
+
+
+===============================================================================
+6. RHYTHM QUANTIZATION: MODEL HEAD vs PIPELINE
+===============================================================================
+
+Two approaches to assigning note values (durations) to detected onsets:
+
+A) Model note_value head: Built into the neural network, runs during the
+   forward pass (zero extra inference cost). Predicts one of 12 rhythmic
+   classes per onset (32nd through dotted whole).
+
+   Problem: 29.6% accuracy — heavily biased toward predicting 32nd notes
+   (86.8% accuracy for 32nds, near-zero for longer values). Root cause is
+   class imbalance: polyphonic piano creates many short IOIs between notes
+   in different voices, making 32nd notes dominate training labels.
+
+B) Pipeline quantization: Computes inter-onset intervals (IOI) in the
+   detected note stream, estimates BPM, converts IOIs to beat fractions,
+   snaps to nearest standard duration.
+
+   Result: 52.2% accuracy — significantly better because it uses the
+   actual temporal structure of detected notes rather than frame-level
+   spectral features alone.
+
+
+===============================================================================
+7. LIVE TRANSCRIPTION: REAL-TIME CONSTRAINT
+===============================================================================
+
+LiveScore's competitive differentiator vs existing apps (e.g., klang.io)
+is real-time transcription — notes appear on the sheet music as they are
+played, not after post-processing.
+
+This rules out heavy post-processing techniques that improve accuracy in
+offline settings:
+  - Hidden Markov Models for beat tracking (Nakamura et al.)
+  - Transformer-based score refinement (MIDI2ScoreTransformer)
+  - Full-piece beam search with measure-sum constraints
+  - Multi-pass rhythm correction
+
+Two-stage live architecture (backend/live_rhythm.py):
+  Stage 1 (Coarse, <50ms latency): Snaps to 8 standard durations using
+    current BPM estimate. Runs immediately when a note-off is detected.
+  Stage 2 (Deferred, ~1s delay): Refines with 17 candidates including
+    triplets, using accumulated context. Updates the displayed note value
+    silently.
+
+IncrementalTempoTracker: Maintains a running BPM estimate from IOI
+histograms, updated with each new onset. Uses the same octave
+disambiguation as the batch detector.
+
+
+===============================================================================
+8. EVALUATION METHODOLOGY: AVOIDING SHARED BIAS
+===============================================================================
+
+Key insight: If prediction and evaluation both use the same methodology
+(e.g., IOI-based with pitch-60 hand split), accuracy can be artificially
+inflated because shared biases cancel out.
+
+Three independent ground truth methods to cross-check:
+  1. IOI with MIDI track hand assignment (actual hands from MIDI file)
+  2. IOI with pitch-60 split (matches prediction pipeline, shows bias)
+  3. Sustain-based (MIDI key-release duration, independent of IOI)
+
+The gap between these reveals systematic evaluation bias:
+  - Track vs pitch-split gap: Shows hand-assignment error impact
+  - IOI vs sustain gap: Shows IOI methodology limitations
+
+Beat sum validity metric: Measures what fraction of predicted measures
+sum to exactly 4 beats (within 10% tolerance), catching cases where
+individual note values are "correct" but don't form valid measures.
+
+Train/eval class boundary alignment: When the model predicts in N-class
+space (e.g., 12 note value classes), the evaluation ground truth MUST be
+quantized using the same class boundaries. Using a different quantization
+function for GT causes phantom accuracy drops (e.g., model correctly
+predicts "dotted_32nd" but GT function classifies the same duration as
+"16th" — scored as wrong).
