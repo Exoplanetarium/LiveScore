@@ -5,36 +5,64 @@ export const OSMD_HTML = `
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1"/>
   <style>
-    html, body { margin:0; padding:0; background:#fff; }
-    
-    /* Portrait mode: horizontal scroll container */
-    #osmd-container {
-      width: 100vw;
-      overflow-x: auto;
-      overflow-y: hidden;
-      -webkit-overflow-scrolling: touch;
+    html, body {
+      margin: 0;
+      padding: 0;
+      min-height: 100%;
+      background: linear-gradient(180deg, #ffffff 0%, #f5f7fb 100%);
+      overflow: hidden;
     }
-    #osmd-container.portrait-mode {
-      /* Enable horizontal scrolling in portrait */
-      white-space: nowrap;
+    body {
+      overscroll-behavior: none;
+      touch-action: manipulation;
+    }
+
+    #osmd-container {
+      position: relative;
+      width: 100%;
+      min-height: 560px;
+      overflow: hidden;
+      background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%);
+      box-sizing: border-box;
+      touch-action: manipulation;
     }
     #osmd-container.landscape-mode {
-      /* In landscape/fullscreen, use normal layout */
       overflow-x: hidden;
       overflow-y: auto;
+      touch-action: pan-y pinch-zoom;
     }
-    #osmd { 
-      display: inline-block;
-      min-width: 100vw;
-      padding-right: 60vw; /* Extra space at the end so last notes are visible */
+
+    #osmd-stage {
+      position: relative;
+      display: block;
+      width: 100%;
+      min-height: 100%;
+      box-sizing: border-box;
+      will-change: transform;
+      transform: translate3d(0px, 0px, 0px);
+    }
+    #osmd-stage.portrait-mode {
+      padding: 16px 12px 24px 12px;
+      transform: translate3d(0px, 0px, 0px) !important;
+    }
+    #osmd-stage.landscape-mode {
+      display: block;
+      width: auto;
+      padding: 68px 24px 24px 24px;
+      transform: translate3d(0px, 0px, 0px) !important;
+    }
+
+    #osmd {
+      display: block;
+      width: 100%;
     }
     #osmd.portrait-mode {
-      /* Force single-line horizontal layout */
-      width: max-content;
+      width: 100%;
+      min-width: 0;
     }
     #osmd.landscape-mode {
-      width: 100vw;
-      padding-right: 0;
+      width: 100%;
+      min-width: 0;
     }
     
     /* Fullscreen playback controls overlay */
@@ -71,8 +99,8 @@ export const OSMD_HTML = `
     #fullscreen-controls .stop-btn { background: #c0392b; color: white; }
     #fullscreen-controls .exit-btn { background: #555; color: white; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.9.2/build/opensheetmusicdisplay.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/opensheetmusicdisplay@1.9.2/build/opensheetmusicdisplay.min.js"><\/script>
+  <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"><\/script>
 </head>
 <body>
   <!-- Fullscreen playback controls -->
@@ -83,7 +111,9 @@ export const OSMD_HTML = `
   </div>
   
   <div id="osmd-container" class="portrait-mode">
-    <div id="osmd" class="portrait-mode"></div>
+    <div id="osmd-stage" class="portrait-mode">
+      <div id="osmd" class="portrait-mode"></div>
+    </div>
   </div>
   <script>
     const post = (m) => {
@@ -92,40 +122,666 @@ export const OSMD_HTML = `
     let osmd;
     let currentXml = null;
     let fullscreenMode = false;
-    
-    // ─── Scroll Cursor Into View (Portrait Mode) ───
-    function scrollCursorIntoView() {
-      if (fullscreenMode) return; // Don't scroll in landscape/fullscreen mode
-      
-      const container = document.getElementById('osmd-container');
-      if (!container || !osmd || !osmd.cursor) return;
-      
+    let followTail = false;
+    let followTailScheduleFrame = null;
+    let cameraAnimationFrame = null;
+    let cameraMode = 'smooth';
+    let cameraSuspendUntil = 0;
+    let suppressScoreTapUntil = 0;
+    const PORTRAIT_SVG_SCALE = 0.5;
+    const PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER = 2.0;
+    const PORTRAIT_MEASURE_MIN_WIDTH = 380;
+    const LANDSCAPE_MEASURE_MIN_WIDTH = 190;
+    const PORTRAIT_MIN_NOTE_DISTANCE = 5.0;
+    const LANDSCAPE_MIN_NOTE_DISTANCE = 2.8;
+    const PORTRAIT_VOICE_SPACING_ADDEND = 8.0;
+    const LANDSCAPE_VOICE_SPACING_ADDEND = 4.5;
+    const cameraState = {
+      currentX: 0,
+      targetX: 0,
+      maxX: 0,
+      viewportWidth: 0,
+      viewportHeight: 0,
+      contentWidth: 0,
+      contentHeight: 0,
+      paddingLeft: 0,
+      paddingRight: 0,
+      paddingTop: 0,
+      paddingBottom: 0,
+      measureWidths: [],
+      measureAnchors: [],
+      averageMeasureWidth: 0,
+    };
+    const dragState = {
+      active: false,
+      startX: 0,
+      startCameraX: 0,
+    };
+
+    function getContainer() {
+      return document.getElementById('osmd-container');
+    }
+
+    function getStage() {
+      return document.getElementById('osmd-stage');
+    }
+
+    function getScoreRoot() {
+      return document.getElementById('osmd');
+    }
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function parsePixels(value) {
+      const parsed = parseFloat(value || '0');
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+
+    function firstFinite() {
+      for (let index = 0; index < arguments.length; index++) {
+        const value = arguments[index];
+        if (typeof value === 'number' && Number.isFinite(value)) {
+          return value;
+        }
+      }
+      return null;
+    }
+
+    function clearScheduledFollowTail() {
+      if (followTailScheduleFrame != null) {
+        cancelAnimationFrame(followTailScheduleFrame);
+        followTailScheduleFrame = null;
+      }
+    }
+
+    function usesWrappedPortraitLayout() {
+      return !fullscreenMode;
+    }
+
+    function getRenderedSvgScale() {
+      return fullscreenMode ? 1 : PORTRAIT_SVG_SCALE;
+    }
+
+    function applyEngravingDensity() {
+      if (!osmd || !osmd.EngravingRules) return;
+
+      const portraitWrapped = usesWrappedPortraitLayout();
+
+      osmd.EngravingRules.MinSkyBottomDistBetweenStaves = 3;
+      osmd.EngravingRules.StaffDistance = 8;
+      osmd.EngravingRules.BetweenStaffDistance = 5;
+      osmd.EngravingRules.MinNoteDistance = portraitWrapped
+        ? PORTRAIT_MIN_NOTE_DISTANCE
+        : LANDSCAPE_MIN_NOTE_DISTANCE;
+      osmd.EngravingRules.VoiceSpacingMultiplierVexflow = 1.0;
+      osmd.EngravingRules.VoiceSpacingAddendVexflow = portraitWrapped
+        ? PORTRAIT_VOICE_SPACING_ADDEND
+        : LANDSCAPE_VOICE_SPACING_ADDEND;
+      osmd.EngravingRules.MeasureMinimumWidth = portraitWrapped
+        ? PORTRAIT_MEASURE_MIN_WIDTH
+        : LANDSCAPE_MEASURE_MIN_WIDTH;
+      osmd.EngravingRules.FixedMeasureWidth = false;
+      osmd.EngravingRules.FixedMeasureWidthFixedValue = 0;
+      osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = false;
+      osmd.EngravingRules.LastSystemMaxScalingFactor = 2.2;
+      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
+      osmd.EngravingRules.NewPageAtXMLNewPageAttribute = true;
+      osmd.EngravingRules.AutoBeamNotes = true;
+      osmd.EngravingRules.AutoBeamOptions = {
+        beam_rests: false,
+        beam_middle_rests_only: false,
+        maintain_stem_directions: true
+      };
+    }
+
+    function applyLayoutOptions() {
+      if (!osmd) return;
+
+      osmd.setOptions({
+        renderSingleHorizontalStaffline: false,
+        autoResize: fullscreenMode,
+      });
+      applyEngravingDensity();
+    }
+
+    function applyRenderedSvgScale() {
+      const scoreRoot = getScoreRoot();
+      if (!scoreRoot) return;
+
+      const scale = getRenderedSvgScale();
+      const svgNodes = scoreRoot.querySelectorAll('svg');
+      svgNodes.forEach((svg) => {
+        let baseWidth = parseFloat(svg.getAttribute('width') || '0');
+        let baseHeight = parseFloat(svg.getAttribute('height') || '0');
+
+        if ((!Number.isFinite(baseWidth) || baseWidth <= 0 || !Number.isFinite(baseHeight) || baseHeight <= 0) && svg.viewBox && svg.viewBox.baseVal) {
+          baseWidth = svg.viewBox.baseVal.width;
+          baseHeight = svg.viewBox.baseVal.height;
+        }
+
+        let shell = svg.parentElement;
+        if (!shell || !shell.classList || !shell.classList.contains('osmd-svg-scale-shell')) {
+          shell = document.createElement('div');
+          shell.className = 'osmd-svg-scale-shell';
+          shell.style.position = 'relative';
+          shell.style.overflow = 'visible';
+          shell.style.display = 'block';
+          if (svg.parentNode) {
+            svg.parentNode.insertBefore(shell, svg);
+            shell.appendChild(svg);
+          }
+        }
+
+        if (scale === 1) {
+          shell.style.width = '';
+          shell.style.height = '';
+          svg.style.width = '';
+          svg.style.height = '';
+          svg.style.maxWidth = '';
+          svg.style.display = '';
+          svg.style.transform = '';
+          svg.style.transformOrigin = '';
+          return;
+        }
+
+        const layoutWidth = Number.isFinite(baseWidth) && baseWidth > 0
+          ? Math.max(1, baseWidth * scale * PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER)
+          : 0;
+        const layoutHeight = Number.isFinite(baseHeight) && baseHeight > 0
+          ? Math.max(1, baseHeight * scale)
+          : 0;
+
+        if (layoutWidth > 0) {
+          shell.style.width = layoutWidth.toFixed(2) + 'px';
+        }
+        if (layoutHeight > 0) {
+          shell.style.height = layoutHeight.toFixed(2) + 'px';
+        }
+
+        if (Number.isFinite(baseWidth) && baseWidth > 0) {
+          svg.style.width = Math.max(1, baseWidth).toFixed(2) + 'px';
+          svg.style.maxWidth = 'none';
+        }
+        if (Number.isFinite(baseHeight) && baseHeight > 0) {
+          svg.style.height = Math.max(1, baseHeight).toFixed(2) + 'px';
+        }
+        svg.style.display = 'block';
+        svg.style.transformOrigin = 'top left';
+        svg.style.transform = 'scale(' + scale.toFixed(4) + ')';
+      });
+    }
+
+    function cancelCameraAnimation() {
+      if (cameraAnimationFrame != null) {
+        cancelAnimationFrame(cameraAnimationFrame);
+        cameraAnimationFrame = null;
+      }
+    }
+
+    function getCameraPaddingPreset(viewportWidth) {
+      if (fullscreenMode) {
+        return { left: 24, right: 24, top: 68, bottom: 24 };
+      }
+
+      return {
+        left: 12,
+        right: 12,
+        top: 16,
+        bottom: 24,
+      };
+    }
+
+    function updateStagePadding() {
+      const container = getContainer();
+      const stage = getStage();
+      if (!container || !stage) return;
+
+      const padding = getCameraPaddingPreset(container.clientWidth || window.innerWidth || 0);
+      stage.style.paddingLeft = padding.left + 'px';
+      stage.style.paddingRight = padding.right + 'px';
+      stage.style.paddingTop = padding.top + 'px';
+      stage.style.paddingBottom = padding.bottom + 'px';
+      cameraState.paddingLeft = padding.left;
+      cameraState.paddingRight = padding.right;
+      cameraState.paddingTop = padding.top;
+      cameraState.paddingBottom = padding.bottom;
+    }
+
+    function buildFallbackMeasureMetrics(contentWidth, measureCount) {
+      if (!measureCount || contentWidth <= 0) {
+        return {
+          measureWidths: [],
+          measureAnchors: [],
+          averageMeasureWidth: 0,
+        };
+      }
+
+      const averageMeasureWidth = contentWidth / measureCount;
+      const measureWidths = [];
+      const measureAnchors = [];
+
+      for (let index = 0; index < measureCount; index++) {
+        const left = averageMeasureWidth * index;
+        const width = averageMeasureWidth;
+        measureWidths.push({
+          index: index,
+          left: left,
+          width: width,
+          right: left + width,
+          center: left + width / 2,
+        });
+        measureAnchors.push(left + width / 2);
+      }
+
+      return {
+        measureWidths: measureWidths,
+        measureAnchors: measureAnchors,
+        averageMeasureWidth: averageMeasureWidth,
+      };
+    }
+
+    function readMeasureBounds(measure) {
       try {
-        // Get the cursor element
-        const cursorElement = osmd.cursor.cursorElement;
-        if (!cursorElement) return;
-        
-        // Get cursor position
-        const cursorRect = cursorElement.getBoundingClientRect();
-        const containerRect = container.getBoundingClientRect();
-        
-        // Calculate where cursor is relative to the visible area
-        const cursorLeft = cursorRect.left - containerRect.left;
-        const cursorRight = cursorRect.right - containerRect.left;
-        const viewportWidth = containerRect.width;
-        
-        // Keep cursor in the left 40% of the viewport - scroll immediately when it passes 40%
-        const targetPosition = viewportWidth * 0.3; // Keep cursor at 30% from left
-        const triggerPosition = viewportWidth * 0.4; // Start scrolling when cursor passes 40%
-        
-        if (cursorLeft > triggerPosition) {
-          // Scroll instantly to put cursor at target position
-          const scrollAmount = cursorLeft - targetPosition;
-          container.scrollLeft += scrollAmount;
+        const left = firstFinite(
+          measure && measure.PositionAndShape && measure.PositionAndShape.AbsolutePosition && measure.PositionAndShape.AbsolutePosition.x,
+          measure && measure.boundingBox && measure.boundingBox.absolutePosition && measure.boundingBox.absolutePosition.x,
+          measure && measure.boundingBox && measure.boundingBox.relativePosition && measure.boundingBox.relativePosition.x,
+          measure && measure.boundingBox && measure.boundingBox.x,
+        );
+        const width = firstFinite(
+          measure && measure.PositionAndShape && measure.PositionAndShape.Size && measure.PositionAndShape.Size.width,
+          measure && measure.boundingBox && measure.boundingBox.size && measure.boundingBox.size.width,
+          measure && measure.boundingBox && measure.boundingBox.w,
+          measure && measure.boundingBox && measure.boundingBox.width,
+        );
+        if (left != null && width != null && width > 0) {
+          return { left: left, width: width };
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    function collectMeasureMetrics(contentWidth) {
+      const rawMeasures = [];
+      const measureCount = osmd && osmd.Sheet && osmd.Sheet.Measures ? osmd.Sheet.Measures.length : 0;
+
+      try {
+        const graphicMeasureList = osmd && osmd.GraphicSheet && osmd.GraphicSheet.MeasureList;
+
+        if (graphicMeasureList && graphicMeasureList.length) {
+          for (let systemIndex = 0; systemIndex < graphicMeasureList.length; systemIndex++) {
+            const systemMeasures = graphicMeasureList[systemIndex];
+            if (!systemMeasures) continue;
+
+            // MeasureList[i] is normally an array of staff-measures, but be defensive
+            // in case a build returns a single measure object directly.
+            if (typeof systemMeasures.length === 'number') {
+              for (let measureIndex = 0; measureIndex < systemMeasures.length; measureIndex++) {
+                const bounds = readMeasureBounds(systemMeasures[measureIndex]);
+                if (bounds) rawMeasures.push(bounds);
+              }
+            } else {
+              const bounds = readMeasureBounds(systemMeasures);
+              if (bounds) rawMeasures.push(bounds);
+            }
+          }
         }
       } catch (e) {
-        console.warn('Scroll error:', e);
+        // OSMD shape mismatch — fall through to fallback.
       }
+
+      if (!rawMeasures.length) {
+        return buildFallbackMeasureMetrics(contentWidth, measureCount);
+      }
+
+      let rawRight = 0;
+      for (let index = 0; index < rawMeasures.length; index++) {
+        rawRight = Math.max(rawRight, rawMeasures[index].left + rawMeasures[index].width);
+      }
+
+      const scale = rawRight > 0 ? contentWidth / rawRight : 1;
+      const measureWidths = rawMeasures.map((measure, index) => {
+        const left = measure.left * scale;
+        const width = measure.width * scale;
+        return {
+          index: index,
+          left: left,
+          width: width,
+          right: left + width,
+          center: left + width / 2,
+        };
+      });
+      const measureAnchors = measureWidths.map((measure) => measure.center);
+      const averageMeasureWidth =
+        measureWidths.reduce((sum, measure) => sum + measure.width, 0) /
+        measureWidths.length;
+
+      return {
+        measureWidths: measureWidths,
+        measureAnchors: measureAnchors,
+        averageMeasureWidth: averageMeasureWidth,
+      };
+    }
+
+    function updateCameraMetrics() {
+      const container = getContainer();
+      const stage = getStage();
+      const scoreRoot = getScoreRoot();
+      if (!container || !stage || !scoreRoot) return;
+
+      updateStagePadding();
+
+      const stageStyle = window.getComputedStyle(stage);
+      const paddingLeft = parsePixels(stageStyle.paddingLeft);
+      const paddingRight = parsePixels(stageStyle.paddingRight);
+      const contentWidth = Math.max(
+        scoreRoot.scrollWidth,
+        Math.ceil(scoreRoot.getBoundingClientRect().width || 0),
+      );
+      const contentHeight = Math.max(
+        scoreRoot.scrollHeight,
+        Math.ceil(scoreRoot.getBoundingClientRect().height || 0),
+      );
+      const totalWidth = paddingLeft + contentWidth + paddingRight;
+      const measureMetrics = collectMeasureMetrics(contentWidth);
+
+      cameraState.viewportWidth = container.clientWidth;
+      cameraState.viewportHeight = container.clientHeight;
+      cameraState.contentWidth = contentWidth;
+      cameraState.contentHeight = contentHeight;
+      cameraState.maxX = usesWrappedPortraitLayout()
+        ? 0
+        : Math.max(0, totalWidth - container.clientWidth);
+      cameraState.measureWidths = measureMetrics.measureWidths;
+      cameraState.measureAnchors = measureMetrics.measureAnchors;
+      cameraState.averageMeasureWidth = measureMetrics.averageMeasureWidth;
+      cameraState.currentX = clamp(cameraState.currentX, 0, cameraState.maxX);
+      cameraState.targetX = clamp(cameraState.targetX, 0, cameraState.maxX);
+
+      if (fullscreenMode || usesWrappedPortraitLayout()) {
+        const stageNode = getStage();
+        if (stageNode) {
+          stageNode.style.transition = 'none';
+          stageNode.style.transform = 'translate3d(0px, 0px, 0px)';
+        }
+      }
+    }
+
+    function setStageTransform(nextX, immediate) {
+      const stage = getStage();
+      if (!stage) return;
+
+      const clampedX = clamp(nextX, 0, cameraState.maxX || 0);
+      cameraState.currentX = clampedX;
+
+      if (fullscreenMode || usesWrappedPortraitLayout()) {
+        stage.style.transition = 'none';
+        stage.style.transform = 'translate3d(0px, 0px, 0px)';
+        return;
+      }
+
+      stage.style.transition =
+        immediate || cameraMode === 'smooth'
+          ? 'none'
+          : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)';
+      stage.style.transform = 'translate3d(' + (-clampedX).toFixed(2) + 'px, 0px, 0px)';
+    }
+
+    function animateCameraToTarget() {
+      cancelCameraAnimation();
+
+      if (fullscreenMode) return;
+
+      const step = () => {
+        const delta = cameraState.targetX - cameraState.currentX;
+        if (Math.abs(delta) < 0.5) {
+          setStageTransform(cameraState.targetX, true);
+          cameraAnimationFrame = null;
+          return;
+        }
+
+        setStageTransform(cameraState.currentX + delta * 0.16, true);
+        cameraAnimationFrame = requestAnimationFrame(step);
+      };
+
+      cameraAnimationFrame = requestAnimationFrame(step);
+    }
+
+    function moveCameraTo(nextX, immediate) {
+      const clampedTarget = clamp(nextX, 0, cameraState.maxX || 0);
+      cameraState.targetX = clampedTarget;
+
+      if (fullscreenMode || usesWrappedPortraitLayout()) {
+        setStageTransform(0, true);
+        return;
+      }
+
+      if (cameraMode === 'smooth' && !immediate) {
+        animateCameraToTarget();
+        return;
+      }
+
+      cancelCameraAnimation();
+      setStageTransform(clampedTarget, !!immediate);
+    }
+
+    function getRelativeFocusX(node, edge) {
+      const scoreRoot = getScoreRoot();
+      if (!scoreRoot || !node) return null;
+
+      const rootRect = scoreRoot.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      const focusX =
+        edge === 'right'
+          ? nodeRect.right - rootRect.left
+          : nodeRect.left - rootRect.left + nodeRect.width / 2;
+
+      if (!Number.isFinite(focusX)) return null;
+
+      return clamp(focusX, 0, cameraState.contentWidth || focusX);
+    }
+
+    function getCursorFocusX() {
+      if (!osmd || !osmd.cursor || !osmd.cursor.cursorElement) return null;
+      return getRelativeFocusX(osmd.cursor.cursorElement, 'center');
+    }
+
+    function getLatestContentFocusX() {
+      const scoreRoot = getScoreRoot();
+      if (!scoreRoot) return null;
+
+      const svgNodes = scoreRoot.querySelectorAll('svg');
+      const lastVisualNode = svgNodes.length > 0 ? svgNodes[svgNodes.length - 1] : scoreRoot.lastElementChild || scoreRoot;
+      const focusX = getRelativeFocusX(lastVisualNode, 'right');
+      if (focusX == null) return null;
+
+      return Math.max(0, focusX - Math.min(cameraState.viewportWidth * 0.18, 96));
+    }
+
+    function getLeadOffset() {
+      return Math.round(cameraState.viewportWidth * 0.34);
+    }
+
+    function findNearestMeasure(focusX) {
+      const measures = cameraState.measureWidths;
+      if (!measures || !measures.length) return null;
+
+      for (let index = 0; index < measures.length; index++) {
+        const measure = measures[index];
+        if (focusX >= measure.left && focusX <= measure.right) {
+          return measure;
+        }
+      }
+
+      let nearestMeasure = measures[0];
+      let nearestDistance = Math.abs(measures[0].center - focusX);
+      for (let index = 1; index < measures.length; index++) {
+        const distance = Math.abs(measures[index].center - focusX);
+        if (distance < nearestDistance) {
+          nearestMeasure = measures[index];
+          nearestDistance = distance;
+        }
+      }
+
+      return nearestMeasure;
+    }
+
+    function getIdealCameraTarget(focusX) {
+      const focusInStage = cameraState.paddingLeft + focusX;
+      return clamp(focusInStage - getLeadOffset(), 0, cameraState.maxX || 0);
+    }
+
+    function getSnapCameraTarget(focusX) {
+      const focusInViewport = cameraState.paddingLeft + focusX - cameraState.currentX;
+      const leftBand = cameraState.viewportWidth * 0.24;
+      const rightBand = cameraState.viewportWidth * 0.62;
+
+      if (focusInViewport >= leftBand && focusInViewport <= rightBand) {
+        return cameraState.currentX;
+      }
+
+      const measure = findNearestMeasure(focusX);
+      if (measure) {
+        return clamp(
+          cameraState.paddingLeft + measure.left - cameraState.viewportWidth * 0.18,
+          0,
+          cameraState.maxX || 0,
+        );
+      }
+
+      return getIdealCameraTarget(focusX);
+    }
+
+    function updateCameraForFocus(focusX, immediate) {
+      if (focusX == null || fullscreenMode || usesWrappedPortraitLayout()) return;
+
+      updateCameraMetrics();
+      const nextX =
+        cameraMode === 'smooth'
+          ? getIdealCameraTarget(focusX)
+          : getSnapCameraTarget(focusX);
+      moveCameraTo(nextX, !!immediate);
+    }
+
+    function followLatestContent(immediate) {
+      const focusX = getLatestContentFocusX();
+      if (focusX == null) return;
+      updateCameraForFocus(focusX, immediate);
+    }
+
+    function scheduleFollowTailScroll(smooth) {
+      if (!followTail || fullscreenMode || usesWrappedPortraitLayout() || Date.now() < cameraSuspendUntil) return;
+
+      clearScheduledFollowTail();
+      followTailScheduleFrame = requestAnimationFrame(() => {
+        followTailScheduleFrame = requestAnimationFrame(() => {
+          followTailScheduleFrame = null;
+          followLatestContent(!smooth);
+        });
+      });
+    }
+
+    function setFollowTail(enabled) {
+      followTail = !!enabled;
+      if (!followTail) {
+        clearScheduledFollowTail();
+        return;
+      }
+
+      if (usesWrappedPortraitLayout()) {
+        clearScheduledFollowTail();
+        moveCameraTo(0, true);
+        return;
+      }
+
+      cameraSuspendUntil = 0;
+      scheduleFollowTailScroll(false);
+    }
+
+    function setCameraMode(mode) {
+      cameraMode = mode === 'snap' ? 'snap' : 'smooth';
+      const stage = getStage();
+      if (stage) {
+        stage.dataset.cameraMode = cameraMode;
+      }
+
+      if (fullscreenMode || usesWrappedPortraitLayout()) {
+        moveCameraTo(0, true);
+        return cameraMode;
+      }
+
+      if (followTail) {
+        scheduleFollowTailScroll(true);
+      } else {
+        moveCameraTo(cameraState.currentX, true);
+      }
+
+      return cameraMode;
+    }
+
+    function beginCameraDrag(clientX) {
+      if (fullscreenMode || usesWrappedPortraitLayout() || cameraState.maxX <= 1) return;
+
+      dragState.active = true;
+      dragState.startX = clientX;
+      dragState.startCameraX = cameraState.currentX;
+      cancelCameraAnimation();
+      clearScheduledFollowTail();
+    }
+
+    function updateCameraDrag(clientX) {
+      if (!dragState.active || fullscreenMode || usesWrappedPortraitLayout() || cameraState.maxX <= 1) return false;
+
+      const deltaX = clientX - dragState.startX;
+      if (Math.abs(deltaX) < 3) return false;
+
+      cameraSuspendUntil = Date.now() + 1800;
+      suppressScoreTapUntil = Date.now() + 250;
+      moveCameraTo(dragState.startCameraX - deltaX, true);
+      return true;
+    }
+
+    function endCameraDrag() {
+      if (!dragState.active) return;
+
+      dragState.active = false;
+      if (followTail) {
+        window.setTimeout(() => {
+          if (followTail && Date.now() >= cameraSuspendUntil) {
+            scheduleFollowTailScroll(true);
+          }
+        }, 30);
+      }
+    }
+
+    function bindCameraGestureHandlers() {
+      const container = getContainer();
+      if (!container || container.dataset.cameraBound === 'true') return;
+
+      container.dataset.cameraBound = 'true';
+      container.addEventListener('touchstart', function(evt) {
+        if (!evt.touches || evt.touches.length !== 1) return;
+        beginCameraDrag(evt.touches[0].clientX);
+      }, { passive: true });
+      container.addEventListener('touchmove', function(evt) {
+        if (!evt.touches || evt.touches.length !== 1) return;
+        const handled = updateCameraDrag(evt.touches[0].clientX);
+        if (handled) {
+          evt.preventDefault();
+        }
+      }, { passive: false });
+      container.addEventListener('touchend', endCameraDrag, { passive: true });
+      container.addEventListener('touchcancel', endCameraDrag, { passive: true });
+    }
+
+    function scrollCursorIntoView() {
+      if (fullscreenMode || usesWrappedPortraitLayout() || Date.now() < cameraSuspendUntil) return;
+
+      const focusX = getCursorFocusX();
+      if (focusX == null) return;
+      updateCameraForFocus(focusX, false);
     }
     
     // ─── Fullscreen Control Handlers ───
@@ -163,6 +819,7 @@ export const OSMD_HTML = `
       fullscreenMode = enabled;
       const controls = document.getElementById('fullscreen-controls');
       const container = document.getElementById('osmd-container');
+      const stage = document.getElementById('osmd-stage');
       const osmdEl = document.getElementById('osmd');
       
       if (controls) {
@@ -172,50 +829,55 @@ export const OSMD_HTML = `
       // Toggle portrait/landscape mode classes
       if (container) {
         container.className = enabled ? 'landscape-mode' : 'portrait-mode';
-        // Reset scroll position when switching modes
-        if (!enabled) {
-          container.scrollLeft = 0;
-        }
+      }
+      if (stage) {
+        stage.className = enabled ? 'landscape-mode' : 'portrait-mode';
       }
       if (osmdEl) {
         osmdEl.className = enabled ? 'landscape-mode' : 'portrait-mode';
-        osmdEl.style.paddingTop = enabled ? '50px' : '0';
       }
+      updateStagePadding();
+      cameraSuspendUntil = 0;
+      cancelCameraAnimation();
       
       // Update OSMD rendering mode and re-render
       if (osmd && currentXml) {
-        // Toggle horizontal scrolling mode
-        osmd.setOptions({
-          renderSingleHorizontalStaffline: !enabled, // true for portrait, false for landscape
-          autoResize: enabled // Auto-resize only in landscape
-        });
+        applyLayoutOptions();
         
         // Re-render with new settings
         setTimeout(async () => {
           try {
             await osmd.load(currentXml);
             await osmd.render();
+            applyRenderedSvgScale();
+            updateCameraMetrics();
+            if (!enabled) {
+              moveCameraTo(0, true);
+              scheduleFollowTailScroll(true);
+            } else {
+              moveCameraTo(0, true);
+            }
           } catch (e) {
             console.warn('Re-render error:', e);
-            // If tuplet-related, strip tuplet markup and retry
-            const errStr = String(e);
-            if (errStr.includes('setTuplet') || errStr.includes('tuplet') || errStr.includes('Tuplet')) {
-              try {
-                let safeXml = currentXml
-                  .replace(/<time-modification>.*?<\\/time-modification>/g, '')
-                  .replace(/<tuplet[^>]*\\/>/g, '')
-                  .replace(/<notations>\\s*<\\/notations>/g, '');
-                currentXml = safeXml;
-                await osmd.load(safeXml);
-                await osmd.render();
-              } catch (e2) {
-                console.warn('Fallback re-render also failed:', e2);
-              }
-            }
           }
         }, 100);
       }
     }
+
+    window.addEventListener('resize', function() {
+      updateCameraMetrics();
+
+      if (fullscreenMode) {
+        moveCameraTo(0, true);
+        return;
+      }
+
+      if (followTail) {
+        scheduleFollowTailScroll(false);
+      } else {
+        moveCameraTo(cameraState.currentX, true);
+      }
+    });
     
     // ─── Handle Visibility Changes (app backgrounding/foregrounding) ───
     document.addEventListener('visibilitychange', async () => {
@@ -454,12 +1116,10 @@ export const OSMD_HTML = `
       const parser = new DOMParser();
       const doc = parser.parseFromString(xmlString, "text/xml");
       const notes = [];
-      // Track active ties: MIDI pitch -> index in notes[] of the note that started the tie
-      const activeTies = {};
-
-      // Get divisions (24 for triplet-exact arithmetic)
+      
+      // Get divisions (typically 8 in our case)
       const divisionsEl = doc.querySelector('divisions');
-      const divisions = divisionsEl ? parseInt(divisionsEl.textContent) : 24;
+      const divisions = divisionsEl ? parseInt(divisionsEl.textContent) : 8;
       
       // Get time signature
       const beatsEl = doc.querySelector('beats');
@@ -549,16 +1209,6 @@ export const OSMD_HTML = `
                   }
                 }
                 
-                // Check for ties
-                const tieEls = el.querySelectorAll('tie');
-                let hasTieStop = false;
-                let hasTieStart = false;
-                for (let t = 0; t < tieEls.length; t++) {
-                  const tieType = tieEls[t].getAttribute('type');
-                  if (tieType === 'stop') hasTieStop = true;
-                  if (tieType === 'start') hasTieStart = true;
-                }
-
                 // Handle grace notes - play very quickly before the main note
                 if (isGrace) {
                   const graceNoteDuration = 0.08; // 80ms grace note
@@ -569,13 +1219,6 @@ export const OSMD_HTML = `
                     midi: midi,
                     isOrnament: true
                   });
-                } else if (hasTieStop && activeTies[midi] !== undefined && notes[activeTies[midi]]) {
-                  // This note is the continuation of a tied note — extend the original, don't re-attack
-                  notes[activeTies[midi]].duration += durationSeconds;
-                  if (!hasTieStart) {
-                    // Tie ends here — remove from active ties
-                    delete activeTies[midi];
-                  }
                 } else if (ornamentType) {
                   // Expand ornament into multiple notes
                   const expandedNotes = expandOrnament(ornamentType, midi, noteStartTime, durationSeconds, playbackBPM);
@@ -588,10 +1231,6 @@ export const OSMD_HTML = `
                     duration: Math.max(0.1, durationSeconds * 0.9), // slightly shorter for separation
                     midi: midi
                   });
-                  // If this note starts a tie, track it
-                  if (hasTieStart) {
-                    activeTies[midi] = notes.length - 1;
-                  }
                 }
                 
                 // Update last note time for this voice (for chord detection)
@@ -674,11 +1313,9 @@ export const OSMD_HTML = `
         osmd.cursor.reset();
         osmd.cursor.show();
       }
-      // Scroll container to start in portrait mode
-      const container = document.getElementById('osmd-container');
-      if (container && !fullscreenMode) {
-        container.scrollLeft = 0;
-      }
+      updateCameraMetrics();
+      moveCameraTo(0, true);
+      cameraSuspendUntil = 0;
       
       // Schedule all notes
       const totalDuration = notes[notes.length - 1].time + notes[notes.length - 1].duration + 0.5;
@@ -823,83 +1460,92 @@ export const OSMD_HTML = `
       post({ type: "bpmSet", bpm: playbackBPM });
     }
 
+    function buildDebugSnapshot(reason, requestId) {
+      const container = document.getElementById('osmd-container');
+      const stage = document.getElementById('osmd');
+
+      return {
+        reason: reason,
+        requestId: requestId == null ? null : requestId,
+        initCompleted: !!osmd,
+        initInFlight: false,
+        dependenciesReady: !!window.opensheetmusicdisplay && !!window.Tone,
+        hasOsmd: !!osmd,
+        currentXmlLength: currentXml ? currentXml.length : 0,
+        renderedMeasureCount: osmd && osmd.Sheet && osmd.Sheet.Measures ? osmd.Sheet.Measures.length : 0,
+        stageChildElementCount: stage ? stage.children.length : 0,
+        stageInnerHtmlLength: stage ? stage.innerHTML.length : 0,
+        stageSvgCount: stage ? stage.querySelectorAll('svg').length : 0,
+        stageClientWidth: stage ? stage.clientWidth : 0,
+        stageClientHeight: stage ? stage.clientHeight : 0,
+        containerClientWidth: container ? container.clientWidth : 0,
+        containerClientHeight: container ? container.clientHeight : 0,
+        containerScrollWidth: container ? container.scrollWidth : 0,
+        containerScrollHeight: container ? container.scrollHeight : 0,
+        containerClassName: container ? container.className : '',
+        cameraMode: cameraMode,
+        cameraX: cameraState.currentX,
+        cameraTargetX: cameraState.targetX,
+        cameraMaxX: cameraState.maxX,
+        cameraViewportWidth: cameraState.viewportWidth,
+        cameraContentWidth: cameraState.contentWidth,
+        cameraMeasureCount: cameraState.measureWidths.length,
+        cameraAverageMeasureWidth: cameraState.averageMeasureWidth,
+        cameraPaddingLeft: cameraState.paddingLeft,
+        cameraPaddingRight: cameraState.paddingRight,
+        osmdScriptStatus: null,
+        marker: 'inline-html',
+        timestamp: Date.now()
+      };
+    }
+
+    function postDebugSnapshot(reason, requestId) {
+      post({
+        type: 'debugState',
+        snapshot: buildDebugSnapshot(reason, requestId)
+      });
+    }
+
     async function init(options) {
       osmd = new opensheetmusicdisplay.OpenSheetMusicDisplay("osmd", Object.assign({
         backend: "svg",
         autoResize: false, // We'll control sizing manually
         drawTitle: false,
         drawPartNames: false,
-        // Render on a single horizontal line for portrait scrolling
-        renderSingleHorizontalStaffline: true
+        // Portrait preview should wrap instead of using horizontal camera scrolling
+        renderSingleHorizontalStaffline: false
       }, options||{}));
-      
-      // Configure engraving rules for better spacing with many short notes
-      if (osmd.EngravingRules) {
-        // Minimum note spacing to prevent squishing
-        osmd.EngravingRules.MinSkyBottomDistBetweenStaves = 3;
-        osmd.EngravingRules.StaffDistance = 8;
-        osmd.EngravingRules.BetweenStaffDistance = 5;
-        
-        // Note spacing - ensure minimum distance between notes
-        osmd.EngravingRules.MinNoteDistance = 2.0;
-        osmd.EngravingRules.VoiceSpacingMultiplierVexflow = 1.0;
-        osmd.EngravingRules.VoiceSpacingAddendVexflow = 3.0;
-        
-        // Measure width settings - critical for preventing squishing
-        osmd.EngravingRules.MeasureMinimumWidth = 150;
-        osmd.EngravingRules.FixedMeasureWidth = false;
-        osmd.EngravingRules.FixedMeasureWidthFixedValue = 0;
-        osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = false;
-        
-        // Allow measures to expand based on content
-        osmd.EngravingRules.LastSystemMaxScalingFactor = 1.5;
-        osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
-        osmd.EngravingRules.NewPageAtXMLNewPageAttribute = true;
-        
-        // Better handling of beaming and note grouping
-        osmd.EngravingRules.AutoBeamNotes = true;
-        osmd.EngravingRules.AutoBeamOptions = {
-          beam_rests: false,
-          beam_middle_rests_only: false,
-          maintain_stem_directions: true
-        };
-      }
+
+      applyLayoutOptions();
+
+      bindCameraGestureHandlers();
+      updateCameraMetrics();
+      setCameraMode(options && options.cameraMode ? options.cameraMode : cameraMode);
       
       // Pre-load the sampler in the background
       initSampler().catch(e => console.warn('Sampler init failed:', e));
       
       post({ type: "ready" });
+      postDebugSnapshot('init-ready', null);
     }
 
-    async function renderXml(xml) {
+    async function renderXml(xml, requestId) {
       try {
         currentXml = xml; // Store for playback
+        applyLayoutOptions();
         await osmd.load(xml);
         await osmd.render();
-        post({ type: "rendered", measures: osmd.Sheet?.Measures?.length || 0 });
+        applyRenderedSvgScale();
+        updateCameraMetrics();
+        moveCameraTo(0, true);
+        scheduleFollowTailScroll(true);
+        post({ type: "rendered", requestId: requestId == null ? null : requestId, measures: osmd.Sheet?.Measures?.length || 0 });
+        postDebugSnapshot('rendered', requestId);
       } catch (e) {
-        const errStr = String(e);
-        // If the error is tuplet-related, strip all tuplet markup and retry
-        if (errStr.includes('setTuplet') || errStr.includes('tuplet') || errStr.includes('Tuplet')) {
-          try {
-            let safeXml = xml
-              .replace(/<time-modification>.*?<\\/time-modification>/g, '')
-              .replace(/<tuplet[^>]*\\/>/g, '')
-              .replace(/<notations>\\s*<\\/notations>/g, '');
-            currentXml = safeXml;
-            await osmd.load(safeXml);
-            await osmd.render();
-            post({ type: "rendered", measures: osmd.Sheet?.Measures?.length || 0 });
-          } catch (e2) {
-            post({ type: "error", error: String(e2) });
-          }
-        } else {
-          post({ type: "error", error: errStr });
-        }
+        post({ type: "error", requestId: requestId == null ? null : requestId, error: String(e) });
       }
     }
 
-    function setZoom(z){ osmd.Zoom = Math.max(0.3, Math.min(3, z)); osmd.render(); }
     function toggleCursor(show){
       if (!osmd) return;
       if (show) osmd.cursor.show(); else osmd.cursor.hide();
@@ -907,12 +1553,26 @@ export const OSMD_HTML = `
     function cursorNext(){ osmd?.cursor?.next(); }
     function cursorReset(){ osmd?.cursor?.reset(); }
 
+    window.__OSMD_INIT = function(options) { return init(options); };
+    window.__OSMD_RENDER_XML = function(xml, requestId) { return renderXml(xml, requestId); };
+    window.__OSMD_SET_FOLLOW_TAIL = function(enabled) { return setFollowTail(enabled); };
+    window.__OSMD_TOGGLE_CURSOR = function(show) { return toggleCursor(show); };
+    window.__OSMD_CURSOR_NEXT = function() { return cursorNext(); };
+    window.__OSMD_CURSOR_RESET = function() { return cursorReset(); };
+    window.__OSMD_PLAY = function(bpm) { return startPlayback(bpm); };
+    window.__OSMD_PAUSE = function() { return pausePlayback(); };
+    window.__OSMD_STOP = function() { return stopPlayback(); };
+    window.__OSMD_SET_BPM = function(bpm) { return setPlaybackBPM(bpm); };
+    window.__OSMD_SET_FULLSCREEN = function(enabled) { return setFullscreenMode(enabled); };
+    window.__OSMD_SET_CAMERA_MODE = function(mode) { return setCameraMode(mode); };
+    window.__OSMD_DEBUG_SNAPSHOT = function(reason, requestId) { return postDebugSnapshot(reason, requestId); };
+
     function onMessage(e){
       try {
         const msg = JSON.parse(e.data);
         if (msg.type === "init") return init(msg.options);
-        if (msg.type === "renderXml") return renderXml(msg.xml);
-        if (msg.type === "setZoom") return setZoom(msg.zoom);
+        if (msg.type === "renderXml") return renderXml(msg.xml, msg.requestId);
+        if (msg.type === "setFollowTail") return setFollowTail(msg.enabled);
         if (msg.type === "toggleCursor") return toggleCursor(msg.show);
         if (msg.type === "cursorNext") return cursorNext();
         if (msg.type === "cursorReset") return cursorReset();
@@ -923,6 +1583,8 @@ export const OSMD_HTML = `
         if (msg.type === "setBPM") return setPlaybackBPM(msg.bpm);
         // Fullscreen mode
         if (msg.type === "setFullscreenMode") return setFullscreenMode(msg.enabled);
+        if (msg.type === "setCameraMode") return setCameraMode(msg.mode);
+        if (msg.type === "debugSnapshot") return postDebugSnapshot(msg.reason, msg.requestId);
       } catch {}
     }
     window.addEventListener("message", onMessage);
@@ -932,15 +1594,71 @@ export const OSMD_HTML = `
     document.addEventListener('click', function(e){
       // Don't trigger fullscreen toggle if clicking on the controls
       if (e.target.closest('#fullscreen-controls')) return;
+      if (Date.now() < suppressScoreTapUntil) return;
       // Only send click to enter fullscreen, not to exit
       if (!fullscreenMode) {
         post({ type: 'webview-click' });
       }
     });
 
-    // auto-init
-    init();
-  </script>
+    // ─── Dependency Bootstrap ───
+    // The two <script src="..."> tags above load OSMD and Tone from jsdelivr.
+    // Android WebView occasionally fails to load CDN scripts cleanly, so we
+    // retry from unpkg before giving up. init() is gated until OSMD is live.
+    function loadFallbackScript(src, isReady) {
+      return new Promise(function(resolve, reject){
+        if (isReady()) { resolve(); return; }
+        const script = document.createElement('script');
+        script.src = src;
+        script.async = true;
+        script.crossOrigin = 'anonymous';
+        script.onload = function(){ resolve(); };
+        script.onerror = function(){ reject(new Error('fallback script failed: ' + src)); };
+        document.head.appendChild(script);
+      });
+    }
+
+    async function ensureDependencies() {
+      const osmdReady = function(){ return !!(window.opensheetmusicdisplay && window.opensheetmusicdisplay.OpenSheetMusicDisplay); };
+      const toneReady = function(){ return !!window.Tone; };
+
+      // Give the inline <script> tags a brief window to finish before we intervene.
+      const deadline = Date.now() + 2500;
+      while (Date.now() < deadline && (!osmdReady() || !toneReady())) {
+        await new Promise(function(r){ setTimeout(r, 50); });
+      }
+
+      if (!osmdReady()) {
+        try {
+          await loadFallbackScript('https://unpkg.com/opensheetmusicdisplay@1.9.2/build/opensheetmusicdisplay.min.js', osmdReady);
+        } catch (e) {
+          post({ type: 'error', error: 'OSMD CDN unreachable: ' + String(e) });
+          return false;
+        }
+      }
+      if (!toneReady()) {
+        try {
+          await loadFallbackScript('https://unpkg.com/tone@14.7.77/build/Tone.js', toneReady);
+        } catch (e) {
+          // Tone is only needed for playback — log but allow rendering to proceed.
+          console.warn('Tone CDN unreachable:', e);
+        }
+      }
+      return osmdReady();
+    }
+
+    async function bootstrap() {
+      const ok = await ensureDependencies();
+      if (!ok) return;
+      try {
+        await init();
+      } catch (e) {
+        post({ type: 'error', error: 'init failed: ' + String(e) });
+      }
+    }
+
+    bootstrap();
+  <\/script>
 </body>
 </html>
 `;

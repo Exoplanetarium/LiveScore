@@ -1,5 +1,4 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -8,39 +7,80 @@ import {
   PermissionsAndroid,
   Platform,
   ScrollView,
-  StatusBar,
   StyleSheet,
-  Text,
   TouchableOpacity,
   View,
 } from "react-native";
 import AudioRecord from "react-native-audio-record";
-import FullScreenPianoRoll from "../components/FullScreenPianoRoll";
 import PianoSheetMusic from "../components/PianoSheetMusic";
 import { ThemedText } from "../components/ThemedText";
 import { ThemedView } from "../components/ThemedView";
+import { useLiveRhythm } from "../hooks/useLiveRhythm";
 
 const BACKEND_URL =
   "https://exoplanetarium--livescore-gpu-fastapi-app.modal.run";
+const CHUNK_INTERVAL_MS = 1200;
+const USE_LIVE_NEURAL_PATH = true;
+const USE_LIVE_OSMD_ENGRAVING_EXPERIMENT = true;
+const LIVE_OSMD_BATCH_MS = 40;
 
-// Types for analysis results
+type LiveNoiseProfile = "open" | "balanced" | "clean";
+
+const LIVE_NOISE_PROFILE_OPTIONS: {
+  value: LiveNoiseProfile;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "open",
+    label: "Open",
+    description:
+      "Keeps faint note recovery aggressive. Best when the melody is dropping out.",
+  },
+  {
+    value: "balanced",
+    label: "Balanced",
+    description:
+      "Keeps the current live filter behavior, with moderate cleanup on short low-confidence notes.",
+  },
+  {
+    value: "clean",
+    label: "Clean",
+    description:
+      "Rejects more low-confidence, low-duration notes before they enter the live session.",
+  },
+];
+
+interface OnsetResult {
+  duration_seconds?: number;
+  frame_index?: number;
+  offset_frame?: number;
+  offset_seconds?: number;
+  time_seconds: number;
+}
+
 interface NoteResult {
   time_seconds: number;
   frame_index?: number;
   midi_note: number;
-  note_name: string;
-  frequency_hz: number;
-  method: string;
-  confidence: number;
+  note_name?: string;
+  frequency_hz?: number;
+  method?: string;
+  confidence?: number;
   offset_seconds?: number;
   duration_seconds?: number;
   hand?: "bass" | "treble";
-  // Rhythm detection fields
   note_value?: "whole" | "half" | "quarter" | "eighth" | "16th" | "32nd";
   note_divisions?: number;
   dotted?: boolean;
   triplet?: boolean;
   triplet_position?: "start" | "middle" | "end";
+  start_beat?: number;
+  end_beat?: number;
+  duration_source?: string;
+  timing_authority?: string;
+  local_beat_duration?: number;
+  rest_after_beats?: number;
 }
 
 interface ChordResult {
@@ -58,21 +98,21 @@ interface ChordResult {
   offset_seconds?: number;
   duration_seconds?: number;
   hand?: "bass" | "treble";
-  // Rhythm detection fields
   note_value?: "whole" | "half" | "quarter" | "eighth" | "16th" | "32nd";
   note_divisions?: number;
   dotted?: boolean;
   triplet?: boolean;
   triplet_position?: "start" | "middle" | "end";
+  start_beat?: number;
+  end_beat?: number;
+  duration_source?: string;
+  timing_authority?: string;
+  local_beat_duration?: number;
+  rest_after_beats?: number;
 }
 
 interface AnalysisResult {
-  onsets: {
-    time_seconds: number;
-    frame_index?: number;
-    offset_seconds?: number;
-    duration_seconds?: number;
-  }[];
+  onsets: OnsetResult[];
   notes: NoteResult[];
   chords: ChordResult[];
   analysis_summary: {
@@ -81,74 +121,266 @@ interface AnalysisResult {
     total_chords: number;
     duration_seconds: number;
     sample_rate: number;
-    bass_notes?: number; // Number of bass notes (left hand)
-    treble_notes?: number; // Number of treble notes (right hand)
-    bass_chords?: number; // Number of bass chords (left hand)
-    treble_chords?: number; // Number of treble chords (right hand)
-    detected_bpm?: number; // Detected tempo from audio analysis
-    tempo_confidence?: number; // Confidence of tempo detection (0-1)
-    beat_interval?: number; // Beat interval in seconds
-    method?: string; // Analysis method used ('neural', 'bic', etc.)
-    device?: string; // Device used for neural inference ('cuda', 'cpu')
+    detected_bpm?: number;
+    tempo_confidence?: number;
+    beat_interval?: number;
+    bass_notes?: number;
+    treble_notes?: number;
+    bass_chords?: number;
+    treble_chords?: number;
+    method?: string;
+    device?: string;
+  };
+  stream_info?: {
+    analysis_type?: string;
+    duration_seconds?: number;
+    original_sample_rate?: number;
+    processed_sample_rate?: number;
+    processing_method?: string;
+    samples_received?: number;
   };
 }
 
-export default function AnalyzeScreen() {
-  // Recording state
+type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+
+function buildLiveAnalysisResult(
+  notes: NoteResult[],
+  chords: ChordResult[],
+  onsets: OnsetResult[],
+  bpm?: number,
+  bpmConfidence?: number,
+): AnalysisResult {
+  const sortedNotes = [...notes].sort(
+    (left, right) => left.time_seconds - right.time_seconds,
+  );
+  const sortedChords = [...chords].sort(
+    (left, right) => left.time_seconds - right.time_seconds,
+  );
+  const sortedOnsets = [...onsets].sort(
+    (left, right) => left.time_seconds - right.time_seconds,
+  );
+
+  const lastTimes = [
+    ...sortedNotes.map((note) => note.offset_seconds ?? note.time_seconds),
+    ...sortedChords.map((chord) => chord.offset_seconds ?? chord.time_seconds),
+    ...sortedOnsets.map((onset) => onset.time_seconds),
+  ];
+
+  const durationSeconds = lastTimes.length > 0 ? Math.max(...lastTimes) : 0;
+
+  return {
+    onsets: sortedOnsets,
+    notes: sortedNotes,
+    chords: sortedChords,
+    analysis_summary: {
+      total_onsets: sortedOnsets.length,
+      total_notes: sortedNotes.length,
+      total_chords: sortedChords.length,
+      duration_seconds: durationSeconds,
+      sample_rate: 44100,
+      detected_bpm: bpm,
+      tempo_confidence: bpmConfidence,
+      method: "live",
+    },
+  };
+}
+
+function getConnectionStatusColor(status: ConnectionStatus) {
+  switch (status) {
+    case "connected":
+      return "#30a46c";
+    case "connecting":
+      return "#f59e0b";
+    case "error":
+      return "#dc2626";
+    default:
+      return "#94a3b8";
+  }
+}
+
+function getConnectionStatusText(
+  status: ConnectionStatus,
+  isProcessing: boolean,
+  isWarmingUp: boolean,
+) {
+  if (isWarmingUp) {
+    return "Warming neural path";
+  }
+
+  if (isProcessing) {
+    return "Processing chunk";
+  }
+
+  switch (status) {
+    case "connected":
+      return "Live session active";
+    case "connecting":
+      return "Connecting";
+    case "error":
+      return "Chunk upload failed";
+    default:
+      return "Idle";
+  }
+}
+
+function formatDuration(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  const remainder = (seconds % 60).toFixed(1);
+  return `${minutes}:${remainder.padStart(4, "0")}`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(new Error(`Timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+export default function LiveTranscriptionScreen() {
   const [isRecording, setIsRecording] = useState(false);
+  const [isWarmingUp, setIsWarmingUp] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
-  const [recordedAudioPath, setRecordedAudioPath] = useState<string | null>(
+  const [connectionStatus, setConnectionStatus] =
+    useState<ConnectionStatus>("disconnected");
+  const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
     null,
   );
+  const [liveEngravingResult, setLiveEngravingResult] =
+    useState<AnalysisResult | null>(null);
+  const [liveEngravingVersion, setLiveEngravingVersion] = useState(0);
+  const [sessionReady, setSessionReady] = useState(false);
+  const [noiseProfile, setNoiseProfile] =
+    useState<LiveNoiseProfile>("balanced");
 
-  // Analysis state
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [analysisResults, setAnalysisResults] = useState<{
-    onsets: number[];
-    notes: string[];
-    confidence: number;
-    method: string;
-    details?: AnalysisResult;
-  } | null>(null);
-
-  // Playback state
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackPosition, setPlaybackPosition] = useState(0);
-  const [playbackDuration, setPlaybackDuration] = useState(0);
-
-  // Time signature state
-  const [timeSignature, setTimeSignature] = useState<"4/4" | "3/4" | "6/8">(
-    "4/4",
-  );
-
-  // Fullscreen piano roll mode (becomes the main interface after transcription)
-  const [isFullscreenRoll, setIsFullscreenRoll] = useState(false);
-
-  // Playback mode: "recording" plays the audio, "synthesized" plays MIDI visually
-  const [playbackMode, setPlaybackMode] = useState<"recording" | "synthesized">(
-    "recording",
-  );
-
-  // Second pass detection state
-  const [isRunningSecondPass, setIsRunningSecondPass] = useState(false);
-
-  // Synthesized playback timer state
-  const synthPlaybackRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const synthStartTimeRef = useRef<number>(0);
-  const synthPausedAtRef = useRef<number>(0);
-
-  // Delayed audio playback for lead-in
-  const audioDelayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+  const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
   );
-  const pendingSoundRef = useRef<Audio.Sound | null>(null);
+  const chunkTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const engravingFlushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const pendingEngravingRef = useRef<{
+    result: AnalysisResult | null;
+    version: number;
+  }>({ result: null, version: 0 });
+  const isRecordingRef = useRef(false);
+  const sessionReadyRef = useRef(false);
+  const backendWarmupPromiseRef = useRef<Promise<void> | null>(null);
+  // Track concurrent uploads so the spinner only clears when the queue drains.
+  const inFlightUploadsRef = useRef(0);
+  const [hasFinalizedRecording, setHasFinalizedRecording] = useState(false);
+  const selectedNoiseProfile =
+    LIVE_NOISE_PROFILE_OPTIONS.find(
+      (option) => option.value === noiseProfile,
+    ) ?? LIVE_NOISE_PROFILE_OPTIONS[1];
+  const isStartDisabled = isWarmingUp;
+  const recordButtonLabel = isRecording
+    ? "Stop Live Session"
+    : isWarmingUp
+      ? "Warming Neural Path..."
+      : "Start Live Session";
 
-  // Refs
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const audioChunksRef = useRef<string[]>([]);
+  useEffect(() => {
+    sessionReadyRef.current = sessionReady;
+  }, [sessionReady]);
 
-  // Initialize AudioRecord on mount and warm up backend
+  const mergeChunkIntoResult = useCallback(
+    (
+      previous: AnalysisResult | null,
+      notes: NoteResult[],
+      chords: ChordResult[],
+      onsets: OnsetResult[],
+      bpm?: number,
+      bpmConfidence?: number,
+    ) => {
+      return buildLiveAnalysisResult(
+        [...(previous?.notes ?? []), ...notes],
+        [...(previous?.chords ?? []), ...chords],
+        [...(previous?.onsets ?? []), ...onsets],
+        bpm,
+        bpmConfidence ?? previous?.analysis_summary.tempo_confidence,
+      );
+    },
+    [],
+  );
+
+  const {
+    createSession,
+    processAudioChunk,
+    finalizeSession,
+    resetSession,
+    currentBpm,
+    version: liveRefinementVersion,
+  } = useLiveRhythm({
+    onRefinementReady: (result) => {
+      setAnalysisResult((previous) =>
+        buildLiveAnalysisResult(
+          result.notes as NoteResult[],
+          result.chords as ChordResult[],
+          previous?.onsets ?? [],
+          result.bpm,
+          result.bpmConfidence,
+        ),
+      );
+      setSessionReady(true);
+      sessionReadyRef.current = true;
+      setConnectionStatus("connected");
+    },
+  });
+
+  const warmBackend = useCallback(async () => {
+    const response = await fetch(`${BACKEND_URL}/warmup`);
+    if (!response.ok) {
+      throw new Error(`Warmup failed: ${response.status}`);
+    }
+
+    await response.json();
+  }, []);
+
+  const ensureBackendWarm = useCallback(async () => {
+    if (!backendWarmupPromiseRef.current) {
+      backendWarmupPromiseRef.current = warmBackend().catch((error) => {
+        backendWarmupPromiseRef.current = null;
+        throw error;
+      });
+    }
+
+    return backendWarmupPromiseRef.current;
+  }, [warmBackend]);
+
+  const flushLiveEngraving = useCallback(() => {
+    engravingFlushTimeoutRef.current = null;
+    const pending = pendingEngravingRef.current;
+    setLiveEngravingResult(pending.result);
+    setLiveEngravingVersion(pending.version);
+  }, []);
+
+  const queueLiveEngraving = useCallback(
+    (result: AnalysisResult | null, version: number) => {
+      pendingEngravingRef.current = { result, version };
+      if (engravingFlushTimeoutRef.current) {
+        return;
+      }
+
+      engravingFlushTimeoutRef.current = setTimeout(() => {
+        flushLiveEngraving();
+      }, LIVE_OSMD_BATCH_MS);
+    },
+    [flushLiveEngraving],
+  );
+
   useEffect(() => {
     const audioOptions = {
       sampleRate: 44100,
@@ -157,37 +389,42 @@ export default function AnalyzeScreen() {
       audioSource: 6,
       wavFile: "temp_audio.wav",
     };
-    AudioRecord.init(audioOptions);
 
-    // Warm up the backend container (pre-load ML models)
-    fetch(`${BACKEND_URL}/warmup`)
-      .then((res) => res.json())
-      .then((data) => console.log("[Warmup] Backend ready:", data))
-      .catch((err) =>
-        console.log("[Warmup] Backend warming up...", err.message),
-      );
+    AudioRecord.init(audioOptions);
+    backendWarmupPromiseRef.current = warmBackend().catch((error) => {
+      console.warn("Backend warmup failed", error);
+      backendWarmupPromiseRef.current = null;
+    });
 
     return () => {
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+      }
+      if (chunkTimeoutRef.current) {
+        clearTimeout(chunkTimeoutRef.current);
+      }
+      if (engravingFlushTimeoutRef.current) {
+        clearTimeout(engravingFlushTimeoutRef.current);
+      }
       try {
         AudioRecord.stop();
-      } catch (error) {
-        console.warn("Failed to stop AudioRecord:", error);
+      } catch {
+        // Ignore if already stopped.
       }
-      // Clean up synthesized playback timer
-      if (synthPlaybackRef.current) {
-        clearInterval(synthPlaybackRef.current);
-        synthPlaybackRef.current = null;
-      }
-      // Clean up audio delay timeout
-      if (audioDelayTimeoutRef.current) {
-        clearTimeout(audioDelayTimeoutRef.current);
-        audioDelayTimeoutRef.current = null;
-      }
+      sessionReadyRef.current = false;
+      void resetSession();
     };
-  }, []);
+  }, [resetSession, warmBackend]);
 
-  // Request microphone permissions
-  const requestPermissions = async () => {
+  useEffect(() => {
+    if (!USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
+      return;
+    }
+
+    queueLiveEngraving(analysisResult, liveRefinementVersion);
+  }, [analysisResult, liveRefinementVersion, queueLiveEngraving]);
+
+  const requestPermissions = useCallback(async () => {
     if (Platform.OS === "android") {
       try {
         const granted = await PermissionsAndroid.request(
@@ -195,1316 +432,810 @@ export default function AnalyzeScreen() {
           {
             title: "Microphone Permission",
             message:
-              "This app needs access to your microphone to record audio.",
+              "This app needs access to your microphone to transcribe live audio.",
             buttonNeutral: "Ask Me Later",
             buttonNegative: "Cancel",
             buttonPositive: "OK",
           },
         );
         return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch (err) {
-        console.warn(err);
+      } catch {
         return false;
       }
     }
-    return true;
-  };
 
-  // Start recording
-  const startRecording = async () => {
+    return true;
+  }, []);
+
+  const resolveRecordedFilePath = useCallback(async (rawPath: string) => {
+    const candidates = new Set<string>();
+    const fileName = rawPath.split("/").pop() ?? rawPath;
+
+    candidates.add(rawPath);
+    if (!rawPath.startsWith("file://")) {
+      candidates.add(`file://${rawPath}`);
+    }
+
+    for (const baseDir of [
+      FileSystem.documentDirectory,
+      FileSystem.cacheDirectory,
+    ]) {
+      if (!baseDir) {
+        continue;
+      }
+      candidates.add(`${baseDir}${fileName}`);
+      candidates.add(`${baseDir}temp_audio.wav`);
+    }
+
+    for (const candidate of candidates) {
+      try {
+        const info = await FileSystem.getInfoAsync(candidate);
+        if (info.exists) {
+          return candidate;
+        }
+      } catch {
+        // Try the next candidate.
+      }
+    }
+
+    return null;
+  }, []);
+
+  const processRecordedChunk = useCallback(
+    async (resolvedPath: string) => {
+      inFlightUploadsRef.current += 1;
+      setIsProcessing(true);
+      try {
+        if (!sessionReadyRef.current) {
+          throw new Error("Live session is not ready yet");
+        }
+
+        const chunk = await processAudioChunk(resolvedPath, {
+          noiseProfile,
+          useNeuralLive: USE_LIVE_NEURAL_PATH,
+        });
+        setAnalysisResult((previous) =>
+          mergeChunkIntoResult(
+            previous,
+            chunk.coarseNotes as NoteResult[],
+            chunk.coarseChords as ChordResult[],
+            chunk.onsets as OnsetResult[],
+            chunk.bpm,
+          ),
+        );
+        setConnectionStatus("connected");
+      } finally {
+        inFlightUploadsRef.current = Math.max(
+          0,
+          inFlightUploadsRef.current - 1,
+        );
+        if (inFlightUploadsRef.current === 0) {
+          setIsProcessing(false);
+        }
+      }
+    },
+    [mergeChunkIntoResult, noiseProfile, processAudioChunk],
+  );
+
+  // Stops the current short recording, swaps the WAV file out of the way,
+  // restarts capture immediately so the mic stays open, then uploads the
+  // captured chunk in the background.
+  const analyzeRecordingChunk = useCallback(async () => {
+    if (!isRecordingRef.current) {
+      return;
+    }
+
+    let chunkPath: string | null = null;
+    try {
+      const audioFile = await AudioRecord.stop();
+      const resolved = await resolveRecordedFilePath(audioFile);
+      if (!resolved) {
+        throw new Error("Recorded chunk could not be located on disk");
+      }
+      // The recorder reuses the same wav filename, so the next start() would
+      // clobber this file. Move it to a unique cache path before restarting.
+      const target = `${FileSystem.cacheDirectory ?? ""}live_chunk_${Date.now()}.wav`;
+      try {
+        await FileSystem.moveAsync({ from: resolved, to: target });
+        chunkPath = target;
+      } catch {
+        try {
+          await FileSystem.copyAsync({ from: resolved, to: target });
+          chunkPath = target;
+        } catch (copyError) {
+          console.warn(
+            "Could not relocate live chunk; uploading from original path",
+            copyError,
+          );
+          chunkPath = resolved;
+        }
+      }
+    } catch (error) {
+      console.error("Failed to capture chunk", error);
+      setConnectionStatus("error");
+    }
+
+    // Restart the mic ASAP — do NOT wait for the upload below.
+    if (isRecordingRef.current) {
+      try {
+        AudioRecord.start();
+        chunkTimeoutRef.current = setTimeout(
+          analyzeRecordingChunk,
+          CHUNK_INTERVAL_MS,
+        );
+      } catch (error) {
+        console.error("Failed to restart chunk recording", error);
+        setConnectionStatus("error");
+      }
+    }
+
+    if (chunkPath) {
+      void (async () => {
+        const pathToUpload = chunkPath as string;
+        try {
+          await processRecordedChunk(pathToUpload);
+        } catch (error) {
+          console.error("Live chunk analysis failed", error);
+          setConnectionStatus("error");
+        } finally {
+          FileSystem.deleteAsync(pathToUpload, { idempotent: true }).catch(
+            () => {},
+          );
+        }
+      })();
+    }
+  }, [processRecordedChunk, resolveRecordedFilePath]);
+
+  const startLiveTranscription = useCallback(async () => {
     try {
       const hasPermission = await requestPermissions();
       if (!hasPermission) {
         Alert.alert(
           "Permission Required",
-          "Please grant microphone permissions to record audio.",
+          "Please grant microphone permissions to use live transcription.",
         );
         return;
       }
 
-      setIsRecording(true);
+      setIsWarmingUp(true);
+      setConnectionStatus("connecting");
       setDuration(0);
-      audioChunksRef.current = [];
-      setAnalysisResults(null);
-      setRecordedAudioPath(null);
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      setSessionReady(false);
+      sessionReadyRef.current = false;
+      setHasFinalizedRecording(false);
+      inFlightUploadsRef.current = 0;
 
-      // Warm up backend while user is recording (container boots during recording time)
-      fetch(`${BACKEND_URL}/warmup`)
-        .then((res) => res.json())
-        .then((data) => console.log("[Warmup] Backend ready:", data))
-        .catch(() => {}); // Ignore errors, just warming up
+      await resetSession();
 
-      if (sound) {
-        await sound.unloadAsync();
-        setSound(null);
+      setAnalysisResult(null);
+      setLiveEngravingResult(null);
+      setLiveEngravingVersion(0);
+      pendingEngravingRef.current = { result: null, version: 0 };
+      if (engravingFlushTimeoutRef.current) {
+        clearTimeout(engravingFlushTimeoutRef.current);
+        engravingFlushTimeoutRef.current = null;
+      }
+
+      let sessionStartError: unknown = null;
+      const sessionPromise = withTimeout(
+        createSession(currentBpm || 120),
+        8000,
+      ).catch((error) => {
+        sessionStartError = error;
+      });
+      try {
+        await withTimeout(ensureBackendWarm(), 30000);
+      } catch (error) {
+        console.warn("Backend warmup timed out or failed", error);
+      }
+
+      await sessionPromise;
+      if (sessionStartError) {
+        throw sessionStartError;
       }
 
       AudioRecord.start();
-      console.log("🎙️ Recording started");
-
-      intervalRef.current = setInterval(() => {
-        setDuration((prev) => prev + 0.1);
-      }, 100) as unknown as NodeJS.Timeout;
-    } catch (err) {
-      console.error("Failed to start recording:", err);
-      Alert.alert("Error", "Failed to start recording. Please try again.");
-      setIsRecording(false);
-    }
-  };
-
-  // Stop recording and analyze
-  const stopRecording = async () => {
-    try {
-      console.log("🛑 Stopping recording...");
-      setIsRecording(false);
-
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-
-      const audioFile = await AudioRecord.stop();
-      console.log("📦 Recording stopped, AudioRecord returned:", audioFile);
-      console.log(
-        "📂 FileSystem.documentDirectory:",
-        FileSystem.documentDirectory,
+      setIsWarmingUp(false);
+      setIsRecording(true);
+      isRecordingRef.current = true;
+      setSessionReady(true);
+      sessionReadyRef.current = true;
+      setConnectionStatus("connected");
+      durationIntervalRef.current = setInterval(() => {
+        setDuration((previous) => previous + 0.1);
+      }, 100);
+      chunkTimeoutRef.current = setTimeout(
+        analyzeRecordingChunk,
+        CHUNK_INTERVAL_MS,
       );
-      console.log("📂 FileSystem.cacheDirectory:", FileSystem.cacheDirectory);
-
-      // Find the actual file location (AudioRecord.stop() may return just filename or full path)
-      let actualFilePath = audioFile;
-
-      // Check if it's already a full path (starts with file://)
-      if (!audioFile.startsWith("file://")) {
-        // Try multiple possible locations
-        const possiblePaths = [
-          `file://${audioFile}`, // Direct file path
-          `${FileSystem.documentDirectory}${audioFile}`, // Documents directory
-          `${FileSystem.cacheDirectory}${audioFile}`, // Cache directory
-        ];
-
-        console.log("🔍 Checking possible file locations...");
-        for (const path of possiblePaths) {
-          try {
-            const fileInfo = await FileSystem.getInfoAsync(path);
-            if (fileInfo.exists) {
-              console.log("✅ Found audio file at:", path);
-              actualFilePath = path;
-              break;
-            } else {
-              console.log("❌ Not found at:", path);
-            }
-          } catch {
-            console.log("❌ Error checking:", path);
-          }
-        }
-      }
-
-      // Verify the file exists
-      const fileInfo = await FileSystem.getInfoAsync(actualFilePath);
-      if (!fileInfo.exists) {
-        throw new Error(`Recording file not found at: ${actualFilePath}`);
-      }
-
-      console.log("✅ Verified recording file exists, size:", fileInfo.size);
-
-      // Save a permanent copy for playback
-      const outputPath = `${FileSystem.documentDirectory}recording_${Date.now()}.wav`;
-      await FileSystem.copyAsync({
-        from: actualFilePath,
-        to: outputPath,
-      });
-
-      setRecordedAudioPath(outputPath);
-      console.log("✅ Recording saved to:", outputPath);
-
-      // Analyze the recording
-      await analyzeRecording(outputPath);
-    } catch (err) {
-      console.error("Failed to stop recording:", err);
-      Alert.alert("Error", "Failed to stop recording.");
-    }
-  };
-
-  // Analyze the recorded audio
-  const analyzeRecording = async (audioPath: string) => {
-    setIsAnalyzing(true);
-    try {
-      console.log("🔍 Analyzing recording:", audioPath);
-
-      const formData = new FormData();
-      formData.append("file", {
-        uri: audioPath,
-        name: "recording.wav",
-        type: "audio/wave",
-      } as any);
-
-      console.log("📤 Sending to backend...");
-      const response = await fetch(`${BACKEND_URL}/analyze`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Server error:", errorText);
-        throw new Error(`Server error: ${response.status}`);
-      }
-
-      const results: AnalysisResult = await response.json();
-      console.log("✅ Analysis complete:", results.analysis_summary);
-
-      setAnalysisResults({
-        onsets: results.onsets.map((onset) => onset.time_seconds),
-        notes: results.notes.map((note) => note.note_name),
-        confidence:
-          results.notes.length > 0
-            ? results.notes.reduce((acc, note) => acc + note.confidence, 0) /
-              results.notes.length
-            : 0,
-        method:
-          results.notes.length > 0 ? results.notes[0].method : "No detection",
-        details: results,
-      });
-
-      Alert.alert(
-        "Success",
-        `Detected ${results.notes.length} notes and ${results.chords.length} chords!`,
-      );
-    } catch (err) {
-      console.error("Analysis error:", err);
-      Alert.alert("Error", "Failed to analyze recording. Please try again.");
-    } finally {
-      setIsAnalyzing(false);
-    }
-  };
-
-  // Run second pass to find soft notes in gaps
-  const runSecondPass = async () => {
-    if (!recordedAudioPath || !analysisResults?.details) {
-      Alert.alert("Error", "No recording or analysis results to enhance");
-      return;
-    }
-
-    setIsRunningSecondPass(true);
-    try {
-      console.log("🔍 Running second pass for soft notes...");
-
-      const formData = new FormData();
-      formData.append("file", {
-        uri: recordedAudioPath,
-        name: "recording.wav",
-        type: "audio/wave",
-      } as any);
-      formData.append("notes", JSON.stringify(analysisResults.details.notes));
-      formData.append("chords", JSON.stringify(analysisResults.details.chords));
-      formData.append("min_gap_seconds", "0.25");
-      formData.append("soft_k", "1.2");
-
-      const response = await fetch(`${BACKEND_URL}/analyze-second-pass`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error("Second pass error:", errorText);
-        throw new Error(`Server error: ${response.status}`);
-      }
-
-      const secondPassResults = await response.json();
-      console.log(
-        "✅ Second pass complete:",
-        secondPassResults.notes?.length,
-        "notes,",
-        secondPassResults.chords?.length,
-        "chords",
-      );
-
-      // Merge new notes/chords with existing
-      if (
-        secondPassResults.notes?.length > 0 ||
-        secondPassResults.chords?.length > 0
-      ) {
-        const mergedNotes = [
-          ...analysisResults.details.notes,
-          ...secondPassResults.notes,
-        ].sort((a, b) => a.time_seconds - b.time_seconds);
-
-        const mergedChords = [
-          ...analysisResults.details.chords,
-          ...secondPassResults.chords,
-        ].sort((a, b) => a.time_seconds - b.time_seconds);
-
-        setAnalysisResults({
-          ...analysisResults,
-          notes: mergedNotes.map((note) => note.note_name),
-          details: {
-            ...analysisResults.details,
-            notes: mergedNotes,
-            chords: mergedChords,
-            analysis_summary: {
-              ...analysisResults.details.analysis_summary,
-              total_notes: mergedNotes.length,
-              total_chords: mergedChords.length,
-            },
-          },
-        });
-
-        Alert.alert(
-          "Second Pass Complete",
-          `Found ${secondPassResults.notes?.length || 0} additional notes and ${secondPassResults.chords?.length || 0} additional chords!`,
-        );
-      } else {
-        Alert.alert(
-          "Second Pass Complete",
-          "No additional notes found in gaps.",
-        );
-      }
-    } catch (err) {
-      console.error("Second pass error:", err);
-      Alert.alert("Error", "Failed to run second pass. Please try again.");
-    } finally {
-      setIsRunningSecondPass(false);
-    }
-  };
-
-  // Play the recorded audio immediately
-  const playRecording = async () => {
-    if (!recordedAudioPath) return;
-
-    try {
-      if (sound) {
-        await sound.unloadAsync();
-      }
-
-      // Create and play sound immediately
-      const { sound: newSound } = await Audio.Sound.createAsync(
-        { uri: recordedAudioPath },
-        { shouldPlay: true },
-      );
-
-      pendingSoundRef.current = newSound;
-      setSound(newSound);
-      setIsPlaying(true);
-
-      // Track playback - only update position at low frequency to avoid animation lag
-      // The piano roll drives its own animation on native thread
-      let lastUpdateTime = 0;
-      newSound.setOnPlaybackStatusUpdate((status: any) => {
-        if (status.isLoaded) {
-          // Only update duration once, and position every 250ms or on finish
-          if (!playbackDuration && status.durationMillis) {
-            setPlaybackDuration(status.durationMillis);
-          }
-
-          const now = Date.now();
-          if (status.didJustFinish) {
-            setPlaybackPosition(status.positionMillis);
-            setIsPlaying(false);
-          } else if (now - lastUpdateTime > 250) {
-            // Update position infrequently - piano roll uses its own internal time
-            setPlaybackPosition(status.positionMillis);
-            lastUpdateTime = now;
-          }
-        }
-      });
     } catch (error) {
-      console.error("Error playing audio:", error);
-      Alert.alert("Error", "Failed to play recording.");
-    }
-  };
-
-  // Pause playback
-  const pauseRecording = async () => {
-    // Cancel any pending audio delay
-    if (audioDelayTimeoutRef.current) {
-      clearTimeout(audioDelayTimeoutRef.current);
-      audioDelayTimeoutRef.current = null;
-    }
-
-    if (playbackMode === "synthesized") {
-      // Pause synthesized playback
-      if (synthPlaybackRef.current) {
-        clearInterval(synthPlaybackRef.current);
-        synthPlaybackRef.current = null;
+      console.error("Failed to start live transcription", error);
+      try {
+        AudioRecord.stop();
+      } catch {
+        // Ignore if audio recording never started.
       }
-      synthPausedAtRef.current = playbackPosition / 1000;
-      setIsPlaying(false);
-    } else {
-      // Also clear visual timer for recording mode
-      if (synthPlaybackRef.current) {
-        clearInterval(synthPlaybackRef.current);
-        synthPlaybackRef.current = null;
+      if (durationIntervalRef.current) {
+        clearInterval(durationIntervalRef.current);
+        durationIntervalRef.current = null;
       }
-      if (sound) {
-        await sound.pauseAsync();
+      if (chunkTimeoutRef.current) {
+        clearTimeout(chunkTimeoutRef.current);
+        chunkTimeoutRef.current = null;
       }
-      setIsPlaying(false);
+      setIsWarmingUp(false);
+      setConnectionStatus("error");
+      setSessionReady(false);
+      sessionReadyRef.current = false;
+      setDuration(0);
+      setIsRecording(false);
+      isRecordingRef.current = false;
+      Alert.alert(
+        "Live Session Error",
+        "The app could not create the live backend session. Recording was not started.",
+      );
     }
-  };
+  }, [
+    analyzeRecordingChunk,
+    createSession,
+    currentBpm,
+    ensureBackendWarm,
+    requestPermissions,
+    resetSession,
+  ]);
 
-  // Stop playback
-  const stopPlayback = async () => {
-    // Cancel any pending audio delay
-    if (audioDelayTimeoutRef.current) {
-      clearTimeout(audioDelayTimeoutRef.current);
-      audioDelayTimeoutRef.current = null;
+  const stopLiveTranscription = useCallback(async () => {
+    const wasRecording = isRecordingRef.current;
+    isRecordingRef.current = false;
+    setIsRecording(false);
+
+    if (durationIntervalRef.current) {
+      clearInterval(durationIntervalRef.current);
+      durationIntervalRef.current = null;
+    }
+    if (chunkTimeoutRef.current) {
+      clearTimeout(chunkTimeoutRef.current);
+      chunkTimeoutRef.current = null;
     }
 
-    // Stop synthesized playback timer
-    if (synthPlaybackRef.current) {
-      clearInterval(synthPlaybackRef.current);
-      synthPlaybackRef.current = null;
-    }
-    synthPausedAtRef.current = 0;
-
-    if (sound) {
-      await sound.stopAsync();
-      await sound.setPositionAsync(0);
-    }
-    setIsPlaying(false);
-    setPlaybackPosition(0);
-  };
-
-  // Start synthesized playback (visual only, timer-based)
-  const startSynthesizedPlayback = useCallback(() => {
-    const totalDuration =
-      analysisResults?.details?.analysis_summary?.duration_seconds || 10;
-
-    // Start from paused position or 0
-    const startFrom = synthPausedAtRef.current || 0;
-    const startTime = Date.now() - startFrom * 1000;
-    synthStartTimeRef.current = startTime;
-
-    setIsPlaying(true);
-
-    // Update position every 16ms (~60fps) for smooth animation
-    synthPlaybackRef.current = setInterval(() => {
-      const elapsed = (Date.now() - synthStartTimeRef.current) / 1000;
-
-      if (elapsed >= totalDuration) {
-        // Playback finished
-        if (synthPlaybackRef.current) {
-          clearInterval(synthPlaybackRef.current);
-          synthPlaybackRef.current = null;
-        }
-        synthPausedAtRef.current = 0;
-        setIsPlaying(false);
-        setPlaybackPosition(0);
-      } else {
-        setPlaybackPosition(elapsed * 1000);
-      }
-    }, 16);
-  }, [analysisResults]);
-
-  // Toggle play/pause
-  const togglePlayPause = async () => {
-    if (isPlaying) {
-      await pauseRecording();
-    } else {
-      if (playbackMode === "synthesized") {
-        startSynthesizedPlayback();
-      } else {
-        await playRecording();
-      }
-    }
-  };
-
-  // Toggle between recording and synthesized playback modes
-  const togglePlaybackMode = useCallback(async () => {
-    // Stop current playback first (inline to avoid dependency)
-    if (synthPlaybackRef.current) {
-      clearInterval(synthPlaybackRef.current);
-      synthPlaybackRef.current = null;
-    }
-    synthPausedAtRef.current = 0;
-    setIsPlaying(false);
-    setPlaybackPosition(0);
-
-    // Toggle mode
-    setPlaybackMode((prev) =>
-      prev === "recording" ? "synthesized" : "recording",
-    );
-  }, []);
-
-  // Seek to specific time (in seconds)
-  const seekToTime = useCallback(
-    async (timeSeconds: number) => {
-      if (playbackMode === "synthesized") {
-        synthPausedAtRef.current = timeSeconds;
-        setPlaybackPosition(timeSeconds * 1000);
-
-        // If currently playing, restart from new position
-        if (isPlaying && synthPlaybackRef.current) {
-          clearInterval(synthPlaybackRef.current);
-          synthStartTimeRef.current = Date.now() - timeSeconds * 1000;
-
-          const totalDuration =
-            analysisResults?.details?.analysis_summary?.duration_seconds || 10;
-          synthPlaybackRef.current = setInterval(() => {
-            const elapsed = (Date.now() - synthStartTimeRef.current) / 1000;
-            if (elapsed >= totalDuration) {
-              if (synthPlaybackRef.current) {
-                clearInterval(synthPlaybackRef.current);
-                synthPlaybackRef.current = null;
+    try {
+      if (wasRecording) {
+        let finalChunkPath: string | null = null;
+        try {
+          const finalAudioFile = await AudioRecord.stop();
+          const resolved = await resolveRecordedFilePath(finalAudioFile);
+          if (resolved) {
+            const target = `${FileSystem.cacheDirectory ?? ""}live_chunk_${Date.now()}_final.wav`;
+            try {
+              await FileSystem.moveAsync({ from: resolved, to: target });
+              finalChunkPath = target;
+            } catch {
+              try {
+                await FileSystem.copyAsync({ from: resolved, to: target });
+                finalChunkPath = target;
+              } catch {
+                finalChunkPath = resolved;
               }
-              synthPausedAtRef.current = 0;
-              setIsPlaying(false);
-              setPlaybackPosition(0);
-            } else {
-              setPlaybackPosition(elapsed * 1000);
             }
-          }, 16);
+          }
+        } catch (error) {
+          console.warn("Failed to capture final chunk", error);
         }
-      } else if (sound) {
-        const positionMs = timeSeconds * 1000;
-        await sound.setPositionAsync(positionMs);
-        setPlaybackPosition(positionMs);
+
+        if (finalChunkPath) {
+          try {
+            await processRecordedChunk(finalChunkPath);
+          } catch (error) {
+            console.warn("Final chunk analysis failed", error);
+          } finally {
+            FileSystem.deleteAsync(finalChunkPath, {
+              idempotent: true,
+            }).catch(() => {});
+          }
+        }
       }
-    },
-    [sound, playbackMode, isPlaying, analysisResults],
-  );
 
-  // Auto-transition to fullscreen piano roll after successful analysis
-  useEffect(() => {
-    if (analysisResults?.details && analysisResults.notes.length > 0) {
-      setIsFullscreenRoll(true);
+      const finalResult = await finalizeSession();
+      if (finalResult.notes.length > 0 || finalResult.chords.length > 0) {
+        setAnalysisResult((previous) =>
+          buildLiveAnalysisResult(
+            finalResult.notes as NoteResult[],
+            finalResult.chords as ChordResult[],
+            (finalResult.onsets as OnsetResult[] | undefined) ??
+              previous?.onsets ??
+              [],
+            finalResult.bpm,
+            finalResult.bpmConfidence,
+          ),
+        );
+      }
+
+      setSessionReady(false);
+      sessionReadyRef.current = false;
+      setHasFinalizedRecording(true);
+    } catch (error) {
+      console.error("Failed to stop live transcription", error);
+      setSessionReady(false);
+      sessionReadyRef.current = false;
+      setConnectionStatus("error");
+      Alert.alert(
+        "Error",
+        "Failed to finalize the live transcription session.",
+      );
+    } finally {
+      setConnectionStatus("disconnected");
+      inFlightUploadsRef.current = 0;
+      setIsProcessing(false);
     }
-  }, [analysisResults]);
+  }, [finalizeSession, processRecordedChunk, resolveRecordedFilePath]);
 
-  // Format duration display
-  const formatDuration = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = (seconds % 60).toFixed(1);
-    return `${mins}:${secs.padStart(4, "0")}`;
-  };
-
-  // Format milliseconds to mm:ss
-  const formatMilliseconds = (ms: number) => {
-    const totalSeconds = ms / 1000;
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = Math.floor(totalSeconds % 60);
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  // Handler to exit fullscreen piano roll
-  const handleCloseFullscreen = useCallback(() => {
-    setIsFullscreenRoll(false);
-  }, []);
-
-  // Render fullscreen piano roll when in that mode
-  if (isFullscreenRoll && analysisResults?.details) {
-    return (
-      <View style={{ flex: 1 }}>
-        <StatusBar barStyle="light-content" backgroundColor="#1a1a2e" />
-        <FullScreenPianoRoll
-          results={analysisResults.details}
-          isRecording={isRecording}
-          isPlaying={isPlaying}
-          currentTime={playbackPosition / 1000}
-          playbackMode={playbackMode}
-          onClose={handleCloseFullscreen}
-          onPlayPause={togglePlayPause}
-          onStop={stopPlayback}
-          onSeek={seekToTime}
-          onTogglePlaybackMode={togglePlaybackMode}
-        />
-
-        {/* Floating button to show more options */}
-        <View style={styles.fullscreenOverlay}>
-          {/* New recording button */}
-          <TouchableOpacity
-            style={styles.floatingButton}
-            onPress={() => {
-              setIsFullscreenRoll(false);
-              setRecordedAudioPath(null);
-              setAnalysisResults(null);
-              setPlaybackPosition(0);
-              setPlaybackDuration(0);
-              if (sound) {
-                sound.unloadAsync();
-                setSound(null);
-              }
-            }}
-          >
-            <Ionicons name="add" size={24} color="#fff" />
-          </TouchableOpacity>
-
-          {/* Toggle to sheet music view */}
-          <TouchableOpacity
-            style={styles.floatingButton}
-            onPress={() => {
-              setIsFullscreenRoll(false);
-            }}
-          >
-            <Ionicons name="musical-notes" size={24} color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
+  const recentEvents = [
+    ...(analysisResult?.notes ?? []).map((note) => ({
+      keyBase: `note-${note.time_seconds}-${note.note_name ?? note.midi_note ?? "unknown"}`,
+      time: note.time_seconds,
+      icon: "musical-note" as const,
+      label: note.note_name ?? `MIDI ${note.midi_note ?? "?"}`,
+      detail:
+        note.confidence != null
+          ? `${Math.round(note.confidence * 100)}% confidence`
+          : "Detected note",
+      color: "#30a46c",
+    })),
+    ...(analysisResult?.chords ?? []).map((chord) => ({
+      keyBase: `chord-${chord.time_seconds}-${chord.label}`,
+      time: chord.time_seconds,
+      icon: "library" as const,
+      label: chord.label,
+      detail:
+        chord.confidence != null
+          ? `${Math.round(chord.confidence * 100)}% confidence`
+          : "Detected chord",
+      color: "#2563eb",
+    })),
+  ]
+    .sort((left, right) => right.time - left.time)
+    .map((event, index) => ({
+      ...event,
+      key: `${event.keyBase}-${index}`,
+    }))
+    .slice(0, 12);
 
   return (
     <ScrollView
-      style={{ flex: 1 }}
-      contentContainerStyle={{ flexGrow: 1 }}
-      showsVerticalScrollIndicator={true}
-      keyboardShouldPersistTaps="handled"
+      style={styles.scrollView}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
     >
       <ThemedView style={styles.container}>
-        <ThemedText type="title" style={styles.title}>
-          LiveScore Piano
-        </ThemedText>
-        <ThemedText style={styles.subtitle}>
-          Record piano music and generate sheet music
-        </ThemedText>
+        <View style={styles.header}>
+          <ThemedText type="title" style={styles.title}>
+            Live Piano Transcription
+          </ThemedText>
+          <ThemedText style={styles.subtitle}>
+            This tab uses the live chunk pipeline. The previous
+            record-then-analyze screen is available in the Classic tab.
+          </ThemedText>
+        </View>
 
-        {/* Recording Control */}
-        <View style={styles.recordingSection}>
-          {!isRecording && !recordedAudioPath && (
-            <TouchableOpacity
-              style={[styles.recordButton, styles.startButton]}
-              onPress={startRecording}
-            >
-              <Ionicons name="mic" size={32} color="white" />
-              <Text style={styles.recordButtonText}>Start Recording</Text>
-            </TouchableOpacity>
-          )}
+        <View style={styles.statusCard}>
+          <View style={styles.statusRow}>
+            <View
+              style={[
+                styles.statusDot,
+                { backgroundColor: getConnectionStatusColor(connectionStatus) },
+              ]}
+            />
+            <ThemedText style={styles.statusLabel}>
+              {getConnectionStatusText(
+                connectionStatus,
+                isProcessing,
+                isWarmingUp,
+              )}
+            </ThemedText>
+            {isProcessing || isWarmingUp ? (
+              <ActivityIndicator size="small" color="#2f95dc" />
+            ) : null}
+          </View>
 
-          {isRecording && (
-            <View style={styles.recordingActive}>
-              <View style={styles.recordingIndicator}>
-                <View style={styles.recordingDot} />
-                <Text style={styles.recordingText}>Recording...</Text>
-              </View>
-              <Text style={styles.durationText}>
+          <View style={styles.statsRow}>
+            <View style={styles.statBox}>
+              <ThemedText style={styles.statValue}>
                 {formatDuration(duration)}
-              </Text>
-              <TouchableOpacity
-                style={[styles.recordButton, styles.stopButton]}
-                onPress={stopRecording}
-              >
-                <Ionicons name="stop" size={32} color="white" />
-                <Text style={styles.recordButtonText}>Stop Recording</Text>
-              </TouchableOpacity>
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>Elapsed</ThemedText>
             </View>
-          )}
+            <View style={styles.statBox}>
+              <ThemedText style={styles.statValue}>
+                {Math.round(currentBpm || 120)}
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>BPM</ThemedText>
+            </View>
+            <View style={styles.statBox}>
+              <ThemedText style={styles.statValue}>
+                {analysisResult?.analysis_summary.total_notes ?? 0}
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>Notes</ThemedText>
+            </View>
+            <View style={styles.statBox}>
+              <ThemedText style={styles.statValue}>
+                {analysisResult?.analysis_summary.total_chords ?? 0}
+              </ThemedText>
+              <ThemedText style={styles.statLabel}>Chords</ThemedText>
+            </View>
+          </View>
 
-          {/* Analysis Progress */}
-          {isAnalyzing && (
-            <View style={styles.analyzingSection}>
-              <Ionicons name="analytics" size={24} color="#2196F3" />
-              <Text style={styles.analyzingText}>Analyzing recording...</Text>
+          <View style={styles.controlSection}>
+            <View style={styles.controlHeaderRow}>
+              <ThemedText style={styles.controlLabel}>
+                Low-noise filter
+              </ThemedText>
+              <ThemedText style={styles.controlValue}>
+                {selectedNoiseProfile.label}
+              </ThemedText>
+            </View>
+
+            <View style={styles.optionRow}>
+              {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
+                const isActive = option.value === noiseProfile;
+
+                return (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.optionChip,
+                      isActive ? styles.optionChipActive : null,
+                    ]}
+                    onPress={() => setNoiseProfile(option.value)}
+                  >
+                    <ThemedText
+                      style={[
+                        styles.optionChipText,
+                        isActive ? styles.optionChipTextActive : null,
+                      ]}
+                    >
+                      {option.label}
+                    </ThemedText>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <ThemedText style={styles.controlHint}>
+              {selectedNoiseProfile.description}
+            </ThemedText>
+          </View>
+
+          <TouchableOpacity
+            style={[
+              styles.recordButton,
+              isRecording
+                ? styles.stopButton
+                : isWarmingUp
+                  ? styles.warmingButton
+                  : styles.startButton,
+              isStartDisabled ? styles.recordButtonDisabled : null,
+            ]}
+            onPress={
+              isRecording ? stopLiveTranscription : startLiveTranscription
+            }
+            disabled={isStartDisabled}
+          >
+            {isWarmingUp ? (
+              <ActivityIndicator size="small" color="#ffffff" />
+            ) : (
+              <Ionicons
+                name={isRecording ? "stop" : "radio"}
+                size={24}
+                color="white"
+              />
+            )}
+            <ThemedText style={styles.recordButtonText}>
+              {recordButtonLabel}
+            </ThemedText>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.card}>
+          <ThemedText type="subtitle" style={styles.cardTitle}>
+            {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT
+              ? "Live OSMD Engraving"
+              : "Committed Score"}
+          </ThemedText>
+          <ThemedText style={styles.cardDescription}>
+            {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT
+              ? "Experimental: keeps the OSMD WebView mounted during recording and batches live score updates before handing them to the engraver."
+              : "Engraved notation is generated once the live session ends, so the heavy renderer never fights with the live piano roll above."}
+          </ThemedText>
+          {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT ? (
+            liveEngravingResult ? (
+              <PianoSheetMusic
+                results={liveEngravingResult}
+                refinementVersion={liveEngravingVersion}
+              />
+            ) : (
+              <ThemedText style={styles.placeholderText}>
+                {/* <LivePianoRollWebView
+                  notes={analysisResult?.notes ?? []}
+                  chords={analysisResult?.chords ?? []}
+                  bpm={
+                    currentBpm ||
+                    analysisResult?.analysis_summary.detected_bpm ||
+                    120
+                  }
+                  elapsedSeconds={duration}
+                  isRecording={isRecording}
+                /> */}
+                {isRecording
+                  ? "Recording… waiting for the first batched engraving update."
+                  : isWarmingUp
+                    ? "Warming the live neural path. Recording will begin once the model is hot."
+                    : "Start a live session to stream notes into the OSMD engraving experiment."}
+              </ThemedText>
+            )
+          ) : hasFinalizedRecording && analysisResult ? (
+            <PianoSheetMusic results={analysisResult} />
+          ) : (
+            <ThemedText style={styles.placeholderText}>
+              {isRecording
+                ? "Recording… the engraved score will render once you stop."
+                : isWarmingUp
+                  ? "Warming the live neural path. Recording has not started yet."
+                  : "Start a live session to capture notes. The piano roll above updates in real time; sheet music renders after stop."}
+            </ThemedText>
+          )}
+        </View>
+
+        <View style={styles.card}>
+          <ThemedText type="subtitle" style={styles.cardTitle}>
+            Recent Detections
+          </ThemedText>
+          {recentEvents.length === 0 ? (
+            <ThemedText style={styles.placeholderText}>
+              No notes detected yet.
+            </ThemedText>
+          ) : (
+            <View style={styles.eventsList}>
+              {recentEvents.map((event) => (
+                <View key={event.key} style={styles.eventRow}>
+                  <View
+                    style={[
+                      styles.eventIcon,
+                      { backgroundColor: `${event.color}1A` },
+                    ]}
+                  >
+                    <Ionicons name={event.icon} size={16} color={event.color} />
+                  </View>
+                  <View style={styles.eventTextWrap}>
+                    <ThemedText style={styles.eventLabel}>
+                      {event.label}
+                    </ThemedText>
+                    <ThemedText style={styles.eventDetail}>
+                      {event.time.toFixed(2)}s · {event.detail}
+                    </ThemedText>
+                  </View>
+                </View>
+              ))}
             </View>
           )}
         </View>
 
-        {/* Playback Controls */}
-        {recordedAudioPath && !isRecording && (
-          <View style={styles.playbackSection}>
-            <View style={styles.playbackControls}>
-              {!isPlaying ? (
-                <TouchableOpacity
-                  style={styles.playButton}
-                  onPress={playRecording}
-                >
-                  <Ionicons name="play" size={32} color="white" />
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity
-                  style={styles.playButton}
-                  onPress={pauseRecording}
-                >
-                  <Ionicons name="pause" size={32} color="white" />
-                </TouchableOpacity>
-              )}
-
-              <TouchableOpacity
-                style={styles.stopSmallButton}
-                onPress={stopPlayback}
-              >
-                <Ionicons name="stop" size={20} color="white" />
-              </TouchableOpacity>
-
-              <View style={styles.playbackInfo}>
-                <Text style={styles.playbackTime}>
-                  {formatMilliseconds(playbackPosition)} /{" "}
-                  {formatMilliseconds(playbackDuration)}
-                </Text>
-              </View>
-            </View>
-
-            {/* Action Buttons */}
-            <View style={styles.actionButtonsRow}>
-              <TouchableOpacity
-                style={styles.newRecordingButton}
-                onPress={() => {
-                  setRecordedAudioPath(null);
-                  setAnalysisResults(null);
-                  setPlaybackPosition(0);
-                  setPlaybackDuration(0);
-                  if (sound) {
-                    sound.unloadAsync();
-                    setSound(null);
-                  }
-                }}
-              >
-                <Ionicons name="add-circle-outline" size={20} color="#2196F3" />
-                <Text style={styles.newRecordingText}>New Recording</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.deleteRecordingButton}
-                onPress={async () => {
-                  if (recordedAudioPath) {
-                    try {
-                      await FileSystem.deleteAsync(recordedAudioPath);
-                      console.log("🗑️ Deleted recording:", recordedAudioPath);
-                      setRecordedAudioPath(null);
-                      setAnalysisResults(null);
-                      setPlaybackPosition(0);
-                      setPlaybackDuration(0);
-                      if (sound) {
-                        await sound.unloadAsync();
-                        setSound(null);
-                      }
-                      Alert.alert("Deleted", "Recording deleted successfully");
-                    } catch (error) {
-                      console.error("Failed to delete recording:", error);
-                      Alert.alert("Error", "Failed to delete recording");
-                    }
-                  }
-                }}
-              >
-                <Ionicons name="trash-outline" size={20} color="#f44336" />
-                <Text style={styles.deleteRecordingText}>Delete</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        )}
-
-        {/* Sheet Music Display */}
-        {/* Analysis Summary - Compact */}
-        {analysisResults && (
-          <View style={styles.resultsSummary}>
-            <View style={styles.statsRowCompact}>
-              <View style={styles.statBoxCompact}>
-                <Ionicons name="musical-notes" size={18} color="#4CAF50" />
-                <Text style={styles.statValueCompact}>
-                  {analysisResults.notes.length}
-                </Text>
-                <Text style={styles.statLabelCompact}>Notes</Text>
-              </View>
-              <View style={styles.statBoxCompact}>
-                <Ionicons name="pulse" size={18} color="#2196F3" />
-                <Text style={styles.statValueCompact}>
-                  {analysisResults.details?.analysis_summary.total_onsets}
-                </Text>
-                <Text style={styles.statLabelCompact}>Onsets</Text>
-              </View>
-              {analysisResults.details?.analysis_summary.bass_notes !==
-                undefined && (
-                <>
-                  <View style={styles.statBoxCompact}>
-                    <Text style={styles.statValueCompact}>
-                      {analysisResults.details.analysis_summary.bass_notes}
-                    </Text>
-                    <Text style={styles.statLabelCompact}>Bass</Text>
-                  </View>
-                  <View style={styles.statBoxCompact}>
-                    <Text style={styles.statValueCompact}>
-                      {analysisResults.details.analysis_summary.treble_notes}
-                    </Text>
-                    <Text style={styles.statLabelCompact}>Treble</Text>
-                  </View>
-                </>
-              )}
-            </View>
-
-            {/* Second Pass Button */}
-            <TouchableOpacity
-              style={[
-                styles.secondPassButton,
-                isRunningSecondPass && styles.buttonDisabled,
-              ]}
-              onPress={runSecondPass}
-              disabled={isRunningSecondPass}
-            >
-              {isRunningSecondPass ? (
-                <ActivityIndicator size="small" color="#fff" />
-              ) : (
-                <>
-                  <Ionicons name="search" size={16} color="#fff" />
-                  <Text style={styles.secondPassButtonText}>
-                    Find Soft Notes
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* Sheet Music - Main Focus */}
-        {analysisResults &&
-          analysisResults.details &&
-          analysisResults.notes.length > 0 && (
-            <View style={styles.sheetMusicSection}>
-              <ThemedText style={styles.sectionTitle}>Sheet Music</ThemedText>
-
-              {/* Detected Tempo Display */}
-              {analysisResults.details?.analysis_summary?.detected_bpm && (
-                <View style={styles.detectedTempoSection}>
-                  <Text style={styles.detectedTempoLabel}>
-                    Detected Tempo:{" "}
-                    {Math.round(
-                      analysisResults.details.analysis_summary.detected_bpm,
-                    )}{" "}
-                    BPM
-                    {analysisResults.details.analysis_summary
-                      .tempo_confidence !== undefined && (
-                      <Text style={styles.tempoConfidence}>
-                        {" "}
-                        (
-                        {Math.round(
-                          analysisResults.details.analysis_summary
-                            .tempo_confidence * 100,
-                        )}
-                        % confidence)
-                      </Text>
-                    )}
-                  </Text>
-                </View>
-              )}
-
-              {/* Time Signature Selection */}
-              <View style={styles.timeSignatureSection}>
-                <Text style={styles.timeSignatureLabel}>Time Signature:</Text>
-                <View style={styles.timeSignatureRow}>
-                  <TouchableOpacity
-                    style={[
-                      styles.timeSignatureButton,
-                      timeSignature === "4/4" &&
-                        styles.timeSignatureButtonActive,
-                    ]}
-                    onPress={() => setTimeSignature("4/4")}
-                  >
-                    <Text
-                      style={[
-                        styles.timeSignatureText,
-                        timeSignature === "4/4" &&
-                          styles.timeSignatureTextActive,
-                      ]}
-                    >
-                      4/4
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.timeSignatureButton,
-                      timeSignature === "3/4" &&
-                        styles.timeSignatureButtonActive,
-                    ]}
-                    onPress={() => setTimeSignature("3/4")}
-                  >
-                    <Text
-                      style={[
-                        styles.timeSignatureText,
-                        timeSignature === "3/4" &&
-                          styles.timeSignatureTextActive,
-                      ]}
-                    >
-                      3/4
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[
-                      styles.timeSignatureButton,
-                      timeSignature === "6/8" &&
-                        styles.timeSignatureButtonActive,
-                    ]}
-                    onPress={() => setTimeSignature("6/8")}
-                  >
-                    <Text
-                      style={[
-                        styles.timeSignatureText,
-                        timeSignature === "6/8" &&
-                          styles.timeSignatureTextActive,
-                      ]}
-                    >
-                      6/8
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-
-              {/* View Mode Toggle */}
-              <View style={styles.viewModeContainer}>
-                <TouchableOpacity
-                  style={[styles.viewModeButton, styles.fullscreenButton]}
-                  onPress={() => setIsFullscreenRoll(true)}
-                >
-                  <Ionicons name="expand" size={16} color="#fff" />
-                  <Text style={[styles.viewModeButtonText, { color: "#fff" }]}>
-                    Fullscreen Piano Roll
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* Sheet Music View */}
-              <PianoSheetMusic
-                results={analysisResults.details}
-                timeSignature={timeSignature}
-              />
-            </View>
-          )}
-
-        {/* Info Section */}
-        {!recordedAudioPath && !isRecording && (
-          <View style={styles.infoSection}>
-            <ThemedText style={styles.infoTitle}>Recording Tips:</ThemedText>
-            <ThemedText style={styles.infoText}>
-              • Place device close to the piano{"\n"}• Play clearly and at a
-              moderate tempo{"\n"}• Minimize background noise{"\n"}• Record at
-              least a few notes for best results
-            </ThemedText>
-          </View>
-        )}
+        <View style={styles.infoCard}>
+          <ThemedText style={styles.infoTitle}>Live pipeline notes</ThemedText>
+          <ThemedText style={styles.infoText}>
+            Audio is captured in short WAV chunks, sent to the overlap-aware
+            live endpoint, displayed immediately with coarse rhythm values, and
+            then refreshed when deferred refinement lands.
+          </ThemedText>
+        </View>
       </ThemedView>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
+  scrollView: {
+    flex: 1,
+  },
+  scrollContent: {
+    flexGrow: 1,
+  },
   container: {
     flex: 1,
-    padding: 20,
-    paddingTop: 80,
-    paddingBottom: 50,
+    paddingHorizontal: 20,
+    paddingTop: 48,
+    paddingBottom: 40,
+    gap: 18,
+  },
+  header: {
+    gap: 8,
   },
   title: {
-    marginBottom: 8,
     textAlign: "center",
-    fontSize: 28,
-    fontWeight: "bold",
   },
   subtitle: {
     textAlign: "center",
-    opacity: 0.7,
-    marginBottom: 40,
-    fontSize: 14,
+    lineHeight: 21,
+    opacity: 0.78,
   },
-
-  // Recording Section
-  recordingSection: {
-    marginBottom: 30,
-    alignItems: "center",
+  statusCard: {
+    borderRadius: 18,
+    padding: 18,
+    backgroundColor: "rgba(47, 149, 220, 0.08)",
+    gap: 16,
   },
-  recordButton: {
+  statusRow: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 16,
-    paddingHorizontal: 32,
-    borderRadius: 12,
-    gap: 12,
-    minWidth: 200,
+    gap: 10,
   },
-  startButton: {
-    backgroundColor: "#4CAF50",
+  statusDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
   },
-  stopButton: {
-    backgroundColor: "#f44336",
-    marginTop: 20,
-  },
-  recordButtonText: {
-    color: "white",
-    fontSize: 18,
-    fontWeight: "600",
-  },
-  recordingActive: {
-    alignItems: "center",
-    gap: 12,
-  },
-  recordingIndicator: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    backgroundColor: "rgba(244, 67, 54, 0.1)",
-    borderRadius: 20,
-  },
-  recordingDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#f44336",
-  },
-  recordingText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#f44336",
-  },
-  durationText: {
-    fontSize: 32,
-    fontWeight: "bold",
-    color: "#2196F3",
-  },
-  analyzingSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    padding: 16,
-    backgroundColor: "rgba(33, 150, 243, 0.1)",
-    borderRadius: 8,
-    marginTop: 20,
-  },
-  analyzingText: {
-    fontSize: 16,
-    color: "#2196F3",
-    fontWeight: "600",
-  },
-
-  // Playback Section
-  playbackSection: {
-    marginBottom: 30,
-    padding: 16,
-    backgroundColor: "rgba(128, 128, 128, 0.1)",
-    borderRadius: 12,
-  },
-  playbackControls: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    marginBottom: 16,
-  },
-  playButton: {
-    backgroundColor: "#2196F3",
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  stopSmallButton: {
-    backgroundColor: "#f44336",
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  playbackInfo: {
+  statusLabel: {
     flex: 1,
-    marginLeft: 12,
-  },
-  playbackTime: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "600",
-    color: "#666",
-  },
-  actionButtonsRow: {
-    flexDirection: "row",
-    gap: 12,
-  },
-  newRecordingButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    backgroundColor: "rgba(33, 150, 243, 0.1)",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#2196F3",
-    borderStyle: "dashed",
-  },
-  newRecordingText: {
-    color: "#2196F3",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  deleteRecordingButton: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    backgroundColor: "rgba(244, 67, 54, 0.1)",
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: "#f44336",
-    borderStyle: "dashed",
-  },
-  deleteRecordingText: {
-    color: "#f44336",
-    fontSize: 16,
-    fontWeight: "600",
-  },
-
-  // Sheet Music Section
-  sheetMusicSection: {
-    marginBottom: 30,
-  },
-  sectionTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 16,
-  },
-
-  // Compact Analysis Summary
-  resultsSummary: {
-    marginBottom: 16,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    backgroundColor: "rgba(128, 128, 128, 0.05)",
-    borderRadius: 8,
-  },
-  statsRowCompact: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    alignItems: "center",
-  },
-  statBoxCompact: {
-    alignItems: "center",
-    paddingHorizontal: 12,
-  },
-  statValueCompact: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#555",
-  },
-  statLabelCompact: {
-    fontSize: 10,
-    color: "#888",
-    marginTop: 2,
-  },
-
-  // Results Section
-  resultsSection: {
-    marginBottom: 30,
   },
   statsRow: {
     flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 20,
+    flexWrap: "wrap",
+    gap: 10,
   },
   statBox: {
+    minWidth: "22%",
+    flex: 1,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    borderColor: "#2563eb1A",
+    borderWidth: 1,
     alignItems: "center",
-    padding: 16,
-    backgroundColor: "rgba(128, 128, 128, 0.1)",
-    borderRadius: 8,
-    minWidth: 100,
-  },
-  splitInfoRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 16,
-    marginBottom: 20,
-  },
-  splitInfoBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    backgroundColor: "rgba(128, 128, 128, 0.05)",
-    borderRadius: 8,
-  },
-  splitInfoText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#666",
+    gap: 4,
   },
   statValue: {
-    fontSize: 24,
-    fontWeight: "bold",
-    marginTop: 8,
-    color: "#888",
+    fontSize: 12,
+    fontWeight: "700",
   },
   statLabel: {
-    fontSize: 12,
-    opacity: 0.7,
-    marginTop: 4,
-    color: "#666",
+    fontSize: 9,
+    opacity: 0.72,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
   },
-  noteList: {
-    maxHeight: 300,
+  controlSection: {
+    gap: 10,
   },
-  noteItem: {
+  controlHeaderRow: {
     flexDirection: "row",
     alignItems: "center",
-    padding: 12,
-    backgroundColor: "rgba(128, 128, 128, 0.05)",
-    borderRadius: 8,
-    marginBottom: 8,
+    justifyContent: "space-between",
+    gap: 10,
   },
-  noteIcon: {
-    width: 32,
-    height: 32,
+  controlLabel: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  controlValue: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#2563eb",
+  },
+  optionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  optionChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#2563eb33",
+    backgroundColor: "rgba(255, 255, 255, 0.55)",
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  optionChipActive: {
+    backgroundColor: "#2563eb",
+    borderColor: "#2563eb",
+  },
+  optionChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#1d4ed8",
+  },
+  optionChipTextActive: {
+    color: "#ffffff",
+  },
+  controlHint: {
+    fontSize: 12,
+    lineHeight: 18,
+    opacity: 0.72,
+  },
+  recordButton: {
     borderRadius: 16,
-    backgroundColor: "rgba(76, 175, 80, 0.1)",
+    minHeight: 56,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 12,
+    gap: 10,
   },
-  noteContent: {
-    flex: 1,
+  startButton: {
+    backgroundColor: "#2563eb",
   },
-  noteText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#333",
-    marginBottom: 4,
+  warmingButton: {
+    backgroundColor: "#f59e0b",
   },
-  noteMeta: {
-    fontSize: 12,
-    color: "#666",
+  stopButton: {
+    backgroundColor: "#dc2626",
   },
-
-  // Info Section
-  infoSection: {
-    padding: 20,
-    backgroundColor: "rgba(33, 150, 243, 0.1)",
-    borderRadius: 8,
-    marginTop: 20,
+  recordButtonDisabled: {
+    opacity: 0.92,
   },
-  infoTitle: {
+  recordButtonText: {
+    color: "white",
     fontSize: 16,
-    fontWeight: "600",
-    marginBottom: 8,
-    color: "#2196F3",
+    fontWeight: "700",
   },
-  infoText: {
-    fontSize: 14,
-    lineHeight: 22,
-    opacity: 0.8,
+  card: {
+    borderRadius: 18,
+    paddingVertical: 18,
+    backgroundColor: "rgba(15, 23, 42, 0.04)",
+    gap: 12,
   },
-
-  // Time Signature Control
-  detectedTempoSection: {
-    marginBottom: 12,
-    padding: 10,
-    backgroundColor: "rgba(33, 150, 243, 0.1)",
-    borderRadius: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: "#2196F3",
+  cardTitle: {
+    fontSize: 18,
   },
-  detectedTempoLabel: {
+  cardDescription: {
+    lineHeight: 21,
+    opacity: 0.82,
+  },
+  placeholderText: {
+    lineHeight: 21,
+    opacity: 0.76,
+  },
+  eventsList: {
+    gap: 10,
+  },
+  eventRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 6,
+  },
+  eventIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  eventTextWrap: {
+    flex: 1,
+    gap: 2,
+  },
+  eventLabel: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#1976D2",
   },
-  tempoConfidence: {
-    fontSize: 13,
-    fontWeight: "400",
-    color: "#666",
+  eventDetail: {
+    fontSize: 12,
+    opacity: 0.72,
   },
-  timeSignatureSection: {
-    marginBottom: 16,
-    padding: 12,
-    backgroundColor: "rgba(128, 128, 128, 0.05)",
-    borderRadius: 8,
-  },
-  timeSignatureLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#666",
-    marginBottom: 8,
-  },
-  timeSignatureRow: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 12,
-  },
-  timeSignatureButton: {
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
-    backgroundColor: "#e0e0e0",
-    alignItems: "center",
-    minWidth: 70,
-  },
-  timeSignatureButtonActive: {
-    backgroundColor: "#2196F3",
-  },
-  timeSignatureText: {
-    fontSize: 18,
-    fontWeight: "bold",
-    color: "#666",
-  },
-  timeSignatureTextActive: {
-    color: "white",
-  },
-
-  // View Mode Toggle
-  viewModeContainer: {
-    flexDirection: "row",
-    justifyContent: "center",
-    gap: 12,
-    marginBottom: 16,
-  },
-  viewModeButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    backgroundColor: "#e0e0e0",
-    gap: 6,
-  },
-  viewModeButtonText: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#666",
-  },
-  fullscreenButton: {
-    backgroundColor: "#1a1a2e",
-    borderWidth: 1,
-    borderColor: "#4ecdc4",
-  },
-
-  // Fullscreen Piano Roll Overlay
-  fullscreenOverlay: {
-    position: "absolute",
-    top: Platform.OS === "android" ? (StatusBar.currentHeight || 0) + 10 : 50,
-    left: 16,
-    flexDirection: "column",
-    gap: 12,
-    zIndex: 200,
-  },
-  floatingButton: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: "rgba(255, 255, 255, 0.2)",
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 1,
-    borderColor: "rgba(255, 255, 255, 0.3)",
-  },
-  secondPassButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
+  infoCard: {
+    borderRadius: 18,
+    padding: 18,
+    backgroundColor: "rgba(245, 158, 11, 0.12)",
     gap: 8,
-    backgroundColor: "#9C27B0",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    marginTop: 12,
   },
-  secondPassButtonText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
+  infoTitle: {
+    fontSize: 15,
+    fontWeight: "700",
   },
-  buttonDisabled: {
-    opacity: 0.5,
+  infoText: {
+    lineHeight: 20,
+    opacity: 0.82,
   },
 });

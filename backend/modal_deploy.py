@@ -98,11 +98,13 @@ image = image.add_local_file("gpu_ops.py", "/root/gpu_ops.py")
 image = image.add_local_file("live_rhythm.py", "/root/live_rhythm.py")
 # Add rhythm ML model (only essential files, not training data)
 image = image.add_local_file("rhythm_training/__init__.py", "/root/rhythm_training/__init__.py")
+image = image.add_local_file("rhythm_training/evaluate_rhythm.py", "/root/rhythm_training/evaluate_rhythm.py")
 image = image.add_local_file("rhythm_training/rhythm_model.py", "/root/rhythm_training/rhythm_model.py")
 image = image.add_local_file("rhythm_training/rhythm_model.npz", "/root/rhythm_training/rhythm_model.npz")
-# Add ensemble transcription model (trained multi-resolution model)
-# image = image.add_local_file("rhythm_training/train_ensemble.py", "/root/rhythm_training/train_ensemble.py")
-# image = image.add_local_file("rhythm_training/ensemble_transcription.pt", "/root/rhythm_training/ensemble_transcription.pt")
+# Add ensemble helpers needed by the mel baseline decoder.
+image = image.add_local_file("rhythm_training/train_ensemble.py", "/root/rhythm_training/train_ensemble.py")
+# Optional ensemble checkpoint is still omitted; the live neural path currently
+# uses the mel baseline weights, but its decode helper lives in train_ensemble.
 # Add mel baseline model (trained multi-resolution model)
 image = image.add_local_file("rhythm_training/train_mel_baseline.py", "/root/rhythm_training/train_mel_baseline.py")
 image = image.add_local_file("rhythm_training/mel_baseline_transcription.pt", "/root/rhythm_training/mel_baseline_transcription.pt")

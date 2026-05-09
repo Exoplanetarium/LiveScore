@@ -20,6 +20,7 @@ const BACKEND_URL =
   "https://exoplanetarium--livescore-gpu-fastapi-app.modal.run";
 
 interface LiveRefinementResult {
+  onsets?: any[];
   notes: any[];
   chords: any[];
   bpm: number;
@@ -36,9 +37,25 @@ interface UseLiveRhythmOptions {
   onBpmChange?: (bpm: number, confidence: number) => void;
 }
 
+interface LiveAudioChunkOptions {
+  noiseProfile?: string;
+  useNeuralLive?: boolean;
+}
+
 interface UseLiveRhythmReturn {
   /** Create a new live session */
   createSession: (initialBpm?: number) => Promise<void>;
+  /** Process one recorded audio chunk file through analysis + live quantization */
+  processAudioChunk: (
+    fileUri: string,
+    options?: LiveAudioChunkOptions,
+  ) => Promise<{
+    coarseNotes: any[];
+    coarseChords: any[];
+    bpm: number;
+    needsRefresh: boolean;
+    onsets: any[];
+  }>;
   /** Process newly detected notes */
   processNotes: (
     notes: any[],
@@ -79,8 +96,23 @@ export function useLiveRhythm(
   const [version, setVersion] = useState(0);
   const [isPolling, setIsPolling] = useState(false);
 
-  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastVersionRef = useRef(0);
+  const sessionIdRef = useRef<string | null>(null);
+  const isActiveRef = useRef(false);
+  const currentBpmRef = useRef(120);
+
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
+
+  useEffect(() => {
+    currentBpmRef.current = currentBpm;
+  }, [currentBpm]);
 
   // Generate unique session ID
   const generateSessionId = useCallback(() => {
@@ -108,8 +140,11 @@ export function useLiveRhythm(
 
         const data = await response.json();
         setSessionId(newSessionId);
+        sessionIdRef.current = newSessionId;
         setIsActive(true);
+        isActiveRef.current = true;
         setCurrentBpm(data.bpm || initialBpm);
+        currentBpmRef.current = data.bpm || initialBpm;
         setVersion(0);
         lastVersionRef.current = 0;
 
@@ -122,77 +157,43 @@ export function useLiveRhythm(
     [generateSessionId],
   );
 
-  // Process notes
-  const processNotes = useCallback(
-    async (notes: any[], chords: any[] = []) => {
-      if (!sessionId) {
-        console.warn("[LiveRhythm] No active session");
-        return { coarseNotes: notes, bpm: currentBpm, needsRefresh: false };
-      }
-
-      try {
-        const response = await fetch(`${BACKEND_URL}/live/process`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            session_id: sessionId,
-            notes,
-            chords,
-          }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to process notes: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        // Update BPM if changed
-        if (data.bpm && data.bpm !== currentBpm) {
-          setCurrentBpm(data.bpm);
-          onBpmChange?.(data.bpm, data.bpm_confidence || 0);
-        }
-
-        // Check for version update
-        if (data.refinement_version > lastVersionRef.current) {
-          lastVersionRef.current = data.refinement_version;
-          setVersion(data.refinement_version);
-        }
-
-        // Start polling if not already (done in effect below)
-        // Note: polling auto-starts when first notes are processed
-
-        return {
-          coarseNotes: data.coarse_notes || notes,
-          bpm: data.bpm || currentBpm,
-          needsRefresh: data.needs_refresh || false,
-        };
-      } catch (error) {
-        console.error("[LiveRhythm] Failed to process notes:", error);
-        return { coarseNotes: notes, bpm: currentBpm, needsRefresh: false };
-      }
-    },
-    [sessionId, currentBpm, onBpmChange],
-  );
+  // Stop polling
+  const stopPolling = useCallback(() => {
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    setIsPolling(false);
+    console.log("[LiveRhythm] Polling stopped");
+  }, []);
 
   // Poll for refinements
   const pollForRefinements = useCallback(async () => {
-    if (!sessionId || !isActive) return;
+    const activeSessionId = sessionIdRef.current;
+    if (!activeSessionId || !isActiveRef.current) return;
 
     try {
       const response = await fetch(`${BACKEND_URL}/live/check-refinement`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId }),
+        body: JSON.stringify({ session_id: activeSessionId }),
       });
 
-      if (!response.ok) return;
+      if (!response.ok) {
+        stopPolling();
+        return;
+      }
 
       const data = await response.json();
+      const nextPollDelayMs =
+        typeof data.next_refinement_poll_ms === "number"
+          ? data.next_refinement_poll_ms
+          : null;
 
       // Update BPM
-      if (data.bpm && data.bpm !== currentBpm) {
+      if (data.bpm && data.bpm !== currentBpmRef.current) {
         setCurrentBpm(data.bpm);
+        currentBpmRef.current = data.bpm;
         onBpmChange?.(data.bpm, data.bpm_confidence || 0);
       }
 
@@ -204,50 +205,265 @@ export function useLiveRhythm(
         lastVersionRef.current = data.refinement_version;
         setVersion(data.refinement_version);
 
-        // Fetch all notes with best quantization
-        const allNotesResponse = await fetch(
-          `${BACKEND_URL}/live/get-all-notes`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ session_id: sessionId }),
-          },
-        );
+        onRefinementReady?.({
+          notes: data.all_notes || [],
+          chords: data.all_chords || [],
+          bpm: data.bpm || currentBpmRef.current,
+          bpmConfidence: data.bpm_confidence || 0,
+          version: data.refinement_version,
+        });
+      }
 
-        if (allNotesResponse.ok) {
-          const allData = await allNotesResponse.json();
-          onRefinementReady?.({
-            notes: allData.notes || [],
-            chords: allData.chords || [],
-            bpm: allData.bpm || currentBpm,
-            bpmConfidence: allData.bpm_confidence || 0,
-            version: allData.refinement_version || data.refinement_version,
-          });
+      if (nextPollDelayMs != null) {
+        if (pollTimeoutRef.current) {
+          clearTimeout(pollTimeoutRef.current);
         }
+        setIsPolling(true);
+        pollTimeoutRef.current = setTimeout(
+          () => {
+            pollTimeoutRef.current = null;
+            void pollForRefinements();
+          },
+          Math.max(250, nextPollDelayMs),
+        );
+      } else {
+        stopPolling();
       }
     } catch (error) {
       console.error("[LiveRhythm] Poll error:", error);
+      stopPolling();
     }
-  }, [sessionId, isActive, currentBpm, onBpmChange, onRefinementReady]);
+  }, [onBpmChange, onRefinementReady, stopPolling]);
+
+  const armRefinementPollingWindow = useCallback(
+    (nextPollDelayMs: number | null | undefined) => {
+      if (nextPollDelayMs == null) {
+        stopPolling();
+        return;
+      }
+
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
+      }
+
+      setIsPolling(true);
+      pollTimeoutRef.current = setTimeout(
+        () => {
+          pollTimeoutRef.current = null;
+          void pollForRefinements();
+        },
+        Math.max(250, nextPollDelayMs),
+      );
+      console.log("[LiveRhythm] Polling window armed", nextPollDelayMs);
+    },
+    [pollForRefinements, stopPolling],
+  );
+
+  const processNotes = useCallback(
+    async (notes: any[], chords: any[] = []) => {
+      const activeSessionId = sessionIdRef.current;
+      const activeBpm = currentBpmRef.current;
+
+      if (!activeSessionId) {
+        console.warn("[LiveRhythm] No active session");
+        return { coarseNotes: notes, bpm: activeBpm, needsRefresh: false };
+      }
+
+      try {
+        const response = await fetch(`${BACKEND_URL}/live/process`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: activeSessionId,
+            notes,
+            chords,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to process notes: ${response.status}`);
+        }
+
+        const data = await response.json();
+
+        if (data.bpm && data.bpm !== currentBpmRef.current) {
+          setCurrentBpm(data.bpm);
+          currentBpmRef.current = data.bpm;
+          onBpmChange?.(data.bpm, data.bpm_confidence || 0);
+        }
+
+        const hasNewRefinement =
+          data.needs_refresh &&
+          data.refinement_version > lastVersionRef.current;
+
+        if (data.refinement_version > lastVersionRef.current) {
+          lastVersionRef.current = data.refinement_version;
+          setVersion(data.refinement_version);
+        }
+
+        if (hasNewRefinement && data.all_notes) {
+          onRefinementReady?.({
+            notes: data.all_notes || [],
+            chords: data.all_chords || [],
+            bpm: data.bpm || currentBpmRef.current,
+            bpmConfidence: data.bpm_confidence || 0,
+            version: data.refinement_version,
+          });
+        }
+
+        armRefinementPollingWindow(data.next_refinement_poll_ms);
+
+        return {
+          coarseNotes: data.coarse_notes || notes,
+          bpm: data.bpm || currentBpmRef.current,
+          needsRefresh: data.needs_refresh || false,
+        };
+      } catch (error) {
+        console.error("[LiveRhythm] Failed to process notes:", error);
+        return {
+          coarseNotes: notes,
+          bpm: currentBpmRef.current,
+          needsRefresh: false,
+        };
+      }
+    },
+    [armRefinementPollingWindow, onBpmChange, onRefinementReady],
+  );
+
+  const processAudioChunk = useCallback(
+    async (fileUri: string, options: LiveAudioChunkOptions = {}) => {
+      const activeSessionId = sessionIdRef.current;
+      const activeBpm = currentBpmRef.current;
+
+      if (!activeSessionId) {
+        console.warn("[LiveRhythm] No active session");
+        return {
+          coarseNotes: [],
+          coarseChords: [],
+          bpm: activeBpm,
+          needsRefresh: false,
+          onsets: [],
+        };
+      }
+
+      try {
+        const formData = new FormData();
+        const useNeuralLive = options.useNeuralLive ?? true;
+        // @ts-ignore React Native FormData supports file objects
+        formData.append("file", {
+          uri: fileUri,
+          type: "audio/wav",
+          name: "chunk.wav",
+        });
+        formData.append("session_id", activeSessionId);
+        formData.append("use_neural_live", useNeuralLive ? "true" : "false");
+        if (options.noiseProfile) {
+          formData.append("noise_profile", options.noiseProfile);
+        }
+
+        const response = await fetch(`${BACKEND_URL}/live/audio-chunk`, {
+          method: "POST",
+          body: formData,
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to process audio chunk: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const timing = data._timing_ms;
+
+        if (timing) {
+          const analysisPath =
+            timing.analysis_path ?? data.analysis_path ?? "unknown";
+          const neuralError =
+            timing.neural_error ??
+            data.neural_error ??
+            data.fallback_reason ??
+            data.stream_info?.neural_error;
+          const fallbackDiagnostic =
+            typeof analysisPath === "string" &&
+            analysisPath.endsWith("_fallback") &&
+            !neuralError
+              ? "backend response is missing neural_error; likely stale backend deploy"
+              : undefined;
+
+          console.log("[LiveRhythm] Chunk latency", {
+            analysisPath,
+            totalMs: timing.chunk_total,
+            inferenceMs: timing.chunk_inference,
+            neuralTotalMs: timing.neural_total,
+            modelInferenceMs: timing.neural_model_inference,
+            neuralError,
+            fallbackDiagnostic,
+            realTimeFactor: timing.real_time_factor,
+          });
+        }
+
+        if (data.bpm && data.bpm !== currentBpmRef.current) {
+          setCurrentBpm(data.bpm);
+          currentBpmRef.current = data.bpm;
+          onBpmChange?.(data.bpm, data.bpm_confidence || 0);
+        }
+
+        const hasNewRefinement =
+          data.needs_refresh &&
+          data.refinement_version > lastVersionRef.current;
+
+        if (data.refinement_version > lastVersionRef.current) {
+          lastVersionRef.current = data.refinement_version;
+          setVersion(data.refinement_version);
+        }
+
+        if (hasNewRefinement && data.all_notes) {
+          onRefinementReady?.({
+            notes: data.all_notes || [],
+            chords: data.all_chords || [],
+            bpm: data.bpm || currentBpmRef.current,
+            bpmConfidence: data.bpm_confidence || 0,
+            version: data.refinement_version,
+          });
+        }
+
+        armRefinementPollingWindow(data.next_refinement_poll_ms);
+
+        return {
+          coarseNotes: data.notes || [],
+          coarseChords: data.chords || [],
+          bpm: data.bpm || currentBpmRef.current,
+          needsRefresh: data.needs_refresh || false,
+          onsets: data.onsets || [],
+        };
+      } catch (error) {
+        console.error("[LiveRhythm] Failed to process audio chunk:", error);
+        return {
+          coarseNotes: [],
+          coarseChords: [],
+          bpm: currentBpmRef.current,
+          needsRefresh: false,
+          onsets: [],
+        };
+      }
+    },
+    [armRefinementPollingWindow, onBpmChange, onRefinementReady],
+  );
 
   // Start polling
   const startPolling = useCallback(() => {
-    if (pollIntervalRef.current) return;
+    if (pollTimeoutRef.current) {
+      clearTimeout(pollTimeoutRef.current);
+    }
 
     setIsPolling(true);
-    pollIntervalRef.current = setInterval(pollForRefinements, pollIntervalMs);
+    pollTimeoutRef.current = setTimeout(
+      () => {
+        pollTimeoutRef.current = null;
+        void pollForRefinements();
+      },
+      Math.max(250, pollIntervalMs),
+    );
     console.log("[LiveRhythm] Polling started");
   }, [pollForRefinements, pollIntervalMs]);
-
-  // Stop polling
-  const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current);
-      pollIntervalRef.current = null;
-    }
-    setIsPolling(false);
-    console.log("[LiveRhythm] Polling stopped");
-  }, []);
 
   // Finalize session
   const finalizeSession =
@@ -256,6 +472,7 @@ export function useLiveRhythm(
 
       if (!sessionId) {
         return {
+          onsets: [],
           notes: [],
           chords: [],
           bpm: currentBpm,
@@ -268,7 +485,7 @@ export function useLiveRhythm(
         const response = await fetch(`${BACKEND_URL}/live/finalize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId }),
+          body: JSON.stringify({ session_id: sessionIdRef.current }),
         });
 
         if (!response.ok) {
@@ -278,9 +495,10 @@ export function useLiveRhythm(
         const data = await response.json();
 
         const result: LiveRefinementResult = {
+          onsets: data.onsets || [],
           notes: data.notes || [],
           chords: data.chords || [],
-          bpm: data.bpm || currentBpm,
+          bpm: data.bpm || currentBpmRef.current,
           bpmConfidence: data.bpm_confidence || 0,
           version: data.refinement_version || version,
         };
@@ -298,55 +516,53 @@ export function useLiveRhythm(
       } catch (error) {
         console.error("[LiveRhythm] Failed to finalize session:", error);
         return {
+          onsets: [],
           notes: [],
           chords: [],
-          bpm: currentBpm,
+          bpm: currentBpmRef.current,
           bpmConfidence: 0,
           version,
         };
       }
-    }, [sessionId, currentBpm, version, stopPolling, onRefinementReady]);
+    }, [stopPolling, sessionId, currentBpm, version, onRefinementReady]);
 
   // Reset session
   const resetSession = useCallback(async () => {
     stopPolling();
 
-    if (sessionId) {
+    if (sessionIdRef.current) {
       try {
         await fetch(`${BACKEND_URL}/live/session/reset`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId }),
+          body: JSON.stringify({ session_id: sessionIdRef.current }),
         });
       } catch (error) {
         console.error("[LiveRhythm] Failed to reset session:", error);
       }
     }
 
+    setSessionId(null);
+    sessionIdRef.current = null;
     setIsActive(false);
+    isActiveRef.current = false;
     setVersion(0);
     lastVersionRef.current = 0;
     console.log("[LiveRhythm] Session reset");
-  }, [sessionId, stopPolling]);
-
-  // Auto-start polling when session becomes active
-  useEffect(() => {
-    if (isActive && !isPolling && sessionId) {
-      startPolling();
-    }
-  }, [isActive, isPolling, sessionId, startPolling]);
+  }, [stopPolling]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
+      if (pollTimeoutRef.current) {
+        clearTimeout(pollTimeoutRef.current);
       }
     };
   }, []);
 
   return {
     createSession,
+    processAudioChunk,
     processNotes,
     finalizeSession,
     resetSession,

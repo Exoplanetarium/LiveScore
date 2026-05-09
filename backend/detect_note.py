@@ -15,6 +15,7 @@ os.environ["OPENBLAS_CORETYPE"] = "HASWELL"
 
 #! DIAGNOSTICS
 import math
+from fractions import Fraction
 
 import librosa
 import noisereduce as nr
@@ -43,7 +44,9 @@ if USE_GPU:
         from gpu_ops import USE_GPU as _GPU_OPS_READY
         from gpu_ops import (fused_noise_reduce,
                              get_gpu_mel_baseline_transcriber,
+                             get_gpu_mel_baseline_transcriber_status,
                              get_gpu_rhythm_model, get_gpu_transcriber,
+                             get_gpu_transcriber_status,
                              get_gpu_transformer_model,
                              gpu_batch_multiband_gate, gpu_compute_stft_once,
                              gpu_cqt, gpu_extract_features,
@@ -70,6 +73,56 @@ NOTE_VALUES_LIST = [
     ('whole', 4.0), ('half', 2.0), ('quarter', 1.0),
     ('eighth', 0.5), ('16th', 0.25), ('32nd', 0.125),
 ]
+
+# ─── Fraction-based quantization table ───────────────────────────────────────
+# Maps musical beat fractions to (note_type, beats, dotted, is_triplet).
+# Used by fraction_quantize() for continuous, threshold-free note assignment.
+MUSICAL_FRACTIONS = {
+    Fraction(1, 8):  ('32nd',    0.125,  False, False),
+    Fraction(3, 16): ('32nd',    0.1875, True,  False),
+    Fraction(1, 6):  ('16th',    1/6,    False, True),   # 16th triplet
+    Fraction(1, 4):  ('16th',    0.25,   False, False),
+    Fraction(1, 3):  ('eighth',  1/3,    False, True),   # eighth triplet
+    Fraction(3, 8):  ('16th',    0.375,  True,  False),
+    Fraction(1, 2):  ('eighth',  0.5,    False, False),
+    Fraction(2, 3):  ('quarter', 2/3,    False, True),   # quarter triplet
+    Fraction(3, 4):  ('eighth',  0.75,   True,  False),
+    Fraction(1, 1):  ('quarter', 1.0,    False, False),
+    Fraction(4, 3):  ('half',    4/3,    False, True),   # half triplet
+    Fraction(3, 2):  ('quarter', 1.5,    True,  False),
+    Fraction(2, 1):  ('half',    2.0,    False, False),
+    Fraction(3, 1):  ('half',    3.0,    True,  False),
+    Fraction(4, 1):  ('whole',   4.0,    False, False),
+    Fraction(6, 1):  ('whole',   6.0,    True,  False),
+}
+
+# Pre-sorted list of (fraction_float, fraction_obj) for fast nearest-lookup
+_MUSICAL_FRAC_SORTED = sorted(
+    [(float(f), f) for f in MUSICAL_FRACTIONS.keys()],
+    key=lambda x: x[0]
+)
+_MUSICAL_FRAC_VALS = np.array([x[0] for x in _MUSICAL_FRAC_SORTED])
+_MUSICAL_FRAC_KEYS = [x[1] for x in _MUSICAL_FRAC_SORTED]
+
+
+def _normalize_ensemble_note_value(note_dict):
+    """Convert ensemble dotted names ('dotted_eighth') to standard name + dotted flag.
+
+    The ensemble model outputs names like 'dotted_eighth', 'dotted_quarter', etc.
+    but NOTE_VALUE_BEATS only has keys like 'eighth', 'quarter'. Without normalization,
+    every dotted prediction silently falls back to 1.0 (quarter note) via .get() default.
+    """
+    nv = note_dict.get('note_value', '')
+    if nv.startswith('dotted_'):
+        base = nv[7:]  # strip 'dotted_' prefix
+        note_dict['note_value'] = base
+        note_dict['dotted'] = True
+        note_dict['note_divisions'] = NOTE_VALUE_BEATS.get(base, 1.0) * 1.5
+    else:
+        note_dict['dotted'] = note_dict.get('dotted', False)
+        base_beats = NOTE_VALUE_BEATS.get(nv, 1.0)
+        note_dict['note_divisions'] = base_beats * 1.5 if note_dict['dotted'] else base_beats
+
 
 #* ─── ML Rhythm Model (lazy loaded) ───────────────────────────────────────────
 _rhythm_model = None
@@ -165,109 +218,153 @@ def frames_to_seconds(frames, sr, hop_length):
 def duration_to_note_value(duration_seconds, bpm=120, debug=False):
     """
     Convert duration in seconds to a note value based on tempo.
-    Supports: whole, half, quarter, eighth, 16th, 32nd notes and their dotted versions.
-    
-    Uses a "closest match" approach instead of fixed boundaries for better
-    accuracy at faster tempos where small timing errors matter more.
-    
+
+    Uses fraction-based quantization: converts beats to a rational number
+    via Fraction.limit_denominator(), then maps to the nearest musical
+    note value. This is mathematically continuous — similar inputs always
+    produce similar outputs, eliminating threshold cliff-edge artifacts.
+
+    Falls back to log-distance matching for values outside the fraction table.
+
     Args:
         duration_seconds: Duration of the note in seconds
         bpm: Beats per minute (default 120)
         debug: Print debug info for this quantization
-    
+
     Returns:
-        dict with 'type' (MusicXML note type), 'divisions' (duration in divisions),
-        'beats' (duration in beats), 'dotted' (boolean), and 'raw_beats' (original)
+        dict with 'type', 'divisions', 'beats', 'dotted', 'is_triplet',
+        'raw_beats', 'quantization_error'
     """
-    # Calculate beat duration in seconds
-    beat_duration = 60.0 / bpm  # Duration of one quarter note
-    
-    # Calculate how many beats this note is
+    beat_duration = 60.0 / bpm
     beats = duration_seconds / beat_duration
-    
-    # All possible note values in beats (type, beats, dotted, is_triplet)
-    # Listed from longest to shortest
-    # Includes triplets for better tempo detection
-    note_values = [
-        ('whole', 6.0, True, False),      # Dotted whole
-        ('whole', 4.0, False, False),     # Whole
-        ('half', 3.0, True, False),       # Dotted half
-        ('half', 2.67, False, True),      # Half triplet (2/3 of dotted half)
-        ('half', 2.0, False, False),      # Half
-        ('quarter', 1.5, True, False),    # Dotted quarter
-        ('quarter', 1.33, False, True),   # Quarter triplet
-        ('quarter', 1.0, False, False),   # Quarter
-        ('eighth', 0.75, True, False),    # Dotted eighth
-        ('eighth', 0.67, False, True),    # Eighth triplet (2/3 of quarter)
-        ('eighth', 0.5, False, False),    # Eighth
-        ('16th', 0.375, True, False),     # Dotted 16th
-        ('16th', 0.33, False, True),      # 16th triplet (2/3 of eighth)
-        ('16th', 0.25, False, False),     # 16th
-        ('32nd', 0.1875, True, False),    # Dotted 32nd
-        ('32nd', 0.167, False, True),     # 32nd triplet
-        ('32nd', 0.125, False, False),    # 32nd
-    ]
-    
-    # Penalty factors: triplets and dotted notes should need stronger evidence
-    TRIPLET_PENALTY = 0.15   # Triplets must be 15% closer (in log distance) to win
-    DOTTED_PENALTY = 0.05    # Small penalty for dotted notes
-    
-    # Find the closest note value
-    best_match = None
-    best_distance = float('inf')
-    
-    for note_type, note_beats, dotted, is_triplet in note_values:
-        # Use logarithmic distance for better musical perception
-        # This makes the ratio more important than absolute difference
-        # e.g., 0.4 beats is closer to 0.5 (ratio 0.8) than to 0.25 (ratio 1.6)
-        if beats > 0 and note_beats > 0:
-            ratio = beats / note_beats
-            # Log distance: how many "doublings" away
-            log_distance = abs(math.log2(ratio))
-        else:
-            # Fallback to linear distance
-            log_distance = abs(beats - note_beats)
-        
-        # Apply penalties for less common note values
-        if is_triplet:
-            log_distance += TRIPLET_PENALTY
-        if dotted:
-            log_distance += DOTTED_PENALTY
-        
-        if log_distance < best_distance:
-            best_distance = log_distance
-            best_match = (note_type, note_beats, dotted, is_triplet)
-    
-    if best_match:
-        note_type, note_beats, dotted, is_triplet = best_match
-        
+
+    # Clamp to valid range
+    beats = max(0.0625, min(beats, 8.0))
+
+    # ── Primary: fraction-based lookup ──
+    # Find nearest musical fraction using vectorized distance
+    idx = np.argmin(np.abs(_MUSICAL_FRAC_VALS - beats))
+    nearest_frac = _MUSICAL_FRAC_KEYS[idx]
+    nearest_val = float(nearest_frac)
+
+    # Check if the fraction match is close enough (within ~40% log-distance)
+    if nearest_val > 0 and beats > 0:
+        log_dist = abs(math.log2(beats / nearest_val))
+    else:
+        log_dist = abs(beats - nearest_val)
+
+    if log_dist < 0.5 and nearest_frac in MUSICAL_FRACTIONS:
+        note_type, note_beats, dotted, is_triplet = MUSICAL_FRACTIONS[nearest_frac]
+
+        # Apply penalties: if a non-triplet/non-dotted candidate is almost as close,
+        # prefer it (same penalty logic as before)
+        if is_triplet or dotted:
+            penalized_dist = log_dist + (0.15 if is_triplet else 0.05)
+            # Check if a simpler candidate is within range
+            for j in range(max(0, idx - 2), min(len(_MUSICAL_FRAC_KEYS), idx + 3)):
+                alt_frac = _MUSICAL_FRAC_KEYS[j]
+                if alt_frac == nearest_frac:
+                    continue
+                alt_info = MUSICAL_FRACTIONS.get(alt_frac)
+                if alt_info and not alt_info[2] and not alt_info[3]:  # not dotted, not triplet
+                    alt_val = float(alt_frac)
+                    alt_dist = abs(math.log2(beats / alt_val)) if alt_val > 0 else 999
+                    if alt_dist < penalized_dist:
+                        note_type, note_beats, dotted, is_triplet = alt_info
+                        nearest_val = alt_val
+                        break
+
+        q_error = abs(beats - note_beats) / note_beats if note_beats > 0 else 0
+
         if debug:
             margin_ms = abs(beats - note_beats) * beat_duration * 1000
             triplet_str = "triplet " if is_triplet else ""
             dotted_str = "dotted " if dotted else ""
             print(f"[Duration] {duration_seconds*1000:.1f}ms = {beats:.4f} beats @ {bpm} BPM "
                   f"-> {dotted_str}{triplet_str}{note_type} ({note_beats} beats, "
-                  f"margin: {margin_ms:.1f}ms)")
-        
+                  f"margin: {margin_ms:.1f}ms) [fraction]")
+
         return {
             'type': note_type,
             'divisions': note_beats,
             'beats': note_beats,
             'dotted': dotted,
             'is_triplet': is_triplet,
-            'raw_beats': beats,  # Include original for debugging
-            'quantization_error': abs(beats - note_beats) / note_beats if note_beats > 0 else 0
+            'raw_beats': beats,
+            'quantization_error': q_error,
         }
-    
-    # Fallback to 32nd note for very short durations
+
+    # ── Fallback: log-distance matching for edge cases ──
+    note_values = [
+        ('whole', 6.0, True, False),
+        ('whole', 4.0, False, False),
+        ('half', 3.0, True, False),
+        ('half', 4/3, False, True),
+        ('half', 2.0, False, False),
+        ('quarter', 1.5, True, False),
+        ('quarter', 2/3, False, True),
+        ('quarter', 1.0, False, False),
+        ('eighth', 0.75, True, False),
+        ('eighth', 1/3, False, True),
+        ('eighth', 0.5, False, False),
+        ('16th', 0.375, True, False),
+        ('16th', 1/6, False, True),
+        ('16th', 0.25, False, False),
+        ('32nd', 0.1875, True, False),
+        ('32nd', 1/12, False, True),
+        ('32nd', 0.125, False, False),
+    ]
+
+    TRIPLET_PENALTY = 0.15
+    DOTTED_PENALTY = 0.05
+
+    best_match = None
+    best_distance = float('inf')
+
+    for note_type, note_beats, dotted, is_triplet in note_values:
+        if beats > 0 and note_beats > 0:
+            log_distance = abs(math.log2(beats / note_beats))
+        else:
+            log_distance = abs(beats - note_beats)
+
+        if is_triplet:
+            log_distance += TRIPLET_PENALTY
+        if dotted:
+            log_distance += DOTTED_PENALTY
+
+        if log_distance < best_distance:
+            best_distance = log_distance
+            best_match = (note_type, note_beats, dotted, is_triplet)
+
+    if best_match:
+        note_type, note_beats, dotted, is_triplet = best_match
+
+        if debug:
+            margin_ms = abs(beats - note_beats) * beat_duration * 1000
+            triplet_str = "triplet " if is_triplet else ""
+            dotted_str = "dotted " if dotted else ""
+            print(f"[Duration] {duration_seconds*1000:.1f}ms = {beats:.4f} beats @ {bpm} BPM "
+                  f"-> {dotted_str}{triplet_str}{note_type} ({note_beats} beats, "
+                  f"margin: {margin_ms:.1f}ms) [fallback]")
+
+        return {
+            'type': note_type,
+            'divisions': note_beats,
+            'beats': note_beats,
+            'dotted': dotted,
+            'is_triplet': is_triplet,
+            'raw_beats': beats,
+            'quantization_error': abs(beats - note_beats) / note_beats if note_beats > 0 else 0,
+        }
+
     return {
-        'type': '32nd', 
-        'divisions': 0.125, 
-        'beats': 0.125, 
+        'type': '32nd',
+        'divisions': 0.125,
+        'beats': 0.125,
         'dotted': False,
         'is_triplet': False,
         'raw_beats': beats,
-        'quantization_error': abs(beats - 0.125) / 0.125
+        'quantization_error': abs(beats - 0.125) / 0.125,
     }
 
 
@@ -655,6 +752,207 @@ def detect_ornaments(notes, bpm, debug=False):
     return result
 
 
+def enforce_bar_sum(notes, bpm, beats_per_bar=4.0, debug=False):
+    """
+    Adjust note values so each bar sums to exactly beats_per_bar using ILP.
+
+    For each bar, formulates a small integer linear program:
+      - Each non-triplet note can be assigned any value from the LADDER
+      - Objective: minimize total cost (weighted deviation from current value)
+      - Constraint: sum of chosen values == beats_per_bar
+
+    Falls back to greedy single-step adjustment if scipy ILP fails or if the
+    bar has too few adjustable notes.
+
+    Args:
+        notes:         List of note dicts (must already have 'note_value',
+                       'dotted', 'time_seconds', and ideally 'quantization_error').
+        bpm:           Current tempo.
+        beats_per_bar: How many quarter-note beats fill one bar (default 4.0).
+        debug:         Print per-bar adjustment info.
+
+    Returns:
+        The same list, modified in place, with note values adjusted.
+    """
+    if len(notes) < 2 or beats_per_bar <= 0:
+        return notes
+
+    from scipy.optimize import linprog
+    from scipy.sparse import eye as speye
+
+    beat_duration = 60.0 / bpm
+
+    LADDER = [
+        ('32nd',    0.125,  False),
+        ('32nd',    0.1875, True),
+        ('16th',    0.25,   False),
+        ('16th',    0.375,  True),
+        ('eighth',  0.5,    False),
+        ('eighth',  0.75,   True),
+        ('quarter', 1.0,    False),
+        ('quarter', 1.5,    True),
+        ('half',    2.0,    False),
+        ('half',    3.0,    True),
+        ('whole',   4.0,    False),
+        ('whole',   6.0,    True),
+    ]
+    LADDER_BEATS = np.array([b for (_, b, _) in LADDER])
+    N_LADDER = len(LADDER)
+
+    def _note_beats(n):
+        base = NOTE_VALUE_BEATS.get(n.get('note_value', 'quarter'), 1.0)
+        if n.get('dotted', False):
+            base *= 1.5
+        return base
+
+    def _ladder_index(n):
+        nv = n.get('note_value', 'quarter')
+        dot = n.get('dotted', False)
+        for idx, (lt, _, ld) in enumerate(LADDER):
+            if lt == nv and ld == dot:
+                return idx
+        return -1
+
+    def _set_from_ladder(n, idx):
+        lt, lb, ld = LADDER[idx]
+        n['note_value'] = lt
+        n['dotted'] = ld
+        n['note_divisions'] = lb
+
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+    first_onset = sorted_notes[0].get('time_seconds', 0.0)
+
+    # Assign each note to a bar
+    bars = {}
+    for i, n in enumerate(sorted_notes):
+        onset = n.get('time_seconds', 0.0) - first_onset
+        bar_idx = int(onset / (beats_per_bar * beat_duration))
+        bars.setdefault(bar_idx, []).append(i)
+
+    tol = beats_per_bar * 0.015
+    adjustments = 0
+
+    for bar_idx in sorted(bars):
+        indices = bars[bar_idx]
+        bar_total = sum(_note_beats(sorted_notes[i]) for i in indices)
+        has_rest = any(sorted_notes[i].get('has_rest_after', False) for i in indices)
+        deficit = beats_per_bar - bar_total
+
+        if abs(deficit) <= tol:
+            continue
+        # Only fix under-fill if no rests present
+        if deficit > tol and has_rest:
+            continue
+
+        # Collect adjustable notes (skip triplets, grace notes)
+        adjustable = []
+        fixed_beats = 0.0
+        for i in indices:
+            n = sorted_notes[i]
+            if n.get('is_triplet', False) or n.get('note_value') == 'grace':
+                fixed_beats += _note_beats(n)
+                continue
+            li = _ladder_index(n)
+            if li < 0:
+                fixed_beats += _note_beats(n)
+                continue
+            adjustable.append((i, li, n.get('quantization_error', 0.5)))
+
+        if not adjustable:
+            continue
+
+        target = beats_per_bar - fixed_beats
+        if target <= 0:
+            continue
+
+        K = len(adjustable)
+
+        # ── ILP formulation ──
+        # For each adjustable note k, we have N_LADDER binary variables x[k,j]
+        # indicating "note k is assigned ladder position j".
+        # Total variables: K * N_LADDER
+        # Constraint 1: for each k, sum_j x[k,j] = 1 (pick exactly one)
+        # Constraint 2: sum_k sum_j LADDER_BEATS[j] * x[k,j] = target
+        # Objective: minimize sum_k sum_j cost[k,j] * x[k,j]
+        #   where cost[k,j] = |LADDER_BEATS[j] - LADDER_BEATS[current_j]| * (1 + q_error)
+
+        n_vars = K * N_LADDER
+
+        # Build cost vector
+        c = np.zeros(n_vars)
+        for k, (ni, cur_li, q_err) in enumerate(adjustable):
+            cur_beats = LADDER_BEATS[cur_li]
+            weight = 1.0 + q_err  # higher q_error = cheaper to adjust
+            for j in range(N_LADDER):
+                c[k * N_LADDER + j] = abs(LADDER_BEATS[j] - cur_beats) / weight
+
+        # Equality constraints: A_eq @ x = b_eq
+        # K "pick one" constraints + 1 "sum to target" constraint
+        n_eq = K + 1
+        A_eq = np.zeros((n_eq, n_vars))
+        b_eq = np.zeros(n_eq)
+
+        # Pick-one constraints
+        for k in range(K):
+            A_eq[k, k * N_LADDER:(k + 1) * N_LADDER] = 1.0
+            b_eq[k] = 1.0
+
+        # Sum-to-target constraint
+        for k in range(K):
+            for j in range(N_LADDER):
+                A_eq[K, k * N_LADDER + j] = LADDER_BEATS[j]
+        b_eq[K] = target
+
+        # Bounds: 0 <= x <= 1 (relaxed LP; round to nearest integer)
+        bounds = [(0, 1)] * n_vars
+
+        try:
+            result = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+
+            if result.success:
+                x = result.x
+                for k, (ni, cur_li, _) in enumerate(adjustable):
+                    chosen_j = np.argmax(x[k * N_LADDER:(k + 1) * N_LADDER])
+                    if chosen_j != cur_li:
+                        _set_from_ladder(sorted_notes[ni], chosen_j)
+                        adjustments += 1
+                        if debug:
+                            print(f"[BarSum ILP] bar {bar_idx}: note {ni} "
+                                  f"{LADDER[cur_li][0]}->{LADDER[chosen_j][0]}")
+                continue
+        except Exception:
+            pass
+
+        # ── Greedy fallback ──
+        adjustable.sort(key=lambda x: -x[2])  # worst confidence first
+        remaining = deficit
+        for ni, li, _ in adjustable:
+            if abs(remaining) <= tol:
+                break
+            n = sorted_notes[ni]
+            cur_beats = LADDER_BEATS[li]
+            if remaining > 0 and li < N_LADDER - 1:
+                new_beats = LADDER_BEATS[li + 1]
+                gain = new_beats - cur_beats
+                if gain <= remaining + tol:
+                    _set_from_ladder(n, li + 1)
+                    remaining -= gain
+                    adjustments += 1
+            elif remaining < 0 and li > 0:
+                new_beats = LADDER_BEATS[li - 1]
+                loss = cur_beats - new_beats
+                if loss <= -remaining + tol:
+                    _set_from_ladder(n, li - 1)
+                    remaining += loss
+                    adjustments += 1
+
+    if debug and adjustments:
+        print(f"[BarSum ILP] adjusted {adjustments} notes across {len(bars)} bars "
+              f"(time_sig={beats_per_bar} beats/bar)")
+
+    return notes
+
+
 def post_process_rhythm_unified(notes, bpm, debug=False):
     """
     Unified single-pass rhythm post-processing.
@@ -833,15 +1131,26 @@ def post_process_rhythm_unified(notes, bpm, debug=False):
         # ── Step A: Run normalization (outlier notes in runs) ──
         # Skip notes with deliberate rests — their shorter value is intentional
         if i in run_targets and not note.get('has_rest_after', False):
-            target_type, target_beats, target_dotted = run_targets[i]
-            if note.get('note_value') != target_type or note.get('dotted', False) != target_dotted:
-                note['note_value'] = target_type
-                note['note_divisions'] = target_beats
-                note['dotted'] = target_dotted
-                note['is_triplet'] = False
-                note['run_normalized'] = True
-                note_beats = target_beats
-                run_normalizations += 1
+            # Preserve pre-tagged run notes and high-confidence ensemble predictions
+            if note.get('quantization_method') == 'run_tagged':
+                pass  # pre-quantization run tag takes priority
+            elif note.get('quantization_method') == 'ensemble_kept' \
+               and note.get('quantization_confidence', 0) >= 0.60:
+                pass  # keep ensemble prediction
+            else:
+                target_type, target_beats, target_dotted = run_targets[i]
+                if note.get('note_value') != target_type or note.get('dotted', False) != target_dotted:
+                    note['note_value'] = target_type
+                    note['note_divisions'] = target_beats
+                    note['dotted'] = target_dotted
+                    note['is_triplet'] = False
+                    note['triplet'] = False
+                    note.pop('triplet_position', None)
+                    note.pop('actual_notes', None)
+                    note.pop('normal_notes', None)
+                    note['run_normalized'] = True
+                    note_beats = target_beats
+                    run_normalizations += 1
 
         # ── Step B: Gap analysis (fill, extend, or rest) ──
         if i >= n_notes - 1:
@@ -869,6 +1178,11 @@ def post_process_rhythm_unified(notes, bpm, debug=False):
         # B4: If already marked as rest, keep it — deliberate rest assignments
         # should not be undone by gap filling. Only override if gap is tiny (B1).
         if note.get('has_rest_after', False):
+            continue
+
+        # B4.5: Don't extend ensemble-predicted notes to fill gaps
+        if note.get('quantization_method') == 'ensemble_kept' \
+           and note.get('quantization_confidence', 0) >= 0.60:
             continue
 
         # B5: Within fillable range — try to extend note
@@ -902,7 +1216,8 @@ def post_process_rhythm_unified(notes, bpm, debug=False):
                 continue
 
         # B6: Medium gap, not an outlier — still try to extend by re-quantizing IOI
-        if not is_outlier:
+        # But don't override pre-tagged run notes — their value is already correct
+        if not is_outlier and note.get('quantization_method') != 'run_tagged':
             ioi_val = duration_to_note_value(ioi, bpm=bpm, debug=False)
             ioi_error = ioi_val.get('quantization_error', 1.0)
             if ioi_error < 0.35:
@@ -1102,6 +1417,10 @@ def detect_and_normalize_runs(notes, bpm, debug=False):
                 note['note_divisions'] = final_beats
                 note['dotted'] = final_dotted
                 note['is_triplet'] = False  # Runs are usually not triplets unless detected
+                note['triplet'] = False
+                note.pop('triplet_position', None)
+                note.pop('actual_notes', None)
+                note.pop('normal_notes', None)
                 note['run_normalized'] = True
     
     return sorted_notes
@@ -1214,10 +1533,13 @@ def cross_validate_with_acoustic_duration(notes, bpm, debug=False):
         acoustic_beats = acoustic_dur / beat_duration
 
         # Skip grace notes or notes already marked with acoustic method
-        if note.get('is_grace_note', False):
+        if note.get('ornament') == 'grace':
             continue
         method = note.get('quantization_method', '')
         if 'acoustic' in method:
+            continue
+        # Don't second-guess high-confidence ensemble predictions or run-tagged notes
+        if method == 'ensemble_kept' or method == 'run_tagged':
             continue
 
         # Check: does the acoustic duration justify the assigned note value?
@@ -1252,32 +1574,250 @@ def cross_validate_with_acoustic_duration(notes, bpm, debug=False):
     return sorted_notes
 
 
+def tag_runs_pre_quantization(notes, bpm, debug=False):
+    """
+    Pre-quantization run detection: tag consecutive fast notes that should
+    share a single note value.
+
+    Runs through sorted notes once, grouping those with similar IOIs
+    (within 30% of each other). When 3+ consecutive notes form a run,
+    computes the median IOI, maps it to a note value, and tags every note
+    in the run with 'run_note_value' / 'run_note_divisions' / 'run_dotted'.
+
+    The quantizer can then use these tags directly instead of quantizing
+    each note independently (which produces a noisy mix of 16ths and 32nds
+    for what should be uniform sixteenths).
+
+    Runs in O(n) — single pass, no allocations beyond the tag fields.
+    """
+    if len(notes) < 3:
+        return notes
+
+    beat_duration = 60.0 / bpm
+    sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+
+    # Compute IOIs
+    times = [n.get('time_seconds', 0) for n in sorted_notes]
+    n = len(times)
+
+    # Maximum IOI to consider "fast" — anything above a quarter note is not a run
+    max_run_ioi = beat_duration * 1.1  # slightly above quarter note
+
+    # Detect runs: groups of 8+ notes with similar IOIs
+    # We allow 30% deviation between consecutive IOIs
+    SIMILARITY = 0.30
+    MIN_RUN_LEN = 8
+
+    run_start = 0
+    run_iois = []
+
+    def finalize_run(start, end, iois):
+        """Tag notes [start, end) with the run's median note value."""
+        if end - start < MIN_RUN_LEN:
+            return
+        median_ioi = float(np.median(iois))
+        if median_ioi > max_run_ioi or median_ioi < beat_duration * 0.04:
+            return  # not a fast run, or impossibly fast
+
+        note_val = duration_to_note_value(median_ioi, bpm=bpm, debug=False)
+        run_type = note_val['type']
+        run_beats = note_val['beats']
+        run_dotted = note_val.get('dotted', False)
+
+        if debug:
+            print(f"  [Run] notes [{start}:{end}] ({end-start} notes), "
+                  f"median IOI={median_ioi*1000:.0f}ms -> {run_type}"
+                  f"{'.' if run_dotted else ''}")
+
+        for j in range(start, end):
+            sorted_notes[j]['run_note_value'] = run_type
+            sorted_notes[j]['run_note_divisions'] = run_beats
+            sorted_notes[j]['run_dotted'] = run_dotted
+
+    for i in range(n - 1):
+        ioi = times[i + 1] - times[i]
+
+        if ioi > max_run_ioi or ioi < 0.01:
+            # Break: this gap is too large or negative
+            finalize_run(run_start, i + 1, run_iois)
+            run_start = i + 1
+            run_iois = []
+            continue
+
+        if run_iois:
+            prev_ioi = run_iois[-1]
+            if prev_ioi > 0:
+                ratio = ioi / prev_ioi
+                if not (1.0 - SIMILARITY <= ratio <= 1.0 + SIMILARITY):
+                    # IOI changed too much — finalize current run
+                    finalize_run(run_start, i + 1, run_iois)
+                    run_start = i
+                    run_iois = [ioi]
+                    continue
+
+        run_iois.append(ioi)
+
+    # Finalize last run (include last note)
+    finalize_run(run_start, n, run_iois)
+
+    return sorted_notes
+
+
+def time_to_local_beat(time_seconds, beat_times):
+    """Map a wall-clock time to a fractional beat index on a non-uniform beat grid."""
+    beat_times = np.asarray(beat_times, dtype=float)
+    if len(beat_times) < 2:
+        return 0.0
+
+    if time_seconds <= beat_times[0]:
+        interval = max(beat_times[1] - beat_times[0], 1e-6)
+        return (time_seconds - beat_times[0]) / interval
+
+    idx = np.searchsorted(beat_times, time_seconds, side='right') - 1
+    if idx >= len(beat_times) - 1:
+        interval = max(beat_times[-1] - beat_times[-2], 1e-6)
+        return (len(beat_times) - 1) + ((time_seconds - beat_times[-1]) / interval)
+
+    interval = max(beat_times[idx + 1] - beat_times[idx], 1e-6)
+    return idx + ((time_seconds - beat_times[idx]) / interval)
+
+
+def local_beat_duration_at(time_seconds, beat_times, fallback=None):
+    """Estimate the local beat duration near a wall-clock time."""
+    beat_times = np.asarray(beat_times, dtype=float)
+    if len(beat_times) < 2:
+        return fallback if fallback is not None else 0.5
+
+    if time_seconds <= beat_times[0]:
+        return max(beat_times[1] - beat_times[0], 1e-6)
+
+    idx = np.searchsorted(beat_times, time_seconds, side='right') - 1
+    if idx >= len(beat_times) - 1:
+        return max(beat_times[-1] - beat_times[-2], 1e-6)
+
+    return max(beat_times[idx + 1] - beat_times[idx], 1e-6)
+
+
+def build_regularized_local_beat_grid(detected_beats, fallback_beats, target_beat_interval,
+                                      confidence=0.0, debug=False):
+    """Regularize detected beats into a smooth local tempo curve for quantization."""
+    fallback_beats = np.asarray(fallback_beats, dtype=float)
+    detected_beats = np.asarray(detected_beats, dtype=float)
+
+    if len(detected_beats) < 2:
+        return fallback_beats
+    if len(fallback_beats) < 2:
+        return detected_beats
+
+    detected_beats = np.unique(np.round(detected_beats, 6))
+    target_beat_interval = max(float(target_beat_interval), 1e-6)
+    raw_intervals = np.diff(detected_beats)
+    if len(raw_intervals) == 0:
+        return detected_beats
+
+    smoothed_intervals = []
+    for index in range(len(raw_intervals)):
+        lo = max(0, index - 1)
+        hi = min(len(raw_intervals), index + 2)
+        local_median = float(np.median(raw_intervals[lo:hi]))
+        blended = 0.75 * local_median + 0.25 * target_beat_interval
+        blended = min(max(blended, target_beat_interval * 0.6), target_beat_interval * 1.6)
+        smoothed_intervals.append(blended)
+
+    regularized = [float(detected_beats[0])]
+    for interval in smoothed_intervals:
+        regularized.append(regularized[-1] + interval)
+    regularized = np.asarray(regularized, dtype=float)
+
+    detected_weight = min(max(0.35 + 0.45 * confidence, 0.35), 0.85)
+    if len(regularized) == len(detected_beats):
+        regularized = ((1.0 - detected_weight) * regularized) + (detected_weight * detected_beats)
+
+    min_interval = max(target_beat_interval * 0.25, 1e-3)
+    for index in range(1, len(regularized)):
+        if regularized[index] <= regularized[index - 1] + min_interval:
+            regularized[index] = regularized[index - 1] + min_interval
+
+    if fallback_beats[0] < regularized[0] - min_interval:
+        prefix = fallback_beats[fallback_beats < regularized[0] - min_interval]
+        regularized = np.concatenate([prefix, regularized])
+    if fallback_beats[-1] > regularized[-1] + min_interval:
+        suffix = fallback_beats[fallback_beats > regularized[-1] + min_interval]
+        regularized = np.concatenate([regularized, suffix])
+
+    if debug:
+        raw_std = float(np.std(raw_intervals)) if len(raw_intervals) > 1 else 0.0
+        reg_std = float(np.std(np.diff(regularized))) if len(regularized) > 2 else 0.0
+        print(f"[Local Tempo Curve] raw_std={raw_std*1000:.1f}ms, regularized_std={reg_std*1000:.1f}ms, beats={len(regularized)}")
+
+    return regularized
+
+
+def apply_backend_timing_authority(notes, chords, beat_times):
+    """Attach backend-authored beat positions so the renderer can avoid re-quantizing."""
+    if len(beat_times) < 2:
+        return
+
+    for event in notes + chords:
+        onset = event.get('time_seconds', 0.0)
+        start_beat = event.get('grid_start_beat_candidate')
+        if start_beat is None:
+            start_beat = time_to_local_beat(onset, beat_times)
+        start_beat = round(float(start_beat) * 24) / 24
+
+        note_beats = max(float(event.get('note_divisions', 0.0) or 0.0), 0.0)
+        event['start_beat'] = start_beat
+        event['end_beat'] = round((start_beat + note_beats) * 24) / 24
+        event['local_beat_duration'] = local_beat_duration_at(onset, beat_times)
+        if event.get('has_rest_after') and event.get('rest_duration'):
+            local_rest_beats = max(event['rest_duration'] / max(event['local_beat_duration'], 1e-6), 0.0)
+            event['rest_after_beats'] = round(local_rest_beats * 24) / 24
+        else:
+            event['rest_after_beats'] = 0.0
+        event['timing_authority'] = 'backend_local_beat_grid'
+
+
 def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=False):
     """
     Quantize note timings to a detected beat grid for more accurate rhythm.
-    
+
     KEY INSIGHT: In real notation, notes usually extend to the next note onset.
     Pianists release keys early, but the NOTATION shows longer durations.
     We use IOI (inter-onset interval) as the primary duration indicator,
     and only insert rests for truly significant gaps.
-    
+
+    Uses compensating quantization: tracks cumulative drift between quantized
+    beat positions and raw onset times, and biases quantization to reduce drift
+    when it exceeds a threshold (1/8 beat). Only compensates when it would
+    actually reduce drift — never pushes in the wrong direction.
+
     Args:
         notes: List of note dicts with 'time_seconds'
         beat_times: Array of beat times in seconds (from beat detection)
         bpm: Detected tempo in BPM
         subdivision_info: Global subdivision info (used as fallback)
         debug: Print debug info
-    
+
     Returns:
         Modified notes list with improved note_value assignments
     """
     if len(notes) == 0 or len(beat_times) < 2:
         return quantize_rhythm_from_ioi(notes, bpm, debug)
-    
+
     beat_duration = 60.0 / bpm
-    
+
     # Sort notes by time
     sorted_notes = sorted(notes, key=lambda n: n.get('time_seconds', 0))
+
+    # ── Compensating quantization state ──
+    # Tracks cumulative beat position from quantized durations vs. expected
+    # position from raw onset times. When drift exceeds DRIFT_THRESHOLD,
+    # we bias the effective_duration to pull it back.
+    cumulative_quantized_beats = time_to_local_beat(
+        sorted_notes[0].get('time_seconds', 0), beat_times
+    )
+    DRIFT_THRESHOLD = 0.125  # 1/8 beat — only compensate beyond this
+    DRIFT_MAX_CORRECTION = 0.25  # never adjust by more than 1/4 beat at once
     
     # Check global subdivision info
     global_uses_triplets = subdivision_info.get('uses_triplets', False) if subdivision_info else False
@@ -1289,18 +1829,31 @@ def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=F
     
     # Build grid from beat times
     grid_points = []
+    grid_beats = []
     for i in range(len(beat_times) - 1):
         beat_start = beat_times[i]
         beat_end = beat_times[i + 1]
         beat_len = beat_end - beat_start
         
         for subdiv in subdivisions:
-            points = np.arange(0, 1.0, subdiv) * beat_len + beat_start
-            grid_points.extend(points)
+            fractions = np.arange(0, 1.0, subdiv)
+            points = fractions * beat_len + beat_start
+            grid_points.extend(points.tolist())
+            grid_beats.extend((i + fractions).tolist())
     
     grid_points.append(beat_times[-1])
-    grid_points = np.unique(np.array(grid_points))
-    grid_points.sort()
+    grid_beats.append(float(len(beat_times) - 1))
+
+    ordered_pairs = sorted(zip(grid_points, grid_beats), key=lambda pair: pair[0])
+    deduped_points = []
+    deduped_beats = []
+    for point, beat_index in ordered_pairs:
+        if deduped_points and abs(point - deduped_points[-1]) < 1e-6:
+            continue
+        deduped_points.append(float(point))
+        deduped_beats.append(float(beat_index))
+    grid_points = np.array(deduped_points)
+    grid_beats = np.array(deduped_beats)
     
     if debug:
         print(f"[Grid Quantize] Built grid with {len(grid_points)} points from {len(beat_times)} beats")
@@ -1309,93 +1862,199 @@ def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=F
     for i, note in enumerate(sorted_notes):
         onset = note.get('time_seconds', 0)
         acoustic_duration = note.get('duration_seconds', 0.5)
-        
+        acoustic_offset = note.get('offset_seconds', onset + acoustic_duration)
+        if acoustic_offset <= onset:
+            acoustic_offset = onset + acoustic_duration
+
+        # ── Compute expected beat position from raw onset ──
+        expected_beat = time_to_local_beat(onset, beat_times)
+        note['onset_snap_error'] = abs(cumulative_quantized_beats - expected_beat)
+
+        # Snap onset to nearest local grid point and keep it for renderer authority.
+        grid_idx = int(np.argmin(np.abs(grid_points - onset)))
+        snapped_onset = float(grid_points[grid_idx])
+        snapped_beat = float(grid_beats[grid_idx])
+        note['snapped_onset_seconds'] = snapped_onset
+        note['grid_start_beat_candidate'] = round(snapped_beat * 24) / 24
+        note['local_beat_duration'] = local_beat_duration_at(onset, beat_times, beat_duration)
+
+        if i < len(sorted_notes) - 1:
+            next_onset = sorted_notes[i + 1].get('time_seconds', onset + acoustic_duration)
+            next_grid_idx = int(np.argmin(np.abs(grid_points - next_onset)))
+            next_snapped_beat = float(grid_beats[next_grid_idx])
+            onset_candidate_beats = max(next_snapped_beat - snapped_beat, 0.125)
+            ioi = next_onset - onset
+        else:
+            ioi = acoustic_duration
+            onset_candidate_beats = max(
+                time_to_local_beat(acoustic_offset, beat_times) - snapped_beat,
+                0.125,
+            )
+
+        acoustic_candidate_beats = max(
+            time_to_local_beat(acoustic_offset, beat_times) - snapped_beat,
+            acoustic_duration / max(note['local_beat_duration'], 1e-6),
+            0.125,
+        )
+
+        gap_beats = max(onset_candidate_beats - acoustic_candidate_beats, 0.0)
+        overlap_beats = max(acoustic_candidate_beats - onset_candidate_beats, 0.0)
+        sustain_ratio = acoustic_candidate_beats / max(onset_candidate_beats, 0.125)
+        rest_threshold_beats = max(0.25, 0.5 * (120.0 / bpm))
+        clear_rest_threshold_beats = max(rest_threshold_beats, 0.5)
+        rest_val = duration_to_note_value(gap_beats * beat_duration, bpm=bpm, debug=False)
+        rest_quantizes_cleanly = gap_beats > 0.001 and rest_val.get('quantization_error', 1.0) < 0.2
+
+        note['ioi_beats'] = onset_candidate_beats
+        note['acoustic_beats'] = acoustic_candidate_beats
+
+        # ── Preserve high-confidence ensemble predictions ──
+        ensemble_conf = note.get('note_value_confidence', 0)
+        has_ensemble_nv = (note.get('note_value_source') == 'ensemble'
+                           and 'note_value' in note)
+        # Save original ensemble values before grid snapping overwrites them
+        _saved_ensemble_nv = None
+        if has_ensemble_nv:
+            _saved_ensemble_nv = (
+                note.get('note_value'),
+                note.get('note_divisions', 1.0),
+                note.get('dotted', False),
+            )
+        if has_ensemble_nv and ensemble_conf >= 0.60 and 'run_note_value' not in note:
+            if note.get('note_divisions', 1.0) > onset_candidate_beats + (1 / 48):
+                capped_val = duration_to_note_value_contextual(
+                    onset_candidate_beats * beat_duration,
+                    bpm=bpm,
+                    subdivision_info=subdivision_info or {},
+                    debug=False,
+                )
+                note['note_value'] = capped_val['type']
+                note['note_divisions'] = capped_val['divisions']
+                note['dotted'] = capped_val.get('dotted', False)
+                note['is_triplet'] = capped_val.get('is_triplet', False)
+                note['quantization_method'] = 'ensemble_capped_to_onset'
+            else:
+                note['quantization_method'] = 'ensemble_kept'
+            note['quantization_confidence'] = ensemble_conf
+            note['duration_source'] = 'ensemble'
+            # note_divisions and dotted already set by _normalize_ensemble_note_value
+            # Still determine has_rest_after from IOI analysis
+            note['has_rest_after'] = (
+                gap_beats >= clear_rest_threshold_beats
+                and sustain_ratio < 0.55
+                and rest_quantizes_cleanly
+            )
+            if note['has_rest_after']:
+                note['rest_duration'] = max(
+                    (onset_candidate_beats - note.get('note_divisions', 1.0)) * beat_duration,
+                    0.0,
+                )
+            else:
+                note.pop('rest_duration', None)
+            # Advance cumulative beat position for drift tracking
+            cumulative_quantized_beats += note.get('note_divisions', 1.0)
+            if note.get('has_rest_after') and note.get('rest_duration'):
+                rest_beats = round(note['rest_duration'] / beat_duration * 8) / 8
+                cumulative_quantized_beats += rest_beats
+            if debug and i < 10:
+                print(f"  Note {i}: ensemble_kept {note['note_value']}"
+                      f"{' (dotted)' if note.get('dotted') else ''}"
+                      f" conf={ensemble_conf:.2f}")
+            continue  # skip grid snapping for this note
+
         # Get LOCAL subdivision context
         local_subdiv_info = get_local_subdivision_info(sorted_notes, i, bpm, window_notes=20)
         
-        # Snap to nearest grid point
-        grid_idx = np.argmin(np.abs(grid_points - onset))
-        snapped_onset = grid_points[grid_idx]
-        
-        # Calculate IOI (time to next note)
-        if i < len(sorted_notes) - 1:
-            next_onset = sorted_notes[i + 1].get('time_seconds', onset + acoustic_duration)
-            ioi = next_onset - onset
-            
-            # Snap next onset to grid too
-            next_grid_idx = np.argmin(np.abs(grid_points - next_onset))
-            next_snapped = grid_points[next_grid_idx]
-            grid_ioi = next_snapped - snapped_onset
-        else:
-            # Last note - use acoustic duration
-            ioi = acoustic_duration
-            grid_ioi = acoustic_duration
-        
-        # CORE LOGIC: Use IOI as the notated duration UNLESS there's a clear rest
-        # A "clear rest" is when the acoustic duration is MUCH shorter than IOI
-        # AND the gap is at least one beat subdivision
-        
-        gap = ioi - acoustic_duration
-        gap_beats = gap / beat_duration
-        
-        # Only consider it a rest if:
-        # 1. Gap is significant relative to tempo - prevents stuttering rests
-        # 2. Acoustic duration is less than 65% of IOI (note not truly sustained)
-        # 3. The resulting note value would be a "normal" subdivision
-        # Rationale: Piano notes naturally sustain to ~85-95% of their full duration
-        # when truly held. Notes sustaining < 65% of IOI likely have a rest after.
-        # Tempo-relative rest threshold: at least a quarter beat, scaled to tempo
-        rest_threshold_beats = max(0.25, 0.5 * (120.0 / bpm))
-        # At 60 BPM -> 1.0, at 120 BPM -> 0.5, at 180 BPM -> 0.33
-
-        if gap_beats >= rest_threshold_beats and acoustic_duration < ioi * 0.65:
-            # Potential rest - but check if it creates sensible notation
-            # Try quantizing the acoustic duration alone
-            acoustic_note_val = duration_to_note_value_contextual(
-                acoustic_duration, bpm, local_subdiv_info, debug=False
-            )
-
-            # Also try quantizing the full IOI
-            ioi_note_val = duration_to_note_value_contextual(
-                grid_ioi, bpm, local_subdiv_info, debug=False
-            )
-
-            # Prefer the IOI version if:
-            # - It's a "cleaner" note value (lower quantization error)
-            # - Or the acoustic version would require complex rest notation
-            acoustic_error = acoustic_note_val.get('quantization_error', 1.0)
-            ioi_error = ioi_note_val.get('quantization_error', 1.0)
-
-            # Check if the rest gap maps cleanly to a standard rest value
-            rest_val = duration_to_note_value(gap, bpm=bpm, debug=False)
-            rest_quantizes_cleanly = rest_val.get('quantization_error', 1.0) < 0.2
-
-            # Only extend the note if IOI is dramatically cleaner AND
-            # the rest would be an awkward non-standard value
-            if ioi_error < acoustic_error * 0.5 and not rest_quantizes_cleanly:
-                # Use IOI as duration (no rest)
-                effective_duration = grid_ioi
-                method = 'ioi (extended)'
-                note['has_rest_after'] = False
-            else:
-                # Keep acoustic duration, note there's a rest
-                effective_duration = acoustic_duration
-                method = 'acoustic (rest follows)'
-                note['has_rest_after'] = True
-                note['rest_duration'] = gap
-        else:
-            # No significant gap - use IOI as duration
-            effective_duration = grid_ioi if grid_ioi > 0 else acoustic_duration
-            method = 'ioi'
+        # CORE LOGIC: start from onset-driven durations, but reconcile them with
+        # acoustic offsets so notes do not get spuriously elongated and hold up
+        # the rest of the music. Clear gaps become rests; ambiguous gaps are blended.
+        if overlap_beats > (1 / 24):
+            # The acoustic offset extends past the next onset. The current
+            # renderer cannot safely overlap same-staff voices yet, so keep the
+            # note long, but cap it at the next onset so later events still flow.
+            effective_beats = onset_candidate_beats
+            method = 'onset_capped_overlap'
+            note['duration_source'] = 'overlap_capped'
             note['has_rest_after'] = False
-        
-        # Ensure minimum duration (avoid tiny notes)
+            note.pop('rest_duration', None)
+        elif gap_beats <= (1 / 24):
+            effective_beats = onset_candidate_beats
+            method = 'onset_primary'
+            note['duration_source'] = 'onset'
+            note['has_rest_after'] = False
+            note.pop('rest_duration', None)
+        elif (
+            gap_beats >= clear_rest_threshold_beats
+            and sustain_ratio < 0.55
+            and rest_quantizes_cleanly
+        ):
+            effective_beats = acoustic_candidate_beats
+            method = 'offset_reconciled (rest follows)'
+            note['duration_source'] = 'offset_guarded'
+            note['has_rest_after'] = True
+            note['rest_duration'] = gap_beats * beat_duration
+        else:
+            if sustain_ratio >= 0.72:
+                effective_beats = onset_candidate_beats
+                note['duration_source'] = 'onset'
+            else:
+                # Bias ambiguous cases late rather than short. Leave only a small
+                # safety margin before the next onset instead of splitting the gap.
+                safety_margin_beats = min(1 / 24, gap_beats * 0.2)
+                effective_beats = max(
+                    acoustic_candidate_beats,
+                    onset_candidate_beats - safety_margin_beats,
+                )
+                effective_beats = min(onset_candidate_beats, effective_beats)
+                note['duration_source'] = 'reconciled_long_bias'
+
+            leftover_beats = max(onset_candidate_beats - effective_beats, 0.0)
+            note['has_rest_after'] = (
+                leftover_beats >= clear_rest_threshold_beats
+                and sustain_ratio < 0.65
+                and rest_quantizes_cleanly
+            )
+            if note['has_rest_after']:
+                note['rest_duration'] = leftover_beats * beat_duration
+            else:
+                note.pop('rest_duration', None)
+            method = 'onset_offset_reconciled'
+
+        effective_beats = max(min(effective_beats, onset_candidate_beats), 0.125)
         min_duration = beat_duration * 0.125  # 32nd note minimum
-        effective_duration = max(effective_duration, min_duration)
-        
+        effective_duration = max(effective_beats * beat_duration, min_duration)
+
+        # ── Compensating quantization: bias effective_duration to reduce drift ──
+        # Only apply when drift is significant AND correction would reduce it.
+        drift = cumulative_quantized_beats - expected_beat  # positive = we're ahead
+        if abs(drift) > DRIFT_THRESHOLD:
+            # Compute correction: shrink duration if ahead, grow if behind
+            correction = -drift  # negate: if ahead, want shorter note
+            correction = max(-DRIFT_MAX_CORRECTION, min(DRIFT_MAX_CORRECTION, correction))
+            candidate_beats = (effective_duration / beat_duration) + correction
+            # Safety: only apply if (a) it stays positive and (b) it actually
+            # reduces drift (don't push in the wrong direction)
+            if min_duration / beat_duration < candidate_beats <= onset_candidate_beats:
+                original_beats = effective_duration / beat_duration
+                # Will this note's quantized value actually be different and closer?
+                new_quantized = cumulative_quantized_beats + candidate_beats
+                old_quantized = cumulative_quantized_beats + original_beats
+                if i < len(sorted_notes) - 1:
+                    next_expected = time_to_local_beat(
+                        sorted_notes[i + 1].get('time_seconds', 0), beat_times
+                    )
+                else:
+                    next_expected = expected_beat + original_beats
+                new_drift = abs(new_quantized - next_expected)
+                old_drift = abs(old_quantized - next_expected)
+                if new_drift < old_drift:
+                    effective_duration = candidate_beats * beat_duration
+                    note['drift_corrected'] = True
+                    note['drift_correction_beats'] = correction
+
         # Convert to note value using LOCAL context
         note_val = duration_to_note_value_contextual(
-            effective_duration, bpm=bpm, 
+            effective_duration, bpm=bpm,
             subdivision_info=local_subdiv_info, debug=False
         )
         
@@ -1406,13 +2065,167 @@ def quantize_to_beat_grid(notes, beat_times, bpm, subdivision_info=None, debug=F
         note['quantization_method'] = method
         note['raw_beats'] = note_val.get('raw_beats', 0)
         note['quantization_error'] = note_val.get('quantization_error', 0)
-        
+
+        if i < len(sorted_notes) - 1 and note.get('note_divisions', 1.0) > onset_candidate_beats + (1 / 48):
+            capped_val = duration_to_note_value_contextual(
+                onset_candidate_beats * beat_duration,
+                bpm=bpm,
+                subdivision_info=local_subdiv_info,
+                debug=False,
+            )
+            note['note_value'] = capped_val['type']
+            note['note_divisions'] = capped_val['divisions']
+            note['dotted'] = capped_val.get('dotted', False)
+            note['is_triplet'] = capped_val.get('is_triplet', False)
+            note['raw_beats'] = capped_val.get('raw_beats', onset_candidate_beats)
+            note['quantization_error'] = capped_val.get('quantization_error', 0)
+            note['quantization_method'] = note.get('quantization_method', '') + ' (capped)'
+
+        # ── Override with pre-tagged run value if available ──
+        # Run detection already identified this note as part of a fast passage
+        # that should share a uniform note value. Use the run's median-derived
+        # value instead of the per-note quantized one.
+        if 'run_note_value' in note:
+            note['note_value'] = note['run_note_value']
+            note['note_divisions'] = note['run_note_divisions']
+            note['dotted'] = note.get('run_dotted', False)
+            note['is_triplet'] = False
+            note['quantization_method'] = 'run_tagged'
+            note['has_rest_after'] = False  # runs don't have internal rests
+
+        # ── Graduated ensemble trust: for medium confidence (0.40-0.60), ──
+        # prefer ensemble if its error is comparable to grid's
+        if has_ensemble_nv and 0.40 <= ensemble_conf < 0.60 and _saved_ensemble_nv is not None:
+            saved_nv, saved_beats, saved_dotted = _saved_ensemble_nv
+            raw_beats = effective_duration / beat_duration
+            grid_error = note_val.get('quantization_error', 1.0)
+            ensemble_error = abs(raw_beats - saved_beats) / max(saved_beats, 0.01)
+            if ensemble_error <= grid_error * 1.5:
+                note['note_value'] = saved_nv
+                note['note_divisions'] = saved_beats
+                note['dotted'] = saved_dotted
+                note['quantization_method'] = 'ensemble_biased'
+
         if debug and i < 10:
             triplet_str = " (triplet)" if note_val.get('is_triplet') else ""
+            drift_str = f" drift={drift:+.3f}b" if abs(drift) > DRIFT_THRESHOLD else ""
             print(f"  Note {i}: acoustic={acoustic_duration*1000:.0f}ms, ioi={ioi*1000:.0f}ms "
-                  f"-> {note_val['type']}{triplet_str} ({method})")
-    
+                  f"-> {note['note_value']}{triplet_str} ({note['quantization_method']}){drift_str}")
+
+        # ── Advance cumulative beat position for drift tracking ──
+        cumulative_quantized_beats += note.get('note_divisions', 1.0)
+        if note.get('has_rest_after') and note.get('rest_duration'):
+            rest_beats = round(note['rest_duration'] / beat_duration * 8) / 8
+            cumulative_quantized_beats += rest_beats
+
     return sorted_notes
+
+
+def compute_notation_proximity_score(notes, chords, bpm, debug=False):
+    """
+    Measure how closely the quantized notation matches the raw detected timing.
+
+    For each note (sorted by onset), compares:
+      - Expected beat position (from raw time_seconds / beat_duration)
+      - Cumulative beat position (from summing quantized note_divisions + rests)
+
+    Returns a dict of aggregate metrics plus per-note onset_drift_beats/ms fields
+    stored on each note dict.
+
+    Args:
+        notes: List of note dicts (already quantized, with note_divisions etc.)
+        chords: List of chord dicts (same structure)
+        bpm: Detected BPM
+        debug: Print per-note drift info
+
+    Returns:
+        dict with mean/max/median drift in ms, pct within 32nd/16th/8th,
+        and per-hand breakdowns.
+    """
+    beat_duration = 60.0 / bpm
+
+    def _score_hand(items, hand_label):
+        if not items:
+            return {}
+        sorted_items = sorted(items, key=lambda n: n.get('time_seconds', 0))
+        cumulative_beats = 0.0
+        errors_beats = []
+
+        for item in sorted_items:
+            onset = item.get('time_seconds', 0)
+            expected_beat = onset / beat_duration
+            drift = abs(cumulative_beats - expected_beat)
+            item['onset_drift_beats'] = drift
+            item['onset_drift_ms'] = drift * beat_duration * 1000
+            errors_beats.append(drift)
+
+            # Advance by quantized duration
+            cumulative_beats += item.get('note_divisions', 1.0)
+            # Add rest if present
+            if item.get('has_rest_after') and item.get('rest_duration'):
+                rest_beats = round(item['rest_duration'] / beat_duration * 8) / 8
+                cumulative_beats += rest_beats
+
+        errors_ms = [e * beat_duration * 1000 for e in errors_beats]
+        n = len(errors_beats)
+
+        result = {
+            'mean_drift_ms': sum(errors_ms) / n,
+            'max_drift_ms': max(errors_ms),
+            'median_drift_ms': sorted(errors_ms)[n // 2],
+            'pct_within_32nd': sum(1 for e in errors_beats if e <= 0.125) / n,
+            'pct_within_16th': sum(1 for e in errors_beats if e <= 0.25) / n,
+            'pct_within_8th': sum(1 for e in errors_beats if e <= 0.5) / n,
+            'num_notes': n,
+        }
+
+        if debug:
+            print(f"  [{hand_label}] mean={result['mean_drift_ms']:.1f}ms, "
+                  f"max={result['max_drift_ms']:.1f}ms, "
+                  f"within 16th={result['pct_within_16th']*100:.0f}%, "
+                  f"within 8th={result['pct_within_8th']*100:.0f}%")
+
+        return result
+
+    bass_notes = [n for n in notes if n.get('hand') == 'bass']
+    treble_notes = [n for n in notes if n.get('hand') == 'treble']
+    bass_chords = [c for c in chords if c.get('hand') == 'bass']
+    treble_chords = [c for c in chords if c.get('hand') == 'treble']
+
+    if debug:
+        print(f"\n[Proximity Score] BPM={bpm:.0f}, beat={beat_duration*1000:.0f}ms")
+
+    scores = {
+        'treble_notes': _score_hand(treble_notes, 'Treble Notes'),
+        'bass_notes': _score_hand(bass_notes, 'Bass Notes'),
+        'treble_chords': _score_hand(treble_chords, 'Treble Chords'),
+        'bass_chords': _score_hand(bass_chords, 'Bass Chords'),
+    }
+
+    # Overall aggregate
+    all_items = notes + chords
+    if all_items:
+        all_drifts = [n.get('onset_drift_ms', 0) for n in all_items
+                      if 'onset_drift_ms' in n]
+        if all_drifts:
+            n = len(all_drifts)
+            scores['overall'] = {
+                'mean_drift_ms': sum(all_drifts) / n,
+                'max_drift_ms': max(all_drifts),
+                'median_drift_ms': sorted(all_drifts)[n // 2],
+                'pct_within_32nd': sum(1 for d in all_drifts if d <= 0.125 * beat_duration * 1000) / n,
+                'pct_within_16th': sum(1 for d in all_drifts if d <= 0.25 * beat_duration * 1000) / n,
+                'pct_within_8th': sum(1 for d in all_drifts if d <= 0.5 * beat_duration * 1000) / n,
+                'num_notes': n,
+            }
+            if debug:
+                o = scores['overall']
+                print(f"  [Overall] mean={o['mean_drift_ms']:.1f}ms, "
+                      f"max={o['max_drift_ms']:.1f}ms, "
+                      f"within 16th={o['pct_within_16th']*100:.0f}%, "
+                      f"within 8th={o['pct_within_8th']*100:.0f}%")
+
+    return scores
 
 
 def detect_dominant_subdivisions(notes, bpm, debug=False, window_seconds=4.0):
@@ -1677,7 +2490,7 @@ def duration_to_note_value_contextual(duration_seconds, bpm, subdivision_info, d
     return result
 
 
-def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.70):
+def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.60):
     """
     Quantize note rhythms using the trained ML model.
 
@@ -1727,13 +2540,16 @@ def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.
                 
                 if has_ensemble_nv and ensemble_conf >= ensemble_confidence_threshold:
                     # Keep ensemble prediction, add transformer's extra fields
-                    note['dotted'] = pred['dotted']
+                    # Preserve dotted flag from normalizer if ensemble predicted dotted
+                    if not note.get('dotted', False):
+                        note['dotted'] = pred['dotted']
                     note['is_triplet'] = pred['is_triplet']
                     note['has_rest_after'] = pred['has_rest']
                     note['quantization_method'] = 'ensemble_kept'
                     note['quantization_confidence'] = ensemble_conf
                     note['rest_confidence'] = pred.get('rest_confidence', 0)
-                    note['note_divisions'] = NOTE_VALUE_BEATS.get(note['note_value'], 1.0)
+                    base_beats = NOTE_VALUE_BEATS.get(note['note_value'], 1.0)
+                    note['note_divisions'] = base_beats * 1.5 if note.get('dotted') else base_beats
                     n_kept_ensemble += 1
                 else:
                     # Use transformer prediction (refine or replace)
@@ -1768,6 +2584,7 @@ def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.
 
             sorted_notes = enforce_triplet_groups(sorted_notes, debug=debug)
             sorted_notes = post_process_rhythm_unified(sorted_notes, bpm, debug=debug)
+            sorted_notes = enforce_bar_sum(sorted_notes, bpm, debug=debug)
             return sorted_notes
 
         # --- MLP fallback: per-note inference ---
@@ -1790,11 +2607,13 @@ def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.
                 
                 if has_ensemble_nv and ensemble_conf >= ensemble_confidence_threshold:
                     # Keep ensemble prediction
-                    note['dotted'] = pred['dotted']
+                    if not note.get('dotted', False):
+                        note['dotted'] = pred['dotted']
                     note['is_triplet'] = pred['is_triplet']
                     note['quantization_method'] = 'ensemble_kept'
                     note['quantization_confidence'] = ensemble_conf
-                    note['note_divisions'] = NOTE_VALUE_BEATS.get(note['note_value'], 1.0)
+                    base_beats = NOTE_VALUE_BEATS.get(note['note_value'], 1.0)
+                    note['note_divisions'] = base_beats * 1.5 if note.get('dotted') else base_beats
                     n_kept_ensemble += 1
                 else:
                     note['note_value'] = pred['note_type']
@@ -1816,6 +2635,7 @@ def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.
 
             sorted_notes = enforce_triplet_groups(sorted_notes, debug=debug)
             sorted_notes = post_process_rhythm_unified(sorted_notes, bpm, debug=debug)
+            sorted_notes = enforce_bar_sum(sorted_notes, bpm, debug=debug)
             return sorted_notes
 
     # ── CPU Path: Original sequential inference ──
@@ -1863,6 +2683,8 @@ def quantize_rhythm_ml(notes, bpm, debug=False, ensemble_confidence_threshold=0.
 
     # Apply rhythm coherence smoothing to reduce erratic sections
     sorted_notes = apply_coherence_smoothing(sorted_notes, bpm, debug=debug)
+
+    sorted_notes = enforce_bar_sum(sorted_notes, bpm, debug=debug)
 
     return sorted_notes
 
@@ -2596,8 +3418,9 @@ def strip_triplets_from_grace_notes(items):
         The same list with triplet info removed from grace notes
     """
     for item in items:
-        if item.get('ornament') == 'grace' and item.get('triplet'):
+        if item.get('ornament') == 'grace' and (item.get('triplet') or item.get('is_triplet')):
             item['triplet'] = False
+            item['is_triplet'] = False
             item.pop('triplet_position', None)
             item.pop('triplet_type', None)
             item.pop('actual_notes', None)
@@ -2732,6 +3555,8 @@ def quantize_rhythm_from_ioi(notes, bpm, debug=False):
 
     # Apply rhythm coherence smoothing to reduce erratic sections
     sorted_notes = apply_coherence_smoothing(sorted_notes, bpm, debug=debug)
+
+    sorted_notes = enforce_bar_sum(sorted_notes, bpm, debug=debug)
 
     return sorted_notes
 
@@ -3068,15 +3893,18 @@ def refine_tempo_by_quantization(notes, initial_bpm, min_bpm=40, max_bpm=240):
             return 1.0
         base_error = np.mean(errors)
         # Penalize tempos that force too many notes into tiny values.
-        # Real music rarely has >30% 32nds or >60% 16th-or-shorter.
+        # Real music rarely has >20% 32nds or >50% 16th-or-shorter.
+        # Use a steep, progressive penalty so "mostly 32nds" is unmistakable.
         n = len(errors)
         frac_32 = n_32nd / n
         frac_short = (n_32nd + n_16th) / n
         penalty = 0.0
-        if frac_32 > 0.30:
-            penalty += (frac_32 - 0.30) * 0.5   # +5% error per 10% excess 32nds
-        if frac_short > 0.60:
-            penalty += (frac_short - 0.60) * 0.3  # +3% per 10% excess short notes
+        if frac_32 > 0.15:
+            penalty += (frac_32 - 0.15) * 1.5   # aggressive: +15% per 10% excess 32nds
+        if frac_32 > 0.50:
+            penalty += (frac_32 - 0.50) * 2.0   # extra steep above 50% 32nds
+        if frac_short > 0.50:
+            penalty += (frac_short - 0.50) * 0.8  # +8% per 10% excess short notes
         return base_error + penalty
     
     best_bpm = initial_bpm
@@ -3148,6 +3976,145 @@ def refine_tempo_by_quantization(notes, initial_bpm, min_bpm=40, max_bpm=240):
         'confidence': round(confidence, 2),
         'beat_interval': round(60.0 / best_bpm, 4),
         'refinement_factor': best_mult
+    }
+
+
+def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
+                            sweep_pct=0.10, step=0.5, debug=False):
+    """
+    Fine-grained tempo refinement using onset-to-grid alignment.
+
+    For each candidate BPM, lays down an ideal grid starting at t=0 with
+    optimal phase and measures how well note onsets align to it. Returns the
+    BPM with lowest mean circular alignment error, plus synthetic regular
+    beat_times generated from that BPM.
+
+    This runs even when neural beat detection succeeds — librosa's beat_track
+    gives non-uniform beat positions that follow performer rubato, but MusicXML
+    quantization needs a single fixed BPM. A ±10% sweep finds the BPM where
+    fixed-grid quantization distorts note durations least.
+
+    Args:
+        notes: list of note dicts with 'time_seconds'
+        chords: list of chord dicts with 'time_seconds'
+        initial_bpm: BPM from beat detection
+        beat_times: optional array of detected beat times (for fallback)
+        sweep_pct: fraction of initial_bpm to sweep (default 10%)
+        step: BPM step size (default 0.5)
+        debug: print diagnostics
+
+    Returns:
+        dict with 'bpm', 'beat_interval', 'beat_times', 'confidence',
+               'grid_error', 'phase_offset'
+    """
+    # Gather all onset times
+    all_events = notes + chords
+    onsets = np.array(sorted(set(
+        e.get('time_seconds', 0) for e in all_events if e.get('time_seconds', 0) > 0
+    )))
+
+    if len(onsets) < 4:
+        beat_int = 60.0 / initial_bpm
+        duration = onsets[-1] if len(onsets) > 0 else 10.0
+        return {
+            'bpm': initial_bpm,
+            'beat_interval': beat_int,
+            'beat_times': np.arange(0, duration + beat_int, beat_int),
+            'confidence': 0.5,
+            'grid_error': 1.0,
+            'phase_offset': 0.0,
+        }
+
+    duration = onsets[-1] + 1.0  # extend slightly past last note
+
+    def grid_alignment_error(bpm):
+        """Compute mean alignment error and optimal phase for a given BPM.
+
+        For each onset, compute its fractional position within a beat period.
+        Use circular statistics to find the optimal phase, then compute mean
+        absolute distance to nearest grid point.
+        """
+        beat_period = 60.0 / bpm
+        # Fractional beat positions (0 to 1)
+        phases = (onsets / beat_period) % 1.0
+
+        # Circular mean to find optimal phase offset
+        # Convert to angles, compute mean angle
+        angles = phases * 2 * np.pi
+        mean_sin = np.mean(np.sin(angles))
+        mean_cos = np.mean(np.cos(angles))
+        mean_angle = np.arctan2(mean_sin, mean_cos)
+        phase_offset = (mean_angle / (2 * np.pi)) % 1.0
+
+        # Distance of each onset to nearest grid point (with optimal phase)
+        shifted = (phases - phase_offset + 0.5) % 1.0 - 0.5  # range [-0.5, 0.5]
+        errors = np.abs(shifted) * beat_period  # convert back to seconds
+
+        # Mean error, weighted more heavily for errors > 1/8 beat
+        mean_err = np.mean(errors)
+
+        return mean_err, phase_offset * beat_period
+
+    # Sweep BPM candidates
+    lo = max(30, initial_bpm * (1 - sweep_pct))
+    hi = min(300, initial_bpm * (1 + sweep_pct))
+    candidates = np.arange(lo, hi + step * 0.5, step)
+
+    best_bpm = initial_bpm
+    best_error, best_phase = grid_alignment_error(initial_bpm)
+
+    for c_bpm in candidates:
+        err, phase = grid_alignment_error(c_bpm)
+        if err < best_error - 0.001:  # require meaningful improvement
+            best_error = err
+            best_bpm = c_bpm
+            best_phase = phase
+
+    # Also test common multiplier adjustments (half/double time)
+    for mult in [0.5, 2.0]:
+        c_bpm = initial_bpm * mult
+        if 30 <= c_bpm <= 300:
+            err, phase = grid_alignment_error(c_bpm)
+            # Require substantially better alignment for half/double switch
+            if err < best_error * 0.85:
+                best_error = err
+                best_bpm = c_bpm
+                best_phase = phase
+
+    # Round to nearest 0.5 BPM
+    best_bpm = round(best_bpm * 2) / 2
+
+    # Snap to "nice" BPM if very close (within 1%)
+    nice_bpms = [40, 44, 46, 48, 50, 52, 54, 56, 58, 60, 63, 66, 69, 72, 76,
+                 80, 84, 88, 92, 96, 100, 104, 108, 112, 116, 120, 126, 132,
+                 138, 144, 150, 156, 160, 168, 176, 184, 192, 200]
+    closest_nice = min(nice_bpms, key=lambda x: abs(x - best_bpm))
+    if abs(closest_nice - best_bpm) / best_bpm < 0.01:
+        best_bpm = closest_nice
+
+    # Generate synthetic regular beat times from the refined BPM + phase
+    beat_int = 60.0 / best_bpm
+    # Start from phase offset, align to cover all onsets
+    start = best_phase % beat_int
+    synthetic_beats = np.arange(start, duration, beat_int)
+
+    # Confidence based on alignment quality
+    # Perfect alignment: error ~0; worst case: error = beat_int/4
+    relative_error = best_error / (beat_int / 4)  # normalize to [0, 1]
+    confidence = max(0.3, min(1.0, 1.0 - relative_error))
+
+    if debug or abs(best_bpm - initial_bpm) > 0.5:
+        print(f"[Tempo Grid Search] {initial_bpm:.1f} → {best_bpm:.1f} BPM "
+              f"(grid error: {best_error*1000:.1f}ms, phase: {best_phase*1000:.0f}ms, "
+              f"confidence: {confidence:.2f})")
+
+    return {
+        'bpm': best_bpm,
+        'beat_interval': beat_int,
+        'beat_times': synthetic_beats,
+        'confidence': confidence,
+        'grid_error': best_error,
+        'phase_offset': best_phase,
     }
 
 
@@ -6916,6 +7883,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 note_dict['note_value'] = group[0]['note_value_name']
                 note_dict['note_value_confidence'] = group[0].get('note_value_confidence', 0.5)
                 note_dict['note_value_source'] = 'ensemble'
+                _normalize_ensemble_note_value(note_dict)
             notes.append(note_dict)
         else:
             # Chord (2+ simultaneous notes)
@@ -6944,6 +7912,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 chord_dict['note_value'] = best_nv['note_value_name']
                 chord_dict['note_value_confidence'] = best_nv.get('note_value_confidence', 0.5)
                 chord_dict['note_value_source'] = 'ensemble'
+                _normalize_ensemble_note_value(chord_dict)
             chords.append(chord_dict)
     
     print(f"[Neural] Converted to: {len(notes)} single notes, {len(chords)} chords")
@@ -6960,7 +7929,8 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     else:
         print(f"[Beat Detection] Loading audio from file...")
         beat_info = detect_beats_neural(wav_path, debug=debug)
-    beat_times = beat_info['beats']
+    detected_beat_times = beat_info['beats']
+    beat_times = detected_beat_times
     detected_bpm = beat_info['bpm']
     tempo_confidence = beat_info['confidence']
     beat_interval = beat_info['beat_interval']
@@ -6974,7 +7944,8 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         detected_bpm = tempo_info['bpm']
         tempo_confidence = tempo_info['confidence']
         beat_interval = tempo_info['beat_interval']
-        beat_times = np.array([])  # Clear beat times to use IOI quantization
+        detected_beat_times = np.array([])  # Clear beat times to use IOI quantization
+        beat_times = np.array([])
         
         # Refine tempo
         all_events = notes + chords
@@ -6984,49 +7955,46 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         beat_interval = refined_tempo['beat_interval']
     
     # Quantize rhythms using beat grid if available, otherwise IOI-based
-    print(f"\n[Rhythm] Quantizing at {detected_bpm} BPM...")
     t0 = time.perf_counter()
     
-    # First, detect and collapse ornaments (trills, grace notes, etc.)
-    # This must happen BEFORE rhythm quantization
-    print(f"[Ornaments] Detecting trills, grace notes, mordents, turns...")
-    original_note_count = len(notes)
-    bass_notes_pre = [n for n in notes if n.get('hand') == 'bass']
-    treble_notes_pre = [n for n in notes if n.get('hand') == 'treble']
-
-    # Ornament detection: run bass and treble in parallel when GPU available
-    if USE_GPU and bass_notes_pre and treble_notes_pre:
-        bass_notes_pre, treble_notes_pre = parallel_process_hands(
-            detect_ornaments, detect_ornaments,
-            (bass_notes_pre, detected_bpm, True), (treble_notes_pre, detected_bpm, True)
-        )
-    else:
-        if bass_notes_pre:
-            bass_notes_pre = detect_ornaments(bass_notes_pre, detected_bpm, debug=True)
-        if treble_notes_pre:
-            treble_notes_pre = detect_ornaments(treble_notes_pre, detected_bpm, debug=True)
-    notes = sorted(bass_notes_pre + treble_notes_pre, key=lambda x: x.get('time_seconds', 0))
-    
-    # Count detected ornaments
-    trills = sum(1 for n in notes if n.get('ornament') == 'trill')
-    grace_notes = sum(1 for n in notes if n.get('ornament') == 'grace')
-    mordents = sum(1 for n in notes if 'mordent' in n.get('ornament', ''))
-    turns = sum(1 for n in notes if 'turn' in n.get('ornament', ''))
-    collapsed = original_note_count - len(notes)
-    
-    print(f"[Ornaments] Found: {trills} trills, {grace_notes} grace notes, {mordents} mordents, {turns} turns")
-    if collapsed > 0:
-        print(f"[Ornaments] Collapsed {collapsed} ornamental notes into main notes")
-    neural_timings['ornament_detection_ms'] = (time.perf_counter() - t0) * 1000
-    print(f"[TIMING] ornament_detection={neural_timings['ornament_detection_ms']:.1f}ms")
+    # Ornament post-processing is disabled so rhythm quantization operates
+    # directly on the decoded notes while note-value accuracy is being tuned.
+    neural_timings['ornament_detection_ms'] = 0.0
+    print(f"[TIMING] ornament_detection={neural_timings['ornament_detection_ms']:.1f}ms (disabled)")
     
     # Now analyze subdivision patterns across all notes for context-aware quantization
     t0 = time.perf_counter()
     all_events = notes + chords
     subdivision_info = detect_dominant_subdivisions(all_events, detected_bpm, debug=debug)
     neural_timings['subdivision_analysis_ms'] = (time.perf_counter() - t0) * 1000
-    
+
+    # Fine-grained tempo refinement via onset-to-grid alignment sweep
+    # Runs even when beat detection succeeded — finds the fixed BPM that
+    # minimizes quantization distortion across all note onsets
+    t0 = time.perf_counter()
+    grid_result = refine_tempo_onset_grid(
+        notes, chords, detected_bpm, beat_times=beat_times, debug=debug
+    )
+    if abs(grid_result['bpm'] - detected_bpm) > 0.5:
+        print(f"[Tempo Refined] {detected_bpm:.1f} → {grid_result['bpm']:.1f} BPM "
+              f"(grid error: {grid_result['grid_error']*1000:.1f}ms)")
+    detected_bpm = grid_result['bpm']
+    beat_interval = grid_result['beat_interval']
+    # Build a regularized local beat curve for quantization. This preserves
+    # short-window tempo variation while smoothing beat tracker jitter.
+    synthetic_beat_times = grid_result['beat_times']
+    beat_times = build_regularized_local_beat_grid(
+        detected_beat_times,
+        synthetic_beat_times,
+        grid_result['beat_interval'],
+        confidence=tempo_confidence,
+        debug=debug,
+    )
+    beat_grid_source = 'local_curve' if len(detected_beat_times) >= 4 else 'synthetic'
+    neural_timings['tempo_grid_search_ms'] = (time.perf_counter() - t0) * 1000
+
     t_quant_start = time.perf_counter()
+    print(f"\n[Rhythm] Quantizing at {detected_bpm} BPM...")
     if len(beat_times) >= 4:
         # Use beat-grid quantization (more accurate)
         print(f"[Rhythm] Using beat-grid quantization with {len(beat_times)} detected beats")
@@ -7037,13 +8005,24 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
         bass_chords = [c for c in chords if c.get('hand') == 'bass']
         treble_chords = [c for c in chords if c.get('hand') == 'treble']
 
+        # Pre-tag runs (fast scale passages) so quantizer assigns uniform values
+        if bass_notes:
+            bass_notes = tag_runs_pre_quantization(bass_notes, detected_bpm, debug=debug)
+        if treble_notes:
+            treble_notes = tag_runs_pre_quantization(treble_notes, detected_bpm, debug=debug)
+        if bass_chords:
+            bass_chords = tag_runs_pre_quantization(bass_chords, detected_bpm, debug=debug)
+        if treble_chords:
+            treble_chords = tag_runs_pre_quantization(treble_chords, detected_bpm, debug=debug)
+
         # Parallel beat-grid quantization + unified post-processing for bass/treble
         if USE_GPU and bass_notes and treble_notes:
             def _quantize_and_normalize(notes_list, bt, bpm, si, debug_flag):
                 result = quantize_to_beat_grid(notes_list, bt, bpm, si, debug=debug_flag)
                 result = cross_validate_with_acoustic_duration(result, bpm, debug=debug_flag)
                 result = post_process_rhythm_unified(result, bpm, debug=debug_flag)
-                return apply_coherence_smoothing(result, bpm, debug=debug_flag)
+                result = apply_coherence_smoothing(result, bpm, debug=debug_flag)
+                return result
 
             bass_notes, treble_notes = parallel_process_hands(
                 _quantize_and_normalize, _quantize_and_normalize,
@@ -7068,7 +8047,8 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 result = quantize_to_beat_grid(chords_list, bt, bpm, si, debug=debug_flag)
                 result = cross_validate_with_acoustic_duration(result, bpm, debug=debug_flag)
                 result = post_process_rhythm_unified(result, bpm, debug=debug_flag)
-                return apply_coherence_smoothing(result, bpm, debug=debug_flag)
+                result = apply_coherence_smoothing(result, bpm, debug=debug_flag)
+                return result
 
             bass_chords, treble_chords = parallel_process_hands(
                 _quantize_chords, _quantize_chords,
@@ -7123,9 +8103,27 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     # Merge back
     notes = sorted(bass_notes_list + treble_notes_list, key=lambda x: x.get("time_seconds", 0))
     chords = sorted(bass_chords_list + treble_chords_list, key=lambda x: x.get("time_seconds", 0))
+
+    # Sync is_triplet -> triplet: ML paths set 'is_triplet' but frontend reads 'triplet'.
+    # detect_triplets() sets 'triplet' for IOI-detected groups. Propagate ML predictions
+    # for notes where triplet wasn't already set by IOI detection.
+    for n in notes:
+        if n.get('is_triplet', False) and not n.get('triplet', False):
+            n['triplet'] = True
+    for c in chords:
+        if c.get('is_triplet', False) and not c.get('triplet', False):
+            c['triplet'] = True
+
+    apply_backend_timing_authority(notes, chords, beat_times)
+
     neural_timings['triplet_detection_ms'] = (time.perf_counter() - t0) * 1000
     print(f"[TIMING] triplet_detection={neural_timings['triplet_detection_ms']:.1f}ms")
-    
+
+    # Compute notation proximity score (how close quantized rhythm is to raw timing)
+    t_prox = time.perf_counter()
+    proximity_score = compute_notation_proximity_score(notes, chords, detected_bpm, debug=True)
+    neural_timings['proximity_score_ms'] = (time.perf_counter() - t_prox) * 1000
+
     # Build results
     results = {
         "notes": notes,
@@ -7147,23 +8145,27 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             "method": "neural (piano_transcription_inference)",
             "device": device,
             "rhythm_method": "beat_grid" if len(beat_times) >= 4 else "ioi",
+            "beat_grid_source": beat_grid_source,
+            "local_tempo_curve": beat_grid_source == 'local_curve',
+            "backend_timing_authority": True,
             "primary_subdivision": subdivision_info.get('primary_subdivision', 'quarter'),
             "uses_triplets": subdivision_info.get('uses_triplets', False),
             "uses_dotted": subdivision_info.get('uses_dotted', False),
-        }
+        },
+        "proximity_score": proximity_score,
     }
-    
+
     # Add timing info to results (for bottleneck analysis)
     neural_timings['total_ms'] = (time.perf_counter() - t_neural_start) * 1000
     neural_timings['real_time_factor'] = neural_timings['total_ms'] / (duration_seconds * 1000)
     results['_neural_timing_ms'] = neural_timings
-    
+
     # Print full timing breakdown
     print(f"\n[TIMING] Full breakdown:")
     for key, val in neural_timings.items():
         if key not in ('inference_detail', 'real_time_factor'):
             print(f"   {key}: {val:.1f}ms" if isinstance(val, (int, float)) else f"   {key}: {val}")
-    
+
     print(f"\n{'='*70}")
     print(f"✓ Neural transcription complete:")
     print(f"   Tempo:  {detected_bpm:.0f} BPM (confidence: {tempo_confidence:.2f})")
@@ -7172,6 +8174,11 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
           f"dotted={'yes' if subdivision_info.get('uses_dotted') else 'no'}")
     print(f"   Bass:   {results['analysis_summary']['bass_notes']} notes, {results['analysis_summary']['bass_chords']} chords")
     print(f"   Treble: {results['analysis_summary']['treble_notes']} notes, {results['analysis_summary']['treble_chords']} chords")
+    if proximity_score.get('overall'):
+        o = proximity_score['overall']
+        print(f"   Score:  mean_drift={o['mean_drift_ms']:.1f}ms, "
+              f"within_16th={o['pct_within_16th']*100:.0f}%, "
+              f"within_8th={o['pct_within_8th']*100:.0f}%")
     print(f"   Timing: total={neural_timings['total_ms']:.1f}ms, RTF={neural_timings['real_time_factor']:.4f}")
     print(f"{'='*70}\n")
     
@@ -7222,6 +8229,272 @@ def _identify_chord_label(midi_notes):
     
     # Fallback
     return f"{root_name}:chord"
+
+
+def _convert_neural_note_events_to_results(note_events, split_midi=60):
+    """Convert frame-level neural note events into the live note/chord payload shape."""
+    time_tolerance = 0.03
+    note_events_sorted = sorted(note_events or [], key=lambda x: x['onset_time'])
+
+    event_groups = []
+    current_group = []
+    current_time = -1.0
+
+    for event in note_events_sorted:
+        onset = event['onset_time']
+
+        if current_time < 0 or abs(onset - current_time) <= time_tolerance:
+            current_group.append(event)
+            if current_time < 0:
+                current_time = onset
+        else:
+            if current_group:
+                event_groups.append(current_group)
+            current_group = [event]
+            current_time = onset
+
+    if current_group:
+        event_groups.append(current_group)
+
+    notes = []
+    chords = []
+    onsets = []
+
+    for group in event_groups:
+        avg_onset = sum(event['onset_time'] for event in group) / len(group)
+        midi_notes = sorted(int(event['midi_note']) for event in group)
+        min_offset = min(event['offset_time'] for event in group)
+        duration = max(0.05, min_offset - avg_onset)
+        avg_velocity = sum(event.get('velocity', 64) for event in group) / len(group)
+        confidence = avg_velocity / 127.0
+        lowest_midi = min(midi_notes)
+        hand = 'bass' if lowest_midi < split_midi else 'treble'
+
+        onsets.append({
+            'time_seconds': round(avg_onset, 3),
+            'offset_seconds': round(min_offset, 3),
+            'duration_seconds': round(duration, 3),
+        })
+
+        if len(midi_notes) == 1:
+            midi_note = midi_notes[0]
+            note_dict = {
+                'time_seconds': round(avg_onset, 3),
+                'midi_note': midi_note,
+                'note_name': note_to_name(midi_note),
+                'frequency_hz': round(440.0 * 2 ** ((midi_note - 69) / 12), 2),
+                'method': 'neural_live',
+                'confidence': round(confidence, 3),
+                'offset_seconds': round(min_offset, 3),
+                'duration_seconds': round(duration, 3),
+                'hand': hand,
+            }
+            if 'note_value_name' in group[0]:
+                note_dict['note_value'] = group[0]['note_value_name']
+                note_dict['note_value_confidence'] = group[0].get('note_value_confidence', 0.5)
+                note_dict['note_value_source'] = 'ensemble'
+                _normalize_ensemble_note_value(note_dict)
+            notes.append(note_dict)
+            continue
+
+        octave = (lowest_midi // 12) - 1
+        chord_dict = {
+            'time_seconds': round(avg_onset, 3),
+            'midi_notes': midi_notes,
+            'note_names': [note_to_name(midi_note) for midi_note in midi_notes],
+            'root': note_to_name(lowest_midi),
+            'octave': octave,
+            'inversion': 'root',
+            'method': 'neural_live',
+            'confidence': round(confidence, 3),
+            'offset_seconds': round(min_offset, 3),
+            'duration_seconds': round(duration, 3),
+            'hand': hand,
+            'label': _identify_chord_label(midi_notes),
+        }
+        nv_events = [event for event in group if 'note_value_name' in event]
+        if nv_events:
+            best_nv = max(nv_events, key=lambda event: event.get('note_value_confidence', 0))
+            chord_dict['note_value'] = best_nv['note_value_name']
+            chord_dict['note_value_confidence'] = best_nv.get('note_value_confidence', 0.5)
+            chord_dict['note_value_source'] = 'ensemble'
+            _normalize_ensemble_note_value(chord_dict)
+        chords.append(chord_dict)
+
+    return {
+        'onsets': onsets,
+        'notes': notes,
+        'chords': chords,
+        'event_groups': len(event_groups),
+    }
+
+
+def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_midi=60, device='cuda'):
+    """Run a minimal array-based neural transcription path for live chunk updates."""
+    import time
+
+    def _format_loader_status(label, status):
+        reason = str(status.get('reason') or 'unknown')
+        details = [f"{label}={reason}"]
+        selected_path = status.get('selected_path')
+        last_error = status.get('last_error')
+        if selected_path:
+            details.append(f"path={selected_path}")
+        if last_error:
+            details.append(f"error={last_error}")
+        return ', '.join(details)
+
+    timings = {}
+    total_start = time.perf_counter()
+
+    t0 = time.perf_counter()
+    if isinstance(audio_or_path, str):
+        audio_full_sr, sr = load_audio_deterministic(audio_or_path, target_sr=sr)
+    else:
+        audio_full_sr = np.asarray(audio_or_path, dtype=np.float32)
+        if audio_full_sr.ndim > 1:
+            audio_full_sr = np.mean(audio_full_sr, axis=1)
+        audio_full_sr = audio_full_sr.astype(np.float32, copy=False)
+    timings['neural_audio_prepare'] = (time.perf_counter() - t0) * 1000
+
+    if audio_full_sr.size == 0:
+        return {'error': 'Live neural transcription received empty audio.'}
+
+    model_name = None
+    note_events = []
+    model_sr = sr
+    inference_detail = {}
+    mel_status = {
+        'reason': 'not_attempted',
+        'selected_path': None,
+        'last_error': None,
+    }
+    custom_status = {
+        'reason': 'not_attempted',
+        'selected_path': None,
+        'last_error': None,
+    }
+
+    if USE_GPU:
+        ensemble_model = get_gpu_mel_baseline_transcriber()
+        mel_status = get_gpu_mel_baseline_transcriber_status()
+        if ensemble_model is not None and ensemble_model.initialized:
+            model_name = 'mel_baseline'
+            model_sr = int(ensemble_model.config.get('sample_rate', 16000))
+
+            t0 = time.perf_counter()
+            if sr != model_sr:
+                gcd = math.gcd(sr, model_sr)
+                up, down = model_sr // gcd, sr // gcd
+                model_audio = resample_poly(audio_full_sr, up, down).astype(np.float32, copy=False)
+            else:
+                model_audio = audio_full_sr
+            timings['neural_resample'] = (time.perf_counter() - t0) * 1000
+
+            t0 = time.perf_counter()
+            transcribed_dict = ensemble_model.transcribe(
+                model_audio,
+                onset_threshold=0.4,
+                frame_threshold=0.5,
+            )
+            timings['neural_transcribe'] = (time.perf_counter() - t0) * 1000
+            inference_detail = transcribed_dict.get('_inference_timing_ms') or {}
+            note_events = transcribed_dict.get('est_note_events', [])
+
+    if model_name is None and USE_GPU:
+        custom_model = get_gpu_transcriber()
+        custom_status = get_gpu_transcriber_status()
+        if custom_model is not None and custom_model.initialized:
+            model_name = 'custom_velocity_weighted'
+            model_sr = int(custom_model.config.get('sample_rate', 16000))
+
+            t0 = time.perf_counter()
+            if sr != model_sr:
+                gcd = math.gcd(sr, model_sr)
+                up, down = model_sr // gcd, sr // gcd
+                model_audio = resample_poly(audio_full_sr, up, down).astype(np.float32, copy=False)
+            else:
+                model_audio = audio_full_sr
+            timings['neural_resample'] = (time.perf_counter() - t0) * 1000
+
+            t0 = time.perf_counter()
+            transcribed_dict = custom_model.transcribe(
+                model_audio,
+                onset_threshold=0.35,
+                frame_threshold=0.25,
+            )
+            timings['neural_transcribe'] = (time.perf_counter() - t0) * 1000
+            note_events = transcribed_dict.get('est_note_events', [])
+
+    if model_name is None:
+        if not USE_GPU:
+            error_message = 'Live neural transcription unavailable: gpu_ops reports cuda_unavailable.'
+            error_code = 'cuda_unavailable'
+        else:
+            error_message = (
+                'Live neural transcription unavailable: '
+                + _format_loader_status('mel_baseline', mel_status)
+                + '; '
+                + _format_loader_status('custom_transcriber', custom_status)
+            )
+            error_code = 'no_gpu_transcriber_initialized'
+        return {
+            'error': error_message,
+            'error_code': error_code,
+            'loader_status': {
+                'mel_baseline': mel_status,
+                'custom_transcriber': custom_status,
+            },
+        }
+
+    t0 = time.perf_counter()
+    converted = _convert_neural_note_events_to_results(note_events, split_midi=split_midi)
+    timings['neural_note_conversion'] = (time.perf_counter() - t0) * 1000
+
+    duration_seconds = float(len(audio_full_sr) / sr) if sr > 0 else 0.0
+    total_ms = (time.perf_counter() - total_start) * 1000
+    timings['neural_total'] = total_ms
+    timings['neural_audio_duration'] = duration_seconds * 1000.0
+    timings['neural_real_time_factor'] = (total_ms / (duration_seconds * 1000.0)) if duration_seconds > 0 else 0.0
+
+    inference_key_map = {
+        'audio_to_gpu': 'neural_audio_to_gpu',
+        'feature_extraction': 'neural_feature_extraction',
+        'model_inference': 'neural_model_inference',
+        'decode_notes': 'neural_decode_notes',
+        'total': 'neural_model_total',
+        'audio_duration_ms': 'neural_model_audio_duration',
+        'n_frames': 'neural_model_frames',
+        'n_chunks': 'neural_model_chunks',
+        'real_time_factor': 'neural_model_real_time_factor',
+    }
+    for key, value in inference_detail.items():
+        if not isinstance(value, (int, float)):
+            continue
+        timings[inference_key_map.get(key, f'neural_model_{key}')] = float(value)
+
+    if debug:
+        print(
+            f"[Live Neural] model={model_name} notes={len(converted['notes'])} chords={len(converted['chords'])} "
+            f"total={total_ms:.1f}ms rtf={timings['neural_real_time_factor']:.2f}x"
+        )
+
+    return {
+        'onsets': converted['onsets'],
+        'notes': converted['notes'],
+        'chords': converted['chords'],
+        'analysis_summary': {
+            'total_onsets': len(converted['onsets']),
+            'total_notes': len(converted['notes']),
+            'total_chords': len(converted['chords']),
+            'duration_seconds': duration_seconds,
+            'sample_rate': int(sr),
+            'analysis_path': 'live_neural',
+            'neural_model': model_name,
+            'event_groups': converted['event_groups'],
+        },
+        '_timing_ms': {key: round(float(value), 3) for key, value in timings.items()},
+    }
 
 
 def analyze_audio(wav_path_or_array, debug=False, use_split=True, independent_hands=True, use_neural=False, device='cpu', use_ml_rhythm=True):

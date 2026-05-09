@@ -534,11 +534,17 @@ def gpu_cqt(audio: np.ndarray, sr: int = 44100, n_bins: int = 88,
 
     audio_t = torch.from_numpy(audio).float().to(DEVICE)
     win = _get_window(n_fft_cqt)
+    pad_mode = 'reflect'
+
+    # torch.stft(center=True) reflect-pads by n_fft/2 on each side; for live
+    # chunks shorter than that, fall back to constant padding instead of raising.
+    if audio_t.numel() <= n_fft_cqt // 2:
+        pad_mode = 'constant'
 
     # GPU STFT with large window
     stft = torch.stft(
         audio_t, n_fft_cqt, hop_length=hop_length,
-        window=win, return_complex=True, center=True
+        window=win, return_complex=True, center=True, pad_mode=pad_mode
     )
     magnitude = torch.abs(stft)  # (n_fft_cqt//2+1, n_frames)
 
@@ -1097,7 +1103,7 @@ class GpuPianoTranscriber(nn.Module):
         self.config = config
 
         # Import and build the model architecture
-        from train_transcription import PianoTranscriptionModel  # type: ignore
+        from rhythm_training.train_transcription import PianoTranscriptionModel  # type: ignore
 
         self.model = PianoTranscriptionModel(
             n_mels=config.get('n_mels', 229),
@@ -1134,7 +1140,7 @@ class GpuPianoTranscriber(nn.Module):
         if not self.initialized or self.model is None:
             return {'est_note_events': []}
 
-        from train_transcription import transcribe_audio  # type: ignore
+        from rhythm_training.train_transcription import transcribe_audio  # type: ignore
         events = transcribe_audio(
             audio, self.model, DEVICE,
             sr=self.config.get('sample_rate', 16000),
@@ -1149,11 +1155,26 @@ class GpuPianoTranscriber(nn.Module):
 
 _gpu_transcriber: Optional[GpuPianoTranscriber] = None
 _gpu_transcriber_loaded = False
+_gpu_transcriber_status: Dict[str, object] = {
+    'model': 'custom_transcriber',
+    'attempted': False,
+    'initialized': False,
+    'use_gpu': USE_GPU,
+    'searched_paths': [],
+    'selected_path': None,
+    'reason': 'not_attempted',
+    'last_error': None,
+}
+
+
+def get_gpu_transcriber_status() -> Dict[str, object]:
+    """Return the current custom transcriber loader status."""
+    return dict(_gpu_transcriber_status)
 
 
 def get_gpu_transcriber() -> Optional[GpuPianoTranscriber]:
     """Lazy-load the custom GPU piano transcription model (singleton)."""
-    global _gpu_transcriber, _gpu_transcriber_loaded
+    global _gpu_transcriber, _gpu_transcriber_loaded, _gpu_transcriber_status
 
     if _gpu_transcriber_loaded:
         return _gpu_transcriber
@@ -1164,18 +1185,54 @@ def get_gpu_transcriber() -> Optional[GpuPianoTranscriber]:
         '/root/rhythm_training/piano_transcription.pt',
     ]
 
+    _gpu_transcriber_status.update({
+        'attempted': True,
+        'initialized': False,
+        'use_gpu': USE_GPU,
+        'searched_paths': list(model_paths),
+        'selected_path': None,
+        'reason': 'loading',
+        'last_error': None,
+    })
+
+    if not USE_GPU:
+        _gpu_transcriber_status.update({
+            'reason': 'cuda_unavailable',
+            'last_error': 'CUDA not available',
+        })
+        _gpu_transcriber_loaded = True
+        return None
+
+    found_checkpoint = False
+
     for path in model_paths:
         if os.path.exists(path):
+            found_checkpoint = True
+            _gpu_transcriber_status['selected_path'] = path
             try:
                 _gpu_transcriber = GpuPianoTranscriber()
                 _gpu_transcriber.load_from_pt(path)
+                _gpu_transcriber_status.update({
+                    'initialized': True,
+                    'reason': 'initialized',
+                    'last_error': None,
+                })
                 break
             except Exception as e:
                 print(f"[GPU Transcriber] Failed to load from {path}: {e}")
                 _gpu_transcriber = None
+                _gpu_transcriber_status.update({
+                    'reason': 'load_failed',
+                    'last_error': f"{type(e).__name__}: {e}",
+                })
 
     # Note: Custom model (piano_transcription.pt) is optional - ensemble model is primary
     # No warning needed since ensemble_transcription.pt is the main transcriber
+    if _gpu_transcriber is None and _gpu_transcriber_status.get('reason') != 'load_failed':
+        _gpu_transcriber_status.update({
+            'reason': 'checkpoint_missing' if not found_checkpoint else 'not_initialized',
+            'last_error': None,
+        })
 
     _gpu_transcriber_loaded = True
     return _gpu_transcriber
@@ -1226,8 +1283,8 @@ class GpuEnsembleTranscriber(nn.Module):
         self.config = config
 
         # Build feature extractor
-        from train_ensemble import MultiResFeatureExtractor  # type: ignore
-        from train_ensemble import _build_model_from_config  # type: ignore
+        from rhythm_training.train_ensemble import MultiResFeatureExtractor  # type: ignore
+        from rhythm_training.train_ensemble import _build_model_from_config  # type: ignore
 
         self.extractor = MultiResFeatureExtractor(
             sr=config.get('sample_rate', 16000),
@@ -1337,7 +1394,7 @@ class GpuEnsembleTranscriber(nn.Module):
         all_note_value /= counts[:, None, None]
 
         # Decode note events with post-processing (including note values)
-        from train_ensemble import decode_note_events  # type: ignore
+        from rhythm_training.train_ensemble import decode_note_events  # type: ignore
         events = decode_note_events(
             all_onset, all_frame, all_vel,
             note_value_probs=all_note_value,
@@ -1424,8 +1481,8 @@ class GpuMelBaselineTranscriber(nn.Module):
         config = checkpoint.get('config', {})
         self.config = config
 
-        from train_mel_baseline import MelFeatureExtractor  # type: ignore
-        from train_mel_baseline import _build_model_from_config # type: ignore
+        from rhythm_training.train_mel_baseline import MelFeatureExtractor  # type: ignore
+        from rhythm_training.train_mel_baseline import _build_model_from_config  # type: ignore
 
         self.extractor = MelFeatureExtractor(
             sr=config.get('sample_rate', 16000),
@@ -1529,7 +1586,7 @@ class GpuMelBaselineTranscriber(nn.Module):
         all_vel /= counts[:, None]
         all_note_value /= counts[:, None, None]
 
-        from train_ensemble import decode_note_events  # type: ignore
+        from rhythm_training.train_ensemble import decode_note_events  # type: ignore
         events = decode_note_events(
             all_onset, all_frame, all_vel,
             note_value_probs=all_note_value,
@@ -1558,11 +1615,27 @@ class GpuMelBaselineTranscriber(nn.Module):
 
 _gpu_mel_baseline_transcriber: Optional[GpuMelBaselineTranscriber] = None
 _gpu_mel_baseline_transcriber_loaded = False
+_gpu_mel_baseline_transcriber_status: Dict[str, object] = {
+    'model': 'mel_baseline',
+    'attempted': False,
+    'initialized': False,
+    'use_gpu': USE_GPU,
+    'searched_paths': [],
+    'selected_path': None,
+    'reason': 'not_attempted',
+    'last_error': None,
+}
+
+
+def get_gpu_mel_baseline_transcriber_status() -> Dict[str, object]:
+    """Return the current mel baseline loader status."""
+    return dict(_gpu_mel_baseline_transcriber_status)
 
 
 def get_gpu_mel_baseline_transcriber() -> Optional[GpuMelBaselineTranscriber]:
     """Lazy-load the GPU mel baseline transcriber (singleton)."""
     global _gpu_mel_baseline_transcriber, _gpu_mel_baseline_transcriber_loaded
+    global _gpu_mel_baseline_transcriber_status
 
     if _gpu_mel_baseline_transcriber_loaded:
         return _gpu_mel_baseline_transcriber
@@ -1573,18 +1646,54 @@ def get_gpu_mel_baseline_transcriber() -> Optional[GpuMelBaselineTranscriber]:
         '/root/rhythm_training/mel_baseline_transcription.pt',
     ]
 
+    _gpu_mel_baseline_transcriber_status.update({
+        'attempted': True,
+        'initialized': False,
+        'use_gpu': USE_GPU,
+        'searched_paths': list(model_paths),
+        'selected_path': None,
+        'reason': 'loading',
+        'last_error': None,
+    })
+
+    if not USE_GPU:
+        _gpu_mel_baseline_transcriber_status.update({
+            'reason': 'cuda_unavailable',
+            'last_error': 'CUDA not available',
+        })
+        _gpu_mel_baseline_transcriber_loaded = True
+        return None
+
+    found_checkpoint = False
+
     for path in model_paths:
         if os.path.exists(path):
+            found_checkpoint = True
+            _gpu_mel_baseline_transcriber_status['selected_path'] = path
             try:
                 _gpu_mel_baseline_transcriber = GpuMelBaselineTranscriber()
                 _gpu_mel_baseline_transcriber.load_from_pt(path)
+                _gpu_mel_baseline_transcriber_status.update({
+                    'initialized': True,
+                    'reason': 'initialized',
+                    'last_error': None,
+                })
                 break
             except Exception as e:
                 print(f"[GPU MelBaseline] Failed to load from {path}: {e}")
                 _gpu_mel_baseline_transcriber = None
+                _gpu_mel_baseline_transcriber_status.update({
+                    'reason': 'load_failed',
+                    'last_error': f"{type(e).__name__}: {e}",
+                })
 
     if _gpu_mel_baseline_transcriber is None:
         print("[GPU MelBaseline] Model not found (not trained yet?)")
+        if _gpu_mel_baseline_transcriber_status.get('reason') != 'load_failed':
+            _gpu_mel_baseline_transcriber_status.update({
+                'reason': 'checkpoint_missing' if not found_checkpoint else 'not_initialized',
+                'last_error': None,
+            })
 
     _gpu_mel_baseline_transcriber_loaded = True
     return _gpu_mel_baseline_transcriber

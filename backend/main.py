@@ -78,7 +78,8 @@ import tempfile
 import numpy as np
 import soundfile as sf
 import uvicorn
-from detect_note import (analyze_audio, analyze_audio_optimized, read_wav,
+from detect_note import (analyze_audio, analyze_audio_live_neural,
+                         analyze_audio_optimized, read_wav,
                          second_pass_gap_fill)
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
@@ -101,6 +102,7 @@ class StreamReset(BaseModel):
     session_id: str
 
 OVERLAP_SAMPLES = 4096  # ~93ms @ 44.1kHz, > n_fft for continuity
+MIN_STREAM_ANALYSIS_SAMPLES = 16385  # torch.stft(center=True, reflect) needs input > 16384 for CQT
 _stream_sessions: Dict[str, Dict] = {}
 
 # A/B test flag: set to True to use optimized pipeline (4x faster)
@@ -175,15 +177,622 @@ def _load_bytes_to_pcm(data: bytes, target_sr: int = 44100) -> np.ndarray:
         y = resample_poly(y, up, down).astype(np.float32, copy=False)
     return y
 
+
+def _append_stream_audio_chunk(sess: Dict, x_chunk: np.ndarray) -> None:
+    history = sess.setdefault("full_audio_chunks", [])
+    history.append(x_chunk.astype(np.float32, copy=False))
+
+
+def _get_stream_session_audio(sess: Dict) -> np.ndarray | None:
+    chunks = sess.get("full_audio_chunks") or []
+    if not chunks:
+        return None
+
+    try:
+        return np.concatenate(chunks).astype(np.float32, copy=False)
+    except Exception:
+        return None
+
+
+def _run_classic_finalize_analysis(audio: np.ndarray, debug: bool = False) -> Dict:
+    temp_audio_path = None
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            sf.write(tmp_file.name, audio, 44100)
+            temp_audio_path = tmp_file.name
+
+        return analyze_audio(
+            temp_audio_path,
+            debug,
+            True,
+            True,
+            True,
+            "cuda",
+        )
+    except Exception:
+        logger.warning(
+            "Classic finalize pass failed; falling back to optimized analysis",
+            exc_info=True,
+        )
+        return analyze_audio_optimized(audio, debug)
+    finally:
+        if temp_audio_path:
+            try:
+                os.unlink(temp_audio_path)
+            except OSError:
+                pass
+
 def _get_session(session_id: str) -> Dict:
     s = _stream_sessions.get(session_id)
     if s is None:
         s = {
             "tail": np.zeros(0, dtype=np.float32),
             "sample_cursor": 0,  # samples processed (without overlap)
+            "full_audio_chunks": [],
         }
         _stream_sessions[session_id] = s
     return s
+
+
+def _clear_stream_session(session_id: str) -> None:
+    _stream_sessions.pop(session_id, None)
+
+
+def _event_time(event: Dict) -> float:
+    try:
+        return float(event.get("time_seconds", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _event_duration(event: Dict) -> float:
+    duration = event.get("duration_seconds")
+    if duration is not None:
+        try:
+            return max(0.0, float(duration))
+        except (TypeError, ValueError):
+            pass
+
+    offset = event.get("offset_seconds")
+    if offset is not None:
+        try:
+            return max(0.0, float(offset) - _event_time(event))
+        except (TypeError, ValueError):
+            pass
+
+    return 0.0
+
+
+def _event_confidence(event: Dict) -> float:
+    try:
+        return float(event.get("confidence", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _event_rank(event: Dict) -> float:
+    rank = (_event_confidence(event) * 2.0) + min(_event_duration(event), 0.25)
+    if str(event.get("method") or "") != "second_pass_soft":
+        rank += 0.1
+    return rank
+
+
+def _note_pitch_sort_value(event: Dict) -> int:
+    try:
+        return int(event.get("midi_note", -999))
+    except (TypeError, ValueError):
+        return -999
+
+
+def _note_has_chord_support(
+    note: Dict,
+    chords: List[Dict],
+    time_tolerance_sec: float = 0.05,
+) -> bool:
+    midi = note.get("midi_note")
+    if midi is None:
+        return False
+
+    try:
+        midi_int = int(midi)
+    except (TypeError, ValueError):
+        return False
+
+    note_time = _event_time(note)
+    for chord in chords:
+        if abs(_event_time(chord) - note_time) > time_tolerance_sec:
+            continue
+
+        try:
+            chord_midis = [int(value) for value in (chord.get("midi_notes") or [])]
+        except (TypeError, ValueError):
+            continue
+
+        if midi_int in chord_midis:
+            return True
+
+    return False
+
+
+def _dedupe_note_events(
+    notes: List[Dict],
+    time_tolerance_sec: float = 0.05,
+) -> List[Dict]:
+    deduped: List[Dict] = []
+
+    for note in sorted(
+        notes or [],
+        key=lambda event: (_event_time(event), _note_pitch_sort_value(event)),
+    ):
+        note_copy = dict(note)
+        midi = note_copy.get("midi_note")
+
+        try:
+            midi_int = int(midi)
+        except (TypeError, ValueError):
+            deduped.append(note_copy)
+            continue
+
+        note_copy["midi_note"] = midi_int
+
+        duplicate_idx = None
+        for idx in range(len(deduped) - 1, -1, -1):
+            existing = deduped[idx]
+            if existing.get("midi_note") != midi_int:
+                continue
+            if abs(_event_time(existing) - _event_time(note_copy)) <= time_tolerance_sec:
+                duplicate_idx = idx
+                break
+
+        if duplicate_idx is None:
+            deduped.append(note_copy)
+            continue
+
+        if _event_rank(note_copy) > _event_rank(deduped[duplicate_idx]):
+            deduped[duplicate_idx] = note_copy
+
+    return sorted(deduped, key=_event_time)
+
+
+def _chord_signature(chord: Dict):
+    midi_notes = chord.get("midi_notes") or []
+    try:
+        normalized = tuple(sorted(int(value) for value in midi_notes))
+    except (TypeError, ValueError):
+        normalized = ()
+
+    if normalized:
+        return normalized
+
+    return str(chord.get("label") or "")
+
+
+def _dedupe_chord_events(
+    chords: List[Dict],
+    time_tolerance_sec: float = 0.06,
+) -> List[Dict]:
+    deduped: List[Dict] = []
+
+    for chord in sorted(chords or [], key=_event_time):
+        chord_copy = dict(chord)
+        signature = _chord_signature(chord_copy)
+
+        duplicate_idx = None
+        for idx in range(len(deduped) - 1, -1, -1):
+            existing = deduped[idx]
+            if _chord_signature(existing) != signature:
+                continue
+            if abs(_event_time(existing) - _event_time(chord_copy)) <= time_tolerance_sec:
+                duplicate_idx = idx
+                break
+
+        if duplicate_idx is None:
+            deduped.append(chord_copy)
+            continue
+
+        if _event_rank(chord_copy) > _event_rank(deduped[duplicate_idx]):
+            deduped[duplicate_idx] = chord_copy
+
+    return sorted(deduped, key=_event_time)
+
+
+LIVE_NOISE_FILTER_PROFILES = {
+    "open": {
+        "id": "open",
+        "note_min_confidence": 0.44,
+        "short_note_max_duration": 0.08,
+        "short_note_min_confidence": 0.72,
+        "unsupported_note_max_duration": 0.12,
+        "unsupported_note_min_confidence": 0.58,
+        "chord_min_confidence": 0.44,
+        "short_chord_max_duration": 0.12,
+        "short_chord_min_confidence": 0.62,
+        "chunk_second_pass_soft_k": 1.28,
+        "contention_soft_k": 1.38,
+    },
+    "balanced": {
+        "id": "balanced",
+        "note_min_confidence": 0.50,
+        "short_note_max_duration": 0.08,
+        "short_note_min_confidence": 0.78,
+        "unsupported_note_max_duration": 0.12,
+        "unsupported_note_min_confidence": 0.64,
+        "chord_min_confidence": 0.50,
+        "short_chord_max_duration": 0.12,
+        "short_chord_min_confidence": 0.68,
+        "chunk_second_pass_soft_k": 1.35,
+        "contention_soft_k": 1.45,
+    },
+    "clean": {
+        "id": "clean",
+        "note_min_confidence": 0.58,
+        "short_note_max_duration": 0.10,
+        "short_note_min_confidence": 0.84,
+        "unsupported_note_max_duration": 0.14,
+        "unsupported_note_min_confidence": 0.72,
+        "chord_min_confidence": 0.58,
+        "short_chord_max_duration": 0.14,
+        "short_chord_min_confidence": 0.76,
+        "chunk_second_pass_soft_k": 1.52,
+        "contention_soft_k": 1.62,
+    },
+}
+
+
+def _resolve_live_noise_filter_profile(profile_name: str) -> Dict:
+    profile_key = str(profile_name or "balanced").strip().lower()
+    return LIVE_NOISE_FILTER_PROFILES.get(
+        profile_key,
+        LIVE_NOISE_FILTER_PROFILES["balanced"],
+    )
+
+
+def _is_tentative_live_note(note: Dict, chords: List[Dict], profile: Dict) -> bool:
+    confidence = _event_confidence(note)
+    duration = _event_duration(note)
+    method = str(note.get("method") or "")
+
+    if method == "second_pass_soft":
+        return True
+
+    if confidence < float(profile["note_min_confidence"]):
+        return True
+
+    if (
+        duration <= float(profile["short_note_max_duration"])
+        and confidence < float(profile["short_note_min_confidence"])
+    ):
+        return True
+
+    if (
+        duration <= float(profile["unsupported_note_max_duration"])
+        and confidence < float(profile["unsupported_note_min_confidence"])
+        and not _note_has_chord_support(note, chords)
+    ):
+        return True
+
+    return False
+
+
+def _is_tentative_live_chord(chord: Dict, profile: Dict) -> bool:
+    confidence = _event_confidence(chord)
+    duration = _event_duration(chord)
+    method = str(chord.get("method") or "")
+
+    if method == "second_pass_soft":
+        return True
+
+    if confidence < float(profile["chord_min_confidence"]):
+        return True
+
+    if (
+        duration <= float(profile["short_chord_max_duration"])
+        and confidence < float(profile["short_chord_min_confidence"])
+    ):
+        return True
+
+    return False
+
+
+def _apply_live_noise_gate_and_contention_pass(
+    audio: np.ndarray,
+    notes: List[Dict],
+    chords: List[Dict],
+    noise_profile: str = "balanced",
+    debug: bool = False,
+) -> Dict:
+    profile = _resolve_live_noise_filter_profile(noise_profile)
+    deduped_notes = _dedupe_note_events(notes)
+    deduped_chords = _dedupe_chord_events(chords)
+
+    stable_chords: List[Dict] = []
+    tentative_chords: List[Dict] = []
+    for chord in deduped_chords:
+        if _is_tentative_live_chord(chord, profile):
+            tentative_chords.append(chord)
+        else:
+            stable_chords.append(chord)
+
+    stable_notes: List[Dict] = []
+    tentative_notes: List[Dict] = []
+    for note in deduped_notes:
+        if _is_tentative_live_note(note, stable_chords, profile):
+            tentative_notes.append(note)
+        else:
+            stable_notes.append(note)
+
+    stats = {
+        "deduped_notes": len(deduped_notes),
+        "deduped_chords": len(deduped_chords),
+        "tentative_notes": len(tentative_notes),
+        "tentative_chords": len(tentative_chords),
+        "contention_recovered_notes": 0,
+        "contention_recovered_chords": 0,
+        "profile": profile["id"],
+    }
+
+    if not tentative_notes and not tentative_chords:
+        return {
+            "notes": stable_notes,
+            "chords": stable_chords,
+            "stats": stats,
+        }
+
+    contention = second_pass_gap_fill(
+        audio,
+        stable_notes,
+        stable_chords,
+        min_gap_seconds=0.08,
+        soft_K=float(profile["contention_soft_k"]),
+        debug=debug,
+    )
+
+    recovered_notes = _dedupe_note_events(contention.get("notes") or [])
+    recovered_chords = _dedupe_chord_events(contention.get("chords") or [])
+
+    stats["contention_recovered_notes"] = len(recovered_notes)
+    stats["contention_recovered_chords"] = len(recovered_chords)
+
+    return {
+        "notes": _dedupe_note_events([*stable_notes, *recovered_notes]),
+        "chords": _dedupe_chord_events([*stable_chords, *recovered_chords]),
+        "stats": stats,
+    }
+
+
+async def _analyze_uploaded_stream_chunk(
+    session_id: str,
+    data: bytes,
+    debug: bool = False,
+    noise_profile: str = "balanced",
+    use_neural_live: bool = True,
+) -> Dict:
+    """Decode one uploaded chunk, preserve overlap continuity, and return absolute-time events."""
+    TIMER.start("chunk_total")
+    TIMER.start("chunk_decode")
+
+    x_chunk = _load_bytes_to_pcm(data, target_sr=44100)
+    chunk_decode_ms = TIMER.stop("chunk_decode")
+    chunk_duration_ms = len(x_chunk) / 44100 * 1000
+
+    sess = _get_session(session_id)
+    _append_stream_audio_chunk(sess, x_chunk)
+    tail = sess["tail"]
+    if tail.size > 0:
+        x_full = np.concatenate([tail, x_chunk])
+    else:
+        x_full = x_chunk
+
+    if x_full.size < MIN_STREAM_ANALYSIS_SAMPLES:
+        sess["tail"] = x_full.astype(np.float32, copy=False)
+        return {
+            "onsets": [],
+            "notes": [],
+            "chords": [],
+            "analysis_summary": {
+                "total_onsets": 0,
+                "total_notes": 0,
+                "total_chords": 0,
+                "duration_seconds": float(x_full.size / 44100.0),
+                "sample_rate": 44100,
+            },
+            "stream_info": {
+                "session_id": session_id,
+                "chunk_samples": int(x_chunk.size),
+                "overlap_samples": int(tail.size),
+                "sample_cursor": int(sess["sample_cursor"]),
+                "processed_sample_rate": 44100,
+                "buffered_until_ready": True,
+                "required_samples": MIN_STREAM_ANALYSIS_SAMPLES,
+                "buffered_samples": int(x_full.size),
+            },
+            "_timing_ms": {
+                "analysis_path": "buffering",
+                "neural_requested": bool(use_neural_live),
+                "chunk_decode": round(chunk_decode_ms, 2),
+                "chunk_inference": 0.0,
+                "chunk_total": round(TIMER.stop("chunk_total"), 2),
+                "chunk_audio_duration": round(chunk_duration_ms, 2),
+                "real_time_factor": 0.0,
+            },
+        }
+
+    overlap_sec = float(tail.size) / 44100.0
+
+    TIMER.start("chunk_inference")
+    analysis_path = "optimized" if USE_OPTIMIZED_PIPELINE else "split_pipeline"
+    neural_error = None
+    if use_neural_live:
+        results = await run_in_threadpool(
+            analyze_audio_live_neural,
+            x_full,
+            44100,
+            debug,
+            60,
+            "cuda",
+        )
+        if results.get("error"):
+            neural_error = str(results.get("error"))
+            logger.warning(
+                "Live neural path unavailable for session %s, falling back to %s: %s",
+                session_id,
+                analysis_path,
+                neural_error,
+            )
+            analyzer = analyze_audio_optimized if USE_OPTIMIZED_PIPELINE else analyze_audio
+            results = await run_in_threadpool(analyzer, x_full, debug)
+            analysis_path = f"{analysis_path}_fallback"
+        else:
+            analysis_path = str(
+                results.get("analysis_summary", {}).get("analysis_path")
+                or "live_neural"
+            )
+    else:
+        analyzer = analyze_audio_optimized if USE_OPTIMIZED_PIPELINE else analyze_audio
+        results = await run_in_threadpool(analyzer, x_full, debug)
+    chunk_inference_ms = TIMER.stop("chunk_inference")
+    chunk_second_pass_ms = 0.0
+    chunk_contention_ms = 0.0
+    live_filter_stats = None
+    live_noise_profile = _resolve_live_noise_filter_profile(noise_profile)
+    results.setdefault("analysis_summary", {})["analysis_path"] = analysis_path
+
+    # Live mode previously refined rhythm later but accepted first-pass pitch
+    # decisions as-is. Reuse the existing soft-note gap fill here so missed
+    # quiet notes inside the current chunk can enter the live session too.
+    if analysis_path == "live_neural":
+        results["notes"] = _dedupe_note_events(results.get("notes") or [])
+        results["chords"] = _dedupe_chord_events(results.get("chords") or [])
+    elif results.get("notes") or results.get("chords"):
+        TIMER.start("chunk_second_pass")
+        second_pass = await run_in_threadpool(
+            second_pass_gap_fill,
+            x_full,
+            results.get("notes", []),
+            results.get("chords", []),
+            0.25,
+            float(live_noise_profile["chunk_second_pass_soft_k"]),
+            debug,
+        )
+        chunk_second_pass_ms = TIMER.stop("chunk_second_pass")
+
+        extra_notes = second_pass.get("notes") or []
+        extra_chords = second_pass.get("chords") or []
+        if extra_notes:
+            results["notes"] = sorted(
+                [*(results.get("notes") or []), *extra_notes],
+                key=lambda event: event.get("time_seconds", 0.0),
+            )
+        if extra_chords:
+            results["chords"] = sorted(
+                [*(results.get("chords") or []), *extra_chords],
+                key=lambda event: event.get("time_seconds", 0.0),
+            )
+
+        results["notes"] = _dedupe_note_events(results.get("notes") or [])
+        results["chords"] = _dedupe_chord_events(results.get("chords") or [])
+
+        TIMER.start("chunk_contention")
+        contention_result = await run_in_threadpool(
+            _apply_live_noise_gate_and_contention_pass,
+            x_full,
+            results.get("notes") or [],
+            results.get("chords") or [],
+            noise_profile,
+            debug,
+        )
+        chunk_contention_ms = TIMER.stop("chunk_contention")
+
+        results["notes"] = contention_result.get("notes") or []
+        results["chords"] = contention_result.get("chords") or []
+        live_filter_stats = contention_result.get("stats")
+
+    def _shift_and_filter_events(evts):
+        out = []
+        for event in evts or []:
+            time_seconds = float(event.get("time_seconds", 0.0))
+            if time_seconds < overlap_sec:
+                continue
+
+            absolute_time = (sess["sample_cursor"] / 44100.0) + (time_seconds - overlap_sec)
+            shifted = dict(event)
+            shifted["time_seconds"] = round(absolute_time, 6)
+            out.append(shifted)
+        return out
+
+    results_filtered = {
+        "onsets": _shift_and_filter_events(results.get("onsets")),
+        "notes": _shift_and_filter_events(results.get("notes")),
+        "chords": _shift_and_filter_events(results.get("chords")),
+        "analysis_summary": results.get("analysis_summary", {}),
+    }
+
+    results_filtered["analysis_summary"] = {
+        **results_filtered["analysis_summary"],
+        "total_onsets": len(results_filtered["onsets"]),
+        "total_notes": len(results_filtered["notes"]),
+        "total_chords": len(results_filtered["chords"]),
+    }
+
+    sess["sample_cursor"] += int(x_chunk.size)
+
+    take = min(OVERLAP_SAMPLES, x_full.size)
+    sess["tail"] = x_full[-take:].astype(np.float32, copy=False)
+
+    chunk_total_ms = TIMER.stop("chunk_total")
+    real_time_factor = chunk_total_ms / chunk_duration_ms if chunk_duration_ms > 0 else 0
+
+    results_filtered["stream_info"] = {
+        "session_id": session_id,
+        "chunk_samples": int(x_chunk.size),
+        "overlap_samples": int(tail.size),
+        "sample_cursor": int(sess["sample_cursor"]),
+        "processed_sample_rate": 44100,
+    }
+    if neural_error is not None:
+        results_filtered["stream_info"]["neural_error"] = neural_error
+    if live_filter_stats is not None:
+        results_filtered["stream_info"]["live_filter"] = live_filter_stats
+
+    analyzer_timings = results.get("_timing_ms") or {}
+    results_filtered["_timing_ms"] = {
+        "analysis_path": analysis_path,
+        "neural_requested": bool(use_neural_live),
+        "neural_error": neural_error,
+        **analyzer_timings,
+        "chunk_decode": round(chunk_decode_ms, 2),
+        "chunk_inference": round(chunk_inference_ms, 2),
+        "chunk_second_pass": round(chunk_second_pass_ms, 2),
+        "chunk_contention": round(chunk_contention_ms, 2),
+        "chunk_total": round(chunk_total_ms, 2),
+        "chunk_audio_duration": round(chunk_duration_ms, 2),
+        "real_time_factor": round(real_time_factor, 3),
+    }
+
+    neural_total_ms = analyzer_timings.get("neural_total")
+    neural_model_inference_ms = analyzer_timings.get("neural_model_inference")
+    neural_model_name = results.get("analysis_summary", {}).get("neural_model")
+    neural_suffix = ""
+    if analysis_path == "live_neural":
+        neural_parts = []
+        if neural_model_name:
+            neural_parts.append(f"model={neural_model_name}")
+        if isinstance(neural_total_ms, (int, float)):
+            neural_parts.append(f"neural_total={neural_total_ms:.1f}ms")
+        if isinstance(neural_model_inference_ms, (int, float)):
+            neural_parts.append(f"model_inference={neural_model_inference_ms:.1f}ms")
+        if neural_parts:
+            neural_suffix = " | " + ", ".join(neural_parts)
+    elif neural_error:
+        neural_suffix = f" | neural_error={neural_error}"
+
+    print(
+        f"[TIMING] stream_chunk[{session_id}]({analysis_path}): decode={chunk_decode_ms:.1f}ms, "
+        f"inference={chunk_inference_ms:.1f}ms, second_pass={chunk_second_pass_ms:.1f}ms, contention={chunk_contention_ms:.1f}ms, TOTAL={chunk_total_ms:.1f}ms | "
+        f"audio={chunk_duration_ms:.0f}ms, RTF={real_time_factor:.2f}x{neural_suffix}"
+    )
+
+    return results_filtered
 
 @app.get("/")
 async def root():
@@ -221,15 +830,24 @@ async def warmup():
     """
     try:
         from gpu_ops import (get_gpu_mel_baseline_transcriber,
-                             get_gpu_rhythm_model)
+                             get_gpu_rhythm_model, get_gpu_transcriber,
+                             get_gpu_transformer_model)
 
         ensemble = get_gpu_mel_baseline_transcriber()
         rhythm = get_gpu_rhythm_model()
+        transformer = get_gpu_transformer_model()
+        transcriber = get_gpu_transcriber()
+        warmup_audio = np.zeros(MIN_STREAM_ANALYSIS_SAMPLES, dtype=np.float32)
+        analyzer = analyze_audio_optimized if USE_OPTIMIZED_PIPELINE else analyze_audio
+        await run_in_threadpool(analyzer, warmup_audio, False)
         
         return {
             "status": "warm",
             "ensemble_model": ensemble is not None and ensemble.initialized,
             "rhythm_model": rhythm is not None,
+            "transformer_model": transformer is not None and transformer.initialized,
+            "transcriber_model": transcriber is not None and transcriber.initialized,
+            "analysis_pipeline": "primed",
         }
     except Exception as e:
         return {
@@ -287,17 +905,15 @@ async def analyze_audio_file(
         import tempfile
 
         # 1) Log filename, content-type, and size
-        print(f"[DEBUG] upload filename={file.filename!r}, content_type={file.content_type!r}, size={len(data)} bytes")
-
+        # print(f"[DEBUG] upload filename={file.filename!r}, content_type={file.content_type!r}, size={len(data)} bytes")
         # 2) Log the first few bytes in hex (should start with 'RIFF')
-        hex_header = binascii.hexlify(data[:12]).decode('ascii', errors='ignore')
-        print(f"[DEBUG] first 12 bytes (hex): {hex_header}")
-
+        # hex_header = binascii.hexlify(data[:12]).decode('ascii', errors='ignore')
+        # print(f"[DEBUG] first 12 bytes (hex): {hex_header}")
         # 3) Write a copy to a temp file so you can download/inspect it
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(file.filename)[1] or ".wav")
         tmp.write(data)
         tmp.flush()
-        print(f"[DEBUG] data upload written to {tmp.name}")
+        # print(f"[DEBUG] data upload written to {tmp.name}")
         #! END DEBUG
 
         tmp.close()
@@ -628,8 +1244,7 @@ async def analyze_audio_stream(request: AudioStreamRequest):
 async def stream_reset(payload: StreamReset):
     """Reset a streaming session so state (tail, cursors) clears."""
     sid = payload.session_id
-    if sid in _stream_sessions:
-        del _stream_sessions[sid]
+    _clear_stream_session(sid)
     return {"status": "reset", "session_id": sid}
 
 @app.post("/stream/chunk")
@@ -642,82 +1257,8 @@ async def stream_chunk(
     Client should send each chunk file with the same session_id for a recording session.
     """
     try:
-        TIMER.start("chunk_total")
-        TIMER.start("chunk_decode")
-        
-        # Read and decode to PCM float32 mono 44.1k
         data = await file.read()
-        x_chunk = _load_bytes_to_pcm(data, target_sr=44100)
-        chunk_decode_ms = TIMER.stop("chunk_decode")
-        chunk_duration_ms = len(x_chunk) / 44100 * 1000
-
-        # Get session and build analysis buffer with previous tail for overlap continuity
-        sess = _get_session(session_id)
-        tail = sess["tail"]
-        if tail.size > 0:
-            x_full = np.concatenate([tail, x_chunk])
-        else:
-            x_full = x_chunk
-
-        overlap_sec = float(tail.size) / 44100.0
-
-        # Run the main analyzer on the combined buffer (use optimized if flag is set)
-        TIMER.start("chunk_inference")
-        analyzer = analyze_audio_optimized if USE_OPTIMIZED_PIPELINE else analyze_audio
-        results = await run_in_threadpool(analyzer, x_full, debug)
-        chunk_inference_ms = TIMER.stop("chunk_inference")
-
-        # Filter out detections that lie within the leading overlap region
-        def _shift_and_filter_events(evts):
-            out = []
-            for e in evts or []:
-                t = float(e.get("time_seconds", 0.0))
-                if t >= overlap_sec:  # keep only beyond overlap
-                    # Convert to absolute time based on cursor (exclude overlap)
-                    abs_t = (sess["sample_cursor"] / 44100.0) + (t - overlap_sec)
-                    e2 = dict(e)
-                    e2["time_seconds"] = round(abs_t, 6)
-                    out.append(e2)
-            return out
-
-        results_filtered = {
-            "onsets": _shift_and_filter_events(results.get("onsets")),
-            "notes": _shift_and_filter_events(results.get("notes")),
-            "chords": _shift_and_filter_events(results.get("chords")),
-            "analysis_summary": results.get("analysis_summary", {}),
-        }
-
-        # Update session state: advance cursor by the NON-overlap chunk length
-        sess["sample_cursor"] += int(x_chunk.size)
-
-        # Keep new tail from the end of the combined buffer
-        take = min(OVERLAP_SAMPLES, x_full.size)
-        sess["tail"] = x_full[-take:].astype(np.float32, copy=False)
-
-        chunk_total_ms = TIMER.stop("chunk_total")
-        
-        # Calculate real-time factor (< 1.0 means faster than real-time)
-        rtf = chunk_total_ms / chunk_duration_ms if chunk_duration_ms > 0 else 0
-        
-        # Pack stream metadata with timing
-        results_filtered["stream_info"] = {
-            "session_id": session_id,
-            "chunk_samples": int(x_chunk.size),
-            "overlap_samples": int(tail.size),
-            "sample_cursor": int(sess["sample_cursor"]),
-            "processed_sample_rate": 44100,
-        }
-        
-        results_filtered["_timing_ms"] = {
-            "chunk_decode": round(chunk_decode_ms, 2),
-            "chunk_inference": round(chunk_inference_ms, 2),
-            "chunk_total": round(chunk_total_ms, 2),
-            "chunk_audio_duration": round(chunk_duration_ms, 2),
-            "real_time_factor": round(rtf, 3),
-        }
-        
-        print(f"[TIMING] /stream/chunk: decode={chunk_decode_ms:.1f}ms, inference={chunk_inference_ms:.1f}ms, TOTAL={chunk_total_ms:.1f}ms | audio={chunk_duration_ms:.0f}ms, RTF={rtf:.2f}x")
-
+        results_filtered = await _analyze_uploaded_stream_chunk(session_id, data, debug)
         return JSONResponse(content=make_json_serializable(results_filtered))
 
     except Exception as e:
@@ -773,6 +1314,7 @@ async def live_session_reset(req: LiveSessionQuery):
     """Reset an existing live session (clears all notes, resets tempo)."""
     session = get_live_session(req.session_id)
     session.reset()
+    _clear_stream_session(req.session_id)
     return {"status": "reset", "session_id": req.session_id}
 
 
@@ -780,7 +1322,75 @@ async def live_session_reset(req: LiveSessionQuery):
 async def live_session_delete(req: LiveSessionQuery):
     """Delete a live session."""
     deleted = delete_live_session(req.session_id)
+    _clear_stream_session(req.session_id)
     return {"status": "deleted" if deleted else "not_found", "session_id": req.session_id}
+
+
+@app.post("/live/audio-chunk")
+async def live_process_audio_chunk(
+    session_id: str = Form(...),
+    file: UploadFile = File(...),
+    noise_profile: str = Form("balanced"),
+    use_neural_live: bool = Form(True),
+    debug: bool = False,
+):
+    """
+    Analyze an uploaded chunk and immediately route detections into the live rhythm session.
+
+    This is the backend bridge between overlap-aware chunk audio analysis and the
+    two-stage live quantizer. Frontends can call one endpoint per chunk and get
+    both immediate notation and deferred-refinement state updates.
+    """
+    try:
+        data = await file.read()
+        chunk_result = await _analyze_uploaded_stream_chunk(
+            session_id,
+            data,
+            debug,
+            noise_profile,
+            use_neural_live,
+        )
+
+        session = get_live_session(session_id)
+        live_result = await run_in_threadpool(
+            session.process_notes,
+            chunk_result.get("notes", []),
+            chunk_result.get("chords", []),
+        )
+
+        response = {
+            "onsets": chunk_result.get("onsets", []),
+            "notes": live_result.get("coarse_notes", []),
+            "chords": live_result.get("coarse_chords", []),
+            "detected_notes": chunk_result.get("notes", []),
+            "detected_chords": chunk_result.get("chords", []),
+            "analysis_summary": chunk_result.get("analysis_summary", {}),
+            "analysis_path": chunk_result.get("analysis_summary", {}).get("analysis_path"),
+            "bpm": live_result.get("bpm"),
+            "bpm_confidence": live_result.get("bpm_confidence"),
+            "beat_grid": live_result.get("beat_grid", session.grid_payload()),
+            "needs_refresh": live_result.get("needs_refresh", False),
+            "refined_notes": live_result.get("refined_notes") or [],
+            "refinement_version": live_result.get("refinement_version", 0),
+            "stream_info": chunk_result.get("stream_info", {}),
+            "_timing_ms": chunk_result.get("_timing_ms", {}),
+            "next_refinement_poll_ms": session.get_next_refinement_delay_ms(),
+        }
+
+        response["neural_error"] = (
+            response.get("_timing_ms", {}).get("neural_error")
+            or response.get("stream_info", {}).get("neural_error")
+        )
+        response["fallback_reason"] = response["neural_error"]
+
+        if response["needs_refresh"]:
+            response["all_notes"] = session.get_all_notes()
+            response["all_chords"] = session.coarse_chords
+
+        return JSONResponse(content=make_json_serializable(response))
+    except Exception as e:
+        logger.error(f"live_process_audio_chunk error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"live audio chunk failed: {str(e)}")
 
 
 @app.post("/live/process")
@@ -804,6 +1414,10 @@ async def live_process_notes(req: LiveNotesInput):
     result = await run_in_threadpool(
         session.process_notes, req.notes, req.chords
     )
+    result["next_refinement_poll_ms"] = session.get_next_refinement_delay_ms()
+    if result.get("needs_refresh"):
+        result["all_notes"] = session.get_all_notes()
+        result["all_chords"] = session.coarse_chords
     
     return JSONResponse(content=make_json_serializable(result))
 
@@ -825,15 +1439,24 @@ async def live_check_refinement(req: LiveSessionQuery):
     session = get_live_session(req.session_id)
     
     bpm, confidence = session.get_current_bpm()
-    refined = session.refinement_state.check_refinement(time.time(), bpm)
-    
-    return JSONResponse(content=make_json_serializable({
+    current_time = time.time()
+    grid = session.beat_grid
+    refined = session.refinement_state.check_refinement(current_time, bpm, grid=grid)
+
+    payload = {
         "needs_refresh": refined is not None and len(refined) > 0,
         "refined_notes": refined or [],
         "refinement_version": session.refinement_state.get_refinement_version(),
         "bpm": bpm,
         "bpm_confidence": confidence,
-    }))
+        "beat_grid": session.grid_payload(),
+        "next_refinement_poll_ms": session.get_next_refinement_delay_ms(current_time),
+    }
+    if payload["needs_refresh"]:
+        payload["all_notes"] = session.get_all_notes()
+        payload["all_chords"] = session.coarse_chords
+
+    return JSONResponse(content=make_json_serializable(payload))
 
 
 @app.post("/live/get-all-notes")
@@ -852,6 +1475,7 @@ async def live_get_all_notes(req: LiveSessionQuery):
         "chords": session.coarse_chords,
         "bpm": bpm,
         "bpm_confidence": confidence,
+        "beat_grid": session.grid_payload(),
         "refinement_version": session.refinement_state.get_refinement_version(),
     }))
 
@@ -865,19 +1489,50 @@ async def live_finalize_session(req: LiveSessionQuery):
     Use this endpoint when the user stops recording.
     """
     session = get_live_session(req.session_id)
-    
-    # Force refinement of all pending notes
+
+    stream_session = _get_session(req.session_id)
+    full_audio = _get_stream_session_audio(stream_session)
+
+    if full_audio is not None and full_audio.size >= MIN_STREAM_ANALYSIS_SAMPLES:
+        final_results = await run_in_threadpool(
+            _run_classic_finalize_analysis,
+            full_audio,
+        )
+        analysis_summary = final_results.get("analysis_summary", {}) or {}
+        final_notes = final_results.get("notes") or []
+        final_chords = final_results.get("chords") or []
+        final_onsets = final_results.get("onsets") or []
+
+        return JSONResponse(content=make_json_serializable({
+            "status": "finalized",
+            "finalization_mode": "classic_full_pass",
+            "notes": final_notes,
+            "chords": final_chords,
+            "onsets": final_onsets,
+            "bpm": analysis_summary.get("detected_bpm"),
+            "bpm_confidence": analysis_summary.get("tempo_confidence"),
+            "analysis_summary": analysis_summary,
+            "beat_grid": session.grid_payload(),
+            "total_notes": len(final_notes),
+            "total_chords": len(final_chords),
+            "refinement_version": session.refinement_state.get_refinement_version(),
+        }))
+
+    # Force refinement of all pending notes when a classic full pass is unavailable.
     await run_in_threadpool(session.force_refinement)
-    
+
     all_notes = session.get_all_notes()
     bpm, confidence = session.get_current_bpm()
-    
+
     return JSONResponse(content=make_json_serializable({
         "status": "finalized",
+        "finalization_mode": "live_refinement_only",
         "notes": all_notes,
         "chords": session.coarse_chords,
+        "onsets": [],
         "bpm": bpm,
         "bpm_confidence": confidence,
+        "beat_grid": session.grid_payload(),
         "total_notes": len(all_notes),
         "total_chords": len(session.coarse_chords),
         "refinement_version": session.refinement_state.get_refinement_version(),
