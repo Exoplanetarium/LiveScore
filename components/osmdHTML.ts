@@ -8,6 +8,8 @@ export const OSMD_HTML = `
     html, body {
       margin: 0;
       padding: 0;
+      width: 100%;
+      height: 100%;
       min-height: 100%;
       background: linear-gradient(180deg, #ffffff 0%, #f5f7fb 100%);
       overflow: hidden;
@@ -20,11 +22,15 @@ export const OSMD_HTML = `
     #osmd-container {
       position: relative;
       width: 100%;
+      height: 100%;
       min-height: 560px;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: auto;
       background: linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(248,250,252,0.98) 100%);
       box-sizing: border-box;
-      touch-action: manipulation;
+      overscroll-behavior-y: contain;
+      -webkit-overflow-scrolling: touch;
+      touch-action: pan-y pinch-zoom;
     }
     #osmd-container.landscape-mode {
       overflow-x: hidden;
@@ -128,13 +134,15 @@ export const OSMD_HTML = `
     let cameraMode = 'smooth';
     let cameraSuspendUntil = 0;
     let suppressScoreTapUntil = 0;
-    const PORTRAIT_SVG_SCALE = 0.5;
-    const PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER = 2.0;
-    const PORTRAIT_MEASURE_MIN_WIDTH = 380;
+    let scoreScrollActive = false;
+    let scoreScrollReleaseTimer = null;
+    const PORTRAIT_SVG_SCALE = 0.42;
+    const PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER = 1.08;
+    const PORTRAIT_MEASURE_MIN_WIDTH = 110;
     const LANDSCAPE_MEASURE_MIN_WIDTH = 190;
-    const PORTRAIT_MIN_NOTE_DISTANCE = 5.0;
+    const PORTRAIT_MIN_NOTE_DISTANCE = 3.1;
     const LANDSCAPE_MIN_NOTE_DISTANCE = 2.8;
-    const PORTRAIT_VOICE_SPACING_ADDEND = 8.0;
+    const PORTRAIT_VOICE_SPACING_ADDEND = 4.6;
     const LANDSCAPE_VOICE_SPACING_ADDEND = 4.5;
     const cameraState = {
       currentX: 0,
@@ -196,12 +204,72 @@ export const OSMD_HTML = `
       }
     }
 
+    function setScoreScrollActive(active) {
+      if (scoreScrollReleaseTimer != null) {
+        clearTimeout(scoreScrollReleaseTimer);
+        scoreScrollReleaseTimer = null;
+      }
+
+      if (scoreScrollActive === active) {
+        return;
+      }
+
+      scoreScrollActive = active;
+      post({ type: 'scoreScrollActive', active: active });
+    }
+
+    function scheduleScoreScrollInactive() {
+      if (scoreScrollReleaseTimer != null) {
+        clearTimeout(scoreScrollReleaseTimer);
+      }
+
+      scoreScrollReleaseTimer = setTimeout(function() {
+        scoreScrollReleaseTimer = null;
+        setScoreScrollActive(false);
+      }, 140);
+    }
+
+    function beginScoreScrollGesture() {
+      if (fullscreenMode || !usesWrappedPortraitLayout()) return;
+      setScoreScrollActive(true);
+    }
+
+    function markScoreScrollInteraction() {
+      if (fullscreenMode || !usesWrappedPortraitLayout()) return;
+      suppressScoreTapUntil = Date.now() + 250;
+      setScoreScrollActive(true);
+      scheduleScoreScrollInactive();
+    }
+
     function usesWrappedPortraitLayout() {
       return !fullscreenMode;
     }
 
     function getRenderedSvgScale() {
       return fullscreenMode ? 1 : PORTRAIT_SVG_SCALE;
+    }
+
+    function getPortraitVirtualLayoutWidthPercent() {
+      const scaledWidthFactor = PORTRAIT_SVG_SCALE * PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER;
+      if (!Number.isFinite(scaledWidthFactor) || scaledWidthFactor <= 0) {
+        return 100;
+      }
+      return 100 / scaledWidthFactor;
+    }
+
+    function applyLayoutViewportWidth(useVirtualWidth) {
+      const scoreRoot = getScoreRoot();
+      if (!scoreRoot) return;
+
+      if (useVirtualWidth && usesWrappedPortraitLayout()) {
+        // Let OSMD line-break against a wider virtual page, then shrink the SVG after render.
+        scoreRoot.style.width = getPortraitVirtualLayoutWidthPercent().toFixed(2) + '%';
+        scoreRoot.style.maxWidth = 'none';
+        return;
+      }
+
+      scoreRoot.style.width = '100%';
+      scoreRoot.style.maxWidth = '100%';
     }
 
     function applyEngravingDensity() {
@@ -222,12 +290,15 @@ export const OSMD_HTML = `
       osmd.EngravingRules.MeasureMinimumWidth = portraitWrapped
         ? PORTRAIT_MEASURE_MIN_WIDTH
         : LANDSCAPE_MEASURE_MIN_WIDTH;
+      osmd.EngravingRules.RenderXMeasuresPerLineAkaSystem = portraitWrapped ? 3 : 0;
       osmd.EngravingRules.FixedMeasureWidth = false;
       osmd.EngravingRules.FixedMeasureWidthFixedValue = 0;
       osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = false;
+      osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = false;
+      osmd.EngravingRules.RenderMultipleRestMeasures = false;
       osmd.EngravingRules.LastSystemMaxScalingFactor = 2.2;
-      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
-      osmd.EngravingRules.NewPageAtXMLNewPageAttribute = true;
+      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = false;
+      osmd.EngravingRules.NewPageAtXMLNewPageAttribute = false;
       osmd.EngravingRules.AutoBeamNotes = true;
       osmd.EngravingRules.AutoBeamOptions = {
         beam_rests: false,
@@ -239,9 +310,14 @@ export const OSMD_HTML = `
     function applyLayoutOptions() {
       if (!osmd) return;
 
+      applyLayoutViewportWidth(true);
+
       osmd.setOptions({
         renderSingleHorizontalStaffline: false,
         autoResize: fullscreenMode,
+        newSystemFromXML: false,
+        newSystemFromNewPageInXML: false,
+        newPageFromXML: false,
       });
       applyEngravingDensity();
     }
@@ -249,6 +325,8 @@ export const OSMD_HTML = `
     function applyRenderedSvgScale() {
       const scoreRoot = getScoreRoot();
       if (!scoreRoot) return;
+
+      applyLayoutViewportWidth(false);
 
       const scale = getRenderedSvgScale();
       const svgNodes = scoreRoot.querySelectorAll('svg');
@@ -776,6 +854,32 @@ export const OSMD_HTML = `
       container.addEventListener('touchcancel', endCameraDrag, { passive: true });
     }
 
+    function bindScoreScrollHandlers() {
+      const container = getContainer();
+      if (!container || container.dataset.scoreScrollBound === 'true') return;
+
+      container.dataset.scoreScrollBound = 'true';
+      container.addEventListener('touchstart', function(evt) {
+        if (!evt.touches || evt.touches.length !== 1) return;
+        beginScoreScrollGesture();
+      }, { passive: true });
+      container.addEventListener('touchmove', function(evt) {
+        if (!evt.touches || evt.touches.length !== 1) return;
+        markScoreScrollInteraction();
+      }, { passive: true });
+      container.addEventListener('touchend', function() {
+        if (fullscreenMode || !usesWrappedPortraitLayout()) return;
+        scheduleScoreScrollInactive();
+      }, { passive: true });
+      container.addEventListener('touchcancel', function() {
+        if (fullscreenMode || !usesWrappedPortraitLayout()) return;
+        scheduleScoreScrollInactive();
+      }, { passive: true });
+      container.addEventListener('scroll', function() {
+        markScoreScrollInteraction();
+      }, { passive: true });
+    }
+
     function scrollCursorIntoView() {
       if (fullscreenMode || usesWrappedPortraitLayout() || Date.now() < cameraSuspendUntil) return;
 
@@ -838,6 +942,7 @@ export const OSMD_HTML = `
       }
       updateStagePadding();
       cameraSuspendUntil = 0;
+      setScoreScrollActive(false);
       cancelCameraAnimation();
       
       // Update OSMD rendering mode and re-render
@@ -1519,6 +1624,7 @@ export const OSMD_HTML = `
       applyLayoutOptions();
 
       bindCameraGestureHandlers();
+      bindScoreScrollHandlers();
       updateCameraMetrics();
       setCameraMode(options && options.cameraMode ? options.cameraMode : cameraMode);
       

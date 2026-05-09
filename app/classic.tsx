@@ -1,24 +1,26 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Midi } from "@tonejs/midi";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
-  ActivityIndicator,
-  Alert,
-  PermissionsAndroid,
-  Platform,
-  ScrollView,
-  StatusBar,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    ActivityIndicator,
+    Alert,
+    PermissionsAndroid,
+    Platform,
+    ScrollView,
+    StatusBar,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
 import AudioRecord from "react-native-audio-record";
-import { Midi } from "@tonejs/midi";
 import FullScreenPianoRoll from "../components/FullScreenPianoRoll";
-import PianoSheetMusic, { generateMusicXML } from "../components/PianoSheetMusic";
+import PianoSheetMusic, {
+    generateMusicXML,
+} from "../components/PianoSheetMusic";
 import { ThemedText } from "../components/ThemedText";
 import { ThemedView } from "../components/ThemedView";
 
@@ -146,6 +148,7 @@ export default function AnalyzeScreen() {
 
   // Fullscreen piano roll mode (becomes the main interface after transcription)
   const [isFullscreenRoll, setIsFullscreenRoll] = useState(false);
+  const [isScoreScrollActive, setIsScoreScrollActive] = useState(false);
 
   // Playback mode: "recording" plays the audio, "synthesized" plays MIDI visually
   const [playbackMode, setPlaybackMode] = useState<"recording" | "synthesized">(
@@ -495,8 +498,7 @@ export default function AnalyzeScreen() {
   const exportMusicXML = async () => {
     if (!analysisResults?.details) return;
     try {
-      const bpm =
-        analysisResults.details.analysis_summary?.detected_bpm || 120;
+      const bpm = analysisResults.details.analysis_summary?.detected_bpm || 120;
       const xml = generateMusicXML(
         analysisResults.details.notes || [],
         analysisResults.details.chords || [],
@@ -522,8 +524,7 @@ export default function AnalyzeScreen() {
   const exportMIDI = async () => {
     if (!analysisResults?.details) return;
     try {
-      const bpm =
-        analysisResults.details.analysis_summary?.detected_bpm || 120;
+      const bpm = analysisResults.details.analysis_summary?.detected_bpm || 120;
       const midi = new Midi();
       midi.header.setTempo(bpm);
 
@@ -535,9 +536,7 @@ export default function AnalyzeScreen() {
       for (const n of analysisResults.details.notes || []) {
         const dur =
           n.duration_seconds ??
-          (n.offset_seconds != null
-            ? n.offset_seconds - n.time_seconds
-            : 0.25);
+          (n.offset_seconds != null ? n.offset_seconds - n.time_seconds : 0.25);
         track.addNote({
           midi: n.midi_note,
           time: n.time_seconds,
@@ -550,9 +549,7 @@ export default function AnalyzeScreen() {
         if (!c.midi_notes) continue;
         const dur =
           c.duration_seconds ??
-          (c.offset_seconds != null
-            ? c.offset_seconds - c.time_seconds
-            : 0.25);
+          (c.offset_seconds != null ? c.offset_seconds - c.time_seconds : 0.25);
         for (const pitch of c.midi_notes) {
           track.addNote({
             midi: pitch,
@@ -862,6 +859,8 @@ export default function AnalyzeScreen() {
       contentContainerStyle={{ flexGrow: 1 }}
       showsVerticalScrollIndicator={true}
       keyboardShouldPersistTaps="handled"
+      nestedScrollEnabled
+      scrollEnabled={!isScoreScrollActive}
     >
       <ThemedView style={styles.container}>
         <ThemedText type="title" style={styles.title}>
@@ -1217,6 +1216,7 @@ export default function AnalyzeScreen() {
                 results={analysisResults.details}
                 timeSignature={timeSignature}
                 keySignature={keySignature}
+                onScoreScrollActiveChange={setIsScoreScrollActive}
               />
             </View>
           )}

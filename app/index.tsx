@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  LayoutChangeEvent,
   PermissionsAndroid,
   Platform,
   ScrollView,
@@ -252,6 +253,7 @@ export default function LiveTranscriptionScreen() {
   const [isWarmingUp, setIsWarmingUp] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [isScoreScrollActive, setIsScoreScrollActive] = useState(false);
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
@@ -263,6 +265,8 @@ export default function LiveTranscriptionScreen() {
   const [sessionReady, setSessionReady] = useState(false);
   const [noiseProfile, setNoiseProfile] =
     useState<LiveNoiseProfile>("balanced");
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const liveScoreSectionYRef = useRef(0);
 
   const durationIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
@@ -295,6 +299,20 @@ export default function LiveTranscriptionScreen() {
   useEffect(() => {
     sessionReadyRef.current = sessionReady;
   }, [sessionReady]);
+
+  const handleLiveScoreSectionLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      liveScoreSectionYRef.current = event.nativeEvent.layout.y;
+    },
+    [],
+  );
+
+  const scrollToLiveScoreSection = useCallback(() => {
+    const targetY = Math.max(0, liveScoreSectionYRef.current - 12);
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({ y: targetY, animated: false });
+    });
+  }, []);
 
   const mergeChunkIntoResult = useCallback(
     (
@@ -597,6 +615,7 @@ export default function LiveTranscriptionScreen() {
         return;
       }
 
+      scrollToLiveScoreSection();
       setIsWarmingUp(true);
       setConnectionStatus("connecting");
       setDuration(0);
@@ -639,6 +658,7 @@ export default function LiveTranscriptionScreen() {
       AudioRecord.start();
       setIsWarmingUp(false);
       setIsRecording(true);
+      scrollToLiveScoreSection();
       isRecordingRef.current = true;
       setSessionReady(true);
       sessionReadyRef.current = true;
@@ -684,6 +704,7 @@ export default function LiveTranscriptionScreen() {
     ensureBackendWarm,
     requestPermissions,
     resetSession,
+    scrollToLiveScoreSection,
   ]);
 
   const stopLiveTranscription = useCallback(async () => {
@@ -804,9 +825,12 @@ export default function LiveTranscriptionScreen() {
 
   return (
     <ScrollView
+      ref={scrollViewRef}
       style={styles.scrollView}
       contentContainerStyle={styles.scrollContent}
       showsVerticalScrollIndicator={false}
+      nestedScrollEnabled
+      scrollEnabled={!isScoreScrollActive}
     >
       <ThemedView style={styles.container}>
         <View style={styles.header}>
@@ -937,45 +961,23 @@ export default function LiveTranscriptionScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.card}>
+        <View style={styles.card} onLayout={handleLiveScoreSectionLayout}>
           <ThemedText type="subtitle" style={styles.cardTitle}>
             {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT
               ? "Live OSMD Engraving"
               : "Committed Score"}
           </ThemedText>
-          <ThemedText style={styles.cardDescription}>
-            {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT
-              ? "Experimental: keeps the OSMD WebView mounted during recording and batches live score updates before handing them to the engraver."
-              : "Engraved notation is generated once the live session ends, so the heavy renderer never fights with the live piano roll above."}
-          </ThemedText>
           {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT ? (
-            liveEngravingResult ? (
-              <PianoSheetMusic
-                results={liveEngravingResult}
-                refinementVersion={liveEngravingVersion}
-              />
-            ) : (
-              <ThemedText style={styles.placeholderText}>
-                {/* <LivePianoRollWebView
-                  notes={analysisResult?.notes ?? []}
-                  chords={analysisResult?.chords ?? []}
-                  bpm={
-                    currentBpm ||
-                    analysisResult?.analysis_summary.detected_bpm ||
-                    120
-                  }
-                  elapsedSeconds={duration}
-                  isRecording={isRecording}
-                /> */}
-                {isRecording
-                  ? "Recording… waiting for the first batched engraving update."
-                  : isWarmingUp
-                    ? "Warming the live neural path. Recording will begin once the model is hot."
-                    : "Start a live session to stream notes into the OSMD engraving experiment."}
-              </ThemedText>
-            )
+            <PianoSheetMusic
+              results={liveEngravingResult ?? undefined}
+              refinementVersion={liveEngravingVersion}
+              onScoreScrollActiveChange={setIsScoreScrollActive}
+            />
           ) : hasFinalizedRecording && analysisResult ? (
-            <PianoSheetMusic results={analysisResult} />
+            <PianoSheetMusic
+              results={analysisResult}
+              onScoreScrollActiveChange={setIsScoreScrollActive}
+            />
           ) : (
             <ThemedText style={styles.placeholderText}>
               {isRecording

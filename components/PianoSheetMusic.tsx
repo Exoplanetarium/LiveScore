@@ -137,6 +137,7 @@ interface PianoSheetMusicProps {
    * Useful for tracking when live updates are visible to the user.
    */
   onScoreRendered?: (measureCount: number) => void;
+  onScoreScrollActiveChange?: (active: boolean) => void;
 }
 
 interface OsmdDebugSnapshot {
@@ -2089,28 +2090,57 @@ export function generateMusicXML(
   return xml;
 }
 
-// A small visible fallback score (one measure with four quarter notes) used when no notes are available
-const FALLBACK_XML = `<?xml version="1.0" encoding="UTF-8"?>
+function generateBlankPageMusicXML(
+  timeSignature: "4/4" | "3/4" | "6/8" = "4/4",
+  bpm: number = 120,
+  fifths: number = 0,
+  measureCount: number = 12,
+): string {
+  const timeConfig =
+    timeSignature === "6/8"
+      ? {
+          beats: "6",
+          beatType: "8",
+          measureDuration: 72,
+        }
+      : timeSignature === "3/4"
+        ? {
+            beats: "3",
+            beatType: "4",
+            measureDuration: 72,
+          }
+        : {
+            beats: "4",
+            beatType: "4",
+            measureDuration: 96,
+          };
+
+  const measures = Array.from({ length: measureCount }, (_, measureIndex) => {
+    const measureNumber = measureIndex + 1;
+    let measureContent = "";
+
+    if (measureNumber === 1) {
+      measureContent += `<attributes><divisions>24</divisions><key><fifths>${fifths}</fifths></key><time><beats>${timeConfig.beats}</beats><beat-type>${timeConfig.beatType}</beat-type></time><staves>2</staves><clef number="1"><sign>G</sign><line>2</line></clef><clef number="2"><sign>F</sign><line>4</line></clef></attributes>`;
+      measureContent += `<direction placement="above"><direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${Math.round(bpm)}</per-minute></metronome></direction-type><sound tempo="${Math.round(bpm)}"/></direction>`;
+    }
+
+    measureContent += `<note><rest measure="yes"/><duration>${timeConfig.measureDuration}</duration><voice>1</voice><staff>1</staff></note>`;
+    measureContent += `<backup><duration>${timeConfig.measureDuration}</duration></backup>`;
+    measureContent += `<note><rest measure="yes"/><duration>${timeConfig.measureDuration}</duration><voice>2</voice><staff>2</staff></note>`;
+
+    return `<measure number="${measureNumber}">${measureContent}</measure>`;
+  }).join("");
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="3.1">
   <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>
-  <part id="P1">
-    <measure number="1">
-      <attributes>
-        <divisions>24</divisions>
-        <key><fifths>0</fifths></key>
-        <time><beats>4</beats><beat-type>4</beat-type></time>
-        <staves>2</staves>
-        <clef number="1"><sign>G</sign><line>2</line></clef>
-        <clef number="2"><sign>F</sign><line>4</line></clef>
-      </attributes>
-      <note><pitch><step>C</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
-      <note><pitch><step>D</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
-      <note><pitch><step>E</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
-      <note><pitch><step>F</step><octave>4</octave></pitch><duration>24</duration><type>quarter</type><staff>1</staff></note>
-    </measure>
-  </part>
+  <part id="P1">${measures}</part>
 </score-partwise>`;
+}
+
+// Blank grand staff shown before live chunks arrive so the engraving surface is stable.
+const FALLBACK_XML = generateBlankPageMusicXML();
 
 // Drop-in replacement component:
 export default function PianoSheetMusic({
@@ -2119,6 +2149,7 @@ export default function PianoSheetMusic({
   keySignature = 0,
   refinementVersion,
   onScoreRendered,
+  onScoreScrollActiveChange,
 }: PianoSheetMusicProps) {
   // accumulate incoming note blocks so live updates append to the end
   const [accumulatedNotes, setAccumulatedNotes] = useState<NoteResult[]>([]);
@@ -2345,6 +2376,25 @@ export default function PianoSheetMusic({
   // the bridge becomes ready *after* the score is already populated.
   const [webViewReady, setWebViewReady] = useState(false);
   const webViewReadyRef = useRef<boolean>(false);
+  const scoreScrollActiveRef = useRef(false);
+
+  const updateScoreScrollActive = useCallback(
+    (active: boolean) => {
+      if (scoreScrollActiveRef.current === active) {
+        return;
+      }
+
+      scoreScrollActiveRef.current = active;
+      onScoreScrollActiveChange?.(active);
+    },
+    [onScoreScrollActiveChange],
+  );
+
+  useEffect(() => {
+    return () => {
+      updateScoreScrollActive(false);
+    };
+  }, [updateScoreScrollActive]);
 
   const requestScorePlayback = useCallback(() => {
     if (score === FALLBACK_XML) {
@@ -2399,6 +2449,11 @@ export default function PianoSheetMusic({
               console.warn("Orientation lock failed", err);
             }
           }
+          return;
+        }
+
+        if (msg.type === "scoreScrollActive") {
+          updateScoreScrollActive(Boolean(msg.active));
           return;
         }
 
@@ -2535,11 +2590,13 @@ export default function PianoSheetMusic({
       playbackBPM,
       requestDebugSnapshot,
       shouldFollowLatest,
+      updateScoreScrollActive,
     ],
   );
 
   const onWebLoadStart = useCallback(() => {
     appendDebugEvent("webview load start");
+    updateScoreScrollActive(false);
     setWebViewReady(false);
     webViewReadyRef.current = false;
     measuresSentRef.current = 0;
@@ -2555,7 +2612,7 @@ export default function PianoSheetMusic({
       clearTimeout(renderProbeTimeoutRef.current);
       renderProbeTimeoutRef.current = null;
     }
-  }, [appendDebugEvent]);
+  }, [appendDebugEvent, updateScoreScrollActive]);
 
   const onWebLoadEnd = useCallback(() => {
     appendDebugEvent("webview load end");
@@ -2846,8 +2903,8 @@ export default function PianoSheetMusic({
               allowUniversalAccessFromFileURLs
               mixedContentMode="always"
               style={isLandscape ? styles.landscapeWebview : styles.webview}
-              nestedScrollEnabled={isLandscape}
-              scrollEnabled={isLandscape}
+              nestedScrollEnabled
+              scrollEnabled
             />
           </View>
         </View>
