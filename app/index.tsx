@@ -20,7 +20,7 @@ import { useLiveRhythm } from "../hooks/useLiveRhythm";
 
 const BACKEND_URL =
   "https://exoplanetarium--livescore-gpu-fastapi-app.modal.run";
-const CHUNK_INTERVAL_MS = 1200;
+const CHUNK_INTERVAL_MS = 600;
 const USE_LIVE_NEURAL_PATH = true;
 const USE_LIVE_OSMD_ENGRAVING_EXPERIMENT = true;
 const LIVE_OSMD_BATCH_MS = 40;
@@ -142,6 +142,18 @@ interface AnalysisResult {
   };
 }
 
+interface RecordedChunkTelemetry {
+  sequenceNumber: number;
+  captureStartedAtMs: number;
+  captureStoppedAtMs: number;
+  fileReadyAtMs: number;
+}
+
+interface QueuedChunkUpload {
+  path: string;
+  telemetry: RecordedChunkTelemetry;
+}
+
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
 
 function buildLiveAnalysisResult(
@@ -253,6 +265,7 @@ export default function LiveTranscriptionScreen() {
   const [isWarmingUp, setIsWarmingUp] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [liveScoreViewportHeight, setLiveScoreViewportHeight] = useState(0);
   const [isScoreScrollActive, setIsScoreScrollActive] = useState(false);
   const [connectionStatus, setConnectionStatus] =
     useState<ConnectionStatus>("disconnected");
@@ -279,9 +292,12 @@ export default function LiveTranscriptionScreen() {
     result: AnalysisResult | null;
     version: number;
   }>({ result: null, version: 0 });
+  const pendingChunkUploadRef = useRef<QueuedChunkUpload | null>(null);
   const isRecordingRef = useRef(false);
   const sessionReadyRef = useRef(false);
   const backendWarmupPromiseRef = useRef<Promise<void> | null>(null);
+  const currentChunkStartedAtRef = useRef<number | null>(null);
+  const chunkSequenceRef = useRef(0);
   // Track concurrent uploads so the spinner only clears when the queue drains.
   const inFlightUploadsRef = useRef(0);
   const [hasFinalizedRecording, setHasFinalizedRecording] = useState(false);
@@ -290,6 +306,7 @@ export default function LiveTranscriptionScreen() {
       (option) => option.value === noiseProfile,
     ) ?? LIVE_NOISE_PROFILE_OPTIONS[1];
   const isStartDisabled = isWarmingUp;
+  const isLiveSessionLayout = true;
   const recordButtonLabel = isRecording
     ? "Stop Live Session"
     : isWarmingUp
@@ -313,6 +330,82 @@ export default function LiveTranscriptionScreen() {
       scrollViewRef.current?.scrollTo({ y: targetY, animated: false });
     });
   }, []);
+
+  const handleLiveScoreViewportLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const nextHeight = Math.max(
+        220,
+        Math.floor(event.nativeEvent.layout.height),
+      );
+      setLiveScoreViewportHeight((previous) =>
+        Math.abs(previous - nextHeight) < 8 ? previous : nextHeight,
+      );
+    },
+    [],
+  );
+
+  const clearPendingChunkUpload = useCallback(() => {
+    const pendingUpload = pendingChunkUploadRef.current;
+    pendingChunkUploadRef.current = null;
+    if (!pendingUpload) {
+      return;
+    }
+
+    FileSystem.deleteAsync(pendingUpload.path, { idempotent: true }).catch(
+      () => {},
+    );
+  }, []);
+
+  const logChunkPipelineTiming = useCallback(
+    (
+      telemetry: RecordedChunkTelemetry,
+      uploadStartedAtMs: number,
+      uploadFinishedAtMs: number,
+      mergeQueuedAtMs: number,
+      firstFrameAtMs: number,
+      timing?: {
+        analysisPath?: string;
+        chunkTotalMs?: number;
+        chunkInferenceMs?: number;
+        neuralTotalMs?: number;
+        modelInferenceMs?: number;
+        realTimeFactor?: number;
+        neuralError?: string;
+      },
+    ) => {
+      const captureWindowMs =
+        telemetry.captureStoppedAtMs - telemetry.captureStartedAtMs;
+      const filePreparationMs =
+        telemetry.fileReadyAtMs - telemetry.captureStoppedAtMs;
+      const queueDelayMs = uploadStartedAtMs - telemetry.fileReadyAtMs;
+      const requestRoundTripMs = uploadFinishedAtMs - uploadStartedAtMs;
+      const frontendOverheadMs =
+        timing?.chunkTotalMs != null
+          ? Math.max(0, requestRoundTripMs - timing.chunkTotalMs)
+          : undefined;
+      const mergeToFrameMs = firstFrameAtMs - mergeQueuedAtMs;
+      const timeToVisibleMs = firstFrameAtMs - telemetry.captureStartedAtMs;
+
+      console.log("[Live] Chunk pipeline", {
+        chunk: telemetry.sequenceNumber,
+        captureWindowMs,
+        filePreparationMs,
+        queueDelayMs,
+        requestRoundTripMs,
+        backendChunkMs: timing?.chunkTotalMs,
+        backendInferenceMs: timing?.chunkInferenceMs,
+        neuralTotalMs: timing?.neuralTotalMs,
+        modelInferenceMs: timing?.modelInferenceMs,
+        frontendOverheadMs,
+        mergeToFrameMs,
+        timeToVisibleMs,
+        analysisPath: timing?.analysisPath,
+        neuralError: timing?.neuralError,
+        realTimeFactor: timing?.realTimeFactor,
+      });
+    },
+    [],
+  );
 
   const mergeChunkIntoResult = useCallback(
     (
@@ -424,6 +517,9 @@ export default function LiveTranscriptionScreen() {
       if (engravingFlushTimeoutRef.current) {
         clearTimeout(engravingFlushTimeoutRef.current);
       }
+      clearPendingChunkUpload();
+      currentChunkStartedAtRef.current = null;
+      chunkSequenceRef.current = 0;
       try {
         AudioRecord.stop();
       } catch {
@@ -432,7 +528,7 @@ export default function LiveTranscriptionScreen() {
       sessionReadyRef.current = false;
       void resetSession();
     };
-  }, [resetSession, warmBackend]);
+  }, [clearPendingChunkUpload, resetSession, warmBackend]);
 
   useEffect(() => {
     if (!USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
@@ -500,9 +596,10 @@ export default function LiveTranscriptionScreen() {
   }, []);
 
   const processRecordedChunk = useCallback(
-    async (resolvedPath: string) => {
+    async (resolvedPath: string, telemetry: RecordedChunkTelemetry) => {
       inFlightUploadsRef.current += 1;
       setIsProcessing(true);
+      const uploadStartedAtMs = Date.now();
       try {
         if (!sessionReadyRef.current) {
           throw new Error("Live session is not ready yet");
@@ -512,6 +609,8 @@ export default function LiveTranscriptionScreen() {
           noiseProfile,
           useNeuralLive: USE_LIVE_NEURAL_PATH,
         });
+        const uploadFinishedAtMs = Date.now();
+        const mergeQueuedAtMs = Date.now();
         setAnalysisResult((previous) =>
           mergeChunkIntoResult(
             previous,
@@ -521,6 +620,16 @@ export default function LiveTranscriptionScreen() {
             chunk.bpm,
           ),
         );
+        requestAnimationFrame(() => {
+          logChunkPipelineTiming(
+            telemetry,
+            uploadStartedAtMs,
+            uploadFinishedAtMs,
+            mergeQueuedAtMs,
+            Date.now(),
+            chunk.timing,
+          );
+        });
         setConnectionStatus("connected");
       } finally {
         inFlightUploadsRef.current = Math.max(
@@ -532,7 +641,76 @@ export default function LiveTranscriptionScreen() {
         }
       }
     },
-    [mergeChunkIntoResult, noiseProfile, processAudioChunk],
+    [
+      logChunkPipelineTiming,
+      mergeChunkIntoResult,
+      noiseProfile,
+      processAudioChunk,
+    ],
+  );
+
+  const drainPendingChunkUploads = useCallback(() => {
+    if (inFlightUploadsRef.current > 0) {
+      return;
+    }
+
+    const nextUpload = pendingChunkUploadRef.current;
+    if (!nextUpload) {
+      return;
+    }
+
+    pendingChunkUploadRef.current = null;
+
+    void (async () => {
+      try {
+        await processRecordedChunk(nextUpload.path, nextUpload.telemetry);
+      } catch (error) {
+        console.error("Live chunk analysis failed", error);
+        setConnectionStatus("error");
+      } finally {
+        FileSystem.deleteAsync(nextUpload.path, { idempotent: true }).catch(
+          () => {},
+        );
+        drainPendingChunkUploads();
+      }
+    })();
+  }, [processRecordedChunk]);
+
+  const enqueueRecordedChunkUpload = useCallback(
+    (path: string, telemetry: RecordedChunkTelemetry) => {
+      const existingPending = pendingChunkUploadRef.current;
+      if (existingPending) {
+        pendingChunkUploadRef.current = { path, telemetry };
+        console.warn(
+          "[Live] Chunk backlog detected; replacing older pending chunk",
+          {
+            droppedChunk: existingPending.telemetry.sequenceNumber,
+            nextChunk: telemetry.sequenceNumber,
+            inFlightUploads: inFlightUploadsRef.current,
+          },
+        );
+        FileSystem.deleteAsync(existingPending.path, {
+          idempotent: true,
+        }).catch(() => {});
+        return;
+      }
+
+      pendingChunkUploadRef.current = { path, telemetry };
+
+      if (inFlightUploadsRef.current > 0) {
+        console.warn(
+          "[Live] Chunk backlog detected; queued one pending chunk",
+          {
+            queuedChunk: telemetry.sequenceNumber,
+            inFlightUploads: inFlightUploadsRef.current,
+          },
+        );
+        return;
+      }
+
+      drainPendingChunkUploads();
+    },
+    [drainPendingChunkUploads],
   );
 
   // Stops the current short recording, swaps the WAV file out of the way,
@@ -544,6 +722,11 @@ export default function LiveTranscriptionScreen() {
     }
 
     let chunkPath: string | null = null;
+    const captureStoppedAtMs = Date.now();
+    const captureStartedAtMs =
+      currentChunkStartedAtRef.current ??
+      captureStoppedAtMs - CHUNK_INTERVAL_MS;
+    currentChunkStartedAtRef.current = null;
     try {
       const audioFile = await AudioRecord.stop();
       const resolved = await resolveRecordedFilePath(audioFile);
@@ -576,6 +759,7 @@ export default function LiveTranscriptionScreen() {
     // Restart the mic ASAP — do NOT wait for the upload below.
     if (isRecordingRef.current) {
       try {
+        currentChunkStartedAtRef.current = Date.now();
         AudioRecord.start();
         chunkTimeoutRef.current = setTimeout(
           analyzeRecordingChunk,
@@ -588,21 +772,16 @@ export default function LiveTranscriptionScreen() {
     }
 
     if (chunkPath) {
-      void (async () => {
-        const pathToUpload = chunkPath as string;
-        try {
-          await processRecordedChunk(pathToUpload);
-        } catch (error) {
-          console.error("Live chunk analysis failed", error);
-          setConnectionStatus("error");
-        } finally {
-          FileSystem.deleteAsync(pathToUpload, { idempotent: true }).catch(
-            () => {},
-          );
-        }
-      })();
+      const telemetry: RecordedChunkTelemetry = {
+        sequenceNumber: chunkSequenceRef.current + 1,
+        captureStartedAtMs,
+        captureStoppedAtMs,
+        fileReadyAtMs: Date.now(),
+      };
+      chunkSequenceRef.current = telemetry.sequenceNumber;
+      enqueueRecordedChunkUpload(chunkPath, telemetry);
     }
-  }, [processRecordedChunk, resolveRecordedFilePath]);
+  }, [enqueueRecordedChunkUpload, resolveRecordedFilePath]);
 
   const startLiveTranscription = useCallback(async () => {
     try {
@@ -625,6 +804,9 @@ export default function LiveTranscriptionScreen() {
       sessionReadyRef.current = false;
       setHasFinalizedRecording(false);
       inFlightUploadsRef.current = 0;
+      clearPendingChunkUpload();
+      currentChunkStartedAtRef.current = null;
+      chunkSequenceRef.current = 0;
 
       await resetSession();
 
@@ -655,6 +837,7 @@ export default function LiveTranscriptionScreen() {
         throw sessionStartError;
       }
 
+      currentChunkStartedAtRef.current = Date.now();
       AudioRecord.start();
       setIsWarmingUp(false);
       setIsRecording(true);
@@ -699,6 +882,7 @@ export default function LiveTranscriptionScreen() {
     }
   }, [
     analyzeRecordingChunk,
+    clearPendingChunkUpload,
     createSession,
     currentBpm,
     ensureBackendWarm,
@@ -724,6 +908,10 @@ export default function LiveTranscriptionScreen() {
     try {
       if (wasRecording) {
         let finalChunkPath: string | null = null;
+        const captureStoppedAtMs = Date.now();
+        const captureStartedAtMs =
+          currentChunkStartedAtRef.current ?? captureStoppedAtMs;
+        currentChunkStartedAtRef.current = null;
         try {
           const finalAudioFile = await AudioRecord.stop();
           const resolved = await resolveRecordedFilePath(finalAudioFile);
@@ -746,8 +934,15 @@ export default function LiveTranscriptionScreen() {
         }
 
         if (finalChunkPath) {
+          const finalTelemetry: RecordedChunkTelemetry = {
+            sequenceNumber: chunkSequenceRef.current + 1,
+            captureStartedAtMs,
+            captureStoppedAtMs,
+            fileReadyAtMs: Date.now(),
+          };
+          chunkSequenceRef.current = finalTelemetry.sequenceNumber;
           try {
-            await processRecordedChunk(finalChunkPath);
+            await processRecordedChunk(finalChunkPath, finalTelemetry);
           } catch (error) {
             console.warn("Final chunk analysis failed", error);
           } finally {
@@ -822,6 +1017,193 @@ export default function LiveTranscriptionScreen() {
       key: `${event.keyBase}-${index}`,
     }))
     .slice(0, 12);
+
+  const compactScoreViewportHeight = Math.max(
+    220,
+    liveScoreViewportHeight || 280,
+  );
+
+  const renderScoreContent = (compact: boolean) => {
+    if (USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
+      return (
+        <PianoSheetMusic
+          results={liveEngravingResult ?? undefined}
+          refinementVersion={liveEngravingVersion}
+          compact={compact}
+          viewportHeight={compact ? compactScoreViewportHeight : undefined}
+          onScoreScrollActiveChange={setIsScoreScrollActive}
+        />
+      );
+    }
+
+    if (hasFinalizedRecording && analysisResult) {
+      return (
+        <PianoSheetMusic
+          results={analysisResult}
+          compact={compact}
+          viewportHeight={compact ? compactScoreViewportHeight : undefined}
+          onScoreScrollActiveChange={setIsScoreScrollActive}
+        />
+      );
+    }
+
+    return (
+      <View style={compact ? styles.liveScorePlaceholder : null}>
+        <ThemedText style={styles.placeholderText}>
+          {isRecording
+            ? "Recording... live engraving will continue to update here while the controls stay pinned below."
+            : isWarmingUp
+              ? "Warming the live neural path. Recording has not started yet."
+              : "Start a live session to capture notes. The piano roll above updates in real time; sheet music renders after stop."}
+        </ThemedText>
+      </View>
+    );
+  };
+
+  if (isLiveSessionLayout) {
+    const liveStatusColor = getConnectionStatusColor(connectionStatus);
+
+    return (
+      <ThemedView style={styles.liveSessionScreen}>
+        <View style={styles.liveSessionWorkspace}>
+          <View style={styles.liveTopBar}>
+            <ThemedText
+              style={styles.liveTopBarTitle}
+              lightColor="#0f172a"
+              darkColor="#f8fafc"
+              numberOfLines={1}
+            >
+              {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT ? "Live" : "Score"}
+            </ThemedText>
+
+            <View style={styles.liveTopBarMetrics}>
+              <View style={styles.liveInlineMetric}>
+                <ThemedText
+                  style={styles.liveInlineMetricValue}
+                  lightColor="#0f172a"
+                  darkColor="#f8fafc"
+                >
+                  {formatDuration(duration)}
+                </ThemedText>
+                <ThemedText style={styles.liveInlineMetricLabel}>
+                  time
+                </ThemedText>
+              </View>
+              <View style={styles.liveInlineMetric}>
+                <ThemedText
+                  style={styles.liveInlineMetricValue}
+                  lightColor="#0f172a"
+                  darkColor="#f8fafc"
+                >
+                  {Math.round(currentBpm || 120)}
+                </ThemedText>
+                <ThemedText style={styles.liveInlineMetricLabel}>
+                  bpm
+                </ThemedText>
+              </View>
+              <View style={styles.liveInlineMetric}>
+                <ThemedText
+                  style={styles.liveInlineMetricValue}
+                  lightColor="#0f172a"
+                  darkColor="#f8fafc"
+                >
+                  {(analysisResult?.analysis_summary.total_notes ?? 0) +
+                    (analysisResult?.analysis_summary.total_chords ?? 0)}
+                </ThemedText>
+                <ThemedText style={styles.liveInlineMetricLabel}>
+                  events
+                </ThemedText>
+              </View>
+            </View>
+
+            <View
+              style={[
+                styles.liveStatusChip,
+                {
+                  backgroundColor: `${liveStatusColor}1f`,
+                  borderColor: `${liveStatusColor}55`,
+                },
+              ]}
+            >
+              <View
+                style={[styles.statusDot, { backgroundColor: liveStatusColor }]}
+              />
+              {isProcessing || isWarmingUp ? (
+                <ActivityIndicator size="small" color={liveStatusColor} />
+              ) : null}
+            </View>
+          </View>
+
+          <View style={styles.liveScorePane}>
+            <View
+              style={styles.liveScoreViewport}
+              onLayout={handleLiveScoreViewportLayout}
+            >
+              {renderScoreContent(true)}
+            </View>
+          </View>
+
+          <View style={styles.liveControlDock}>
+            <View style={styles.optionRow}>
+              {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
+                const isActive = option.value === noiseProfile;
+
+                return (
+                  <TouchableOpacity
+                    key={option.value}
+                    style={[
+                      styles.optionChip,
+                      isActive ? styles.optionChipActive : null,
+                    ]}
+                    onPress={() => setNoiseProfile(option.value)}
+                  >
+                    <ThemedText
+                      style={[
+                        styles.optionChipText,
+                        isActive ? styles.optionChipTextActive : null,
+                      ]}
+                    >
+                      {option.label}
+                    </ThemedText>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.recordButton,
+                styles.liveRecordButton,
+                isRecording
+                  ? styles.stopButton
+                  : isWarmingUp
+                    ? styles.warmingButton
+                    : styles.startButton,
+                isStartDisabled ? styles.recordButtonDisabled : null,
+              ]}
+              onPress={
+                isRecording ? stopLiveTranscription : startLiveTranscription
+              }
+              disabled={isStartDisabled}
+            >
+              {isWarmingUp ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Ionicons
+                  name={isRecording ? "stop" : "radio"}
+                  size={20}
+                  color="white"
+                />
+              )}
+              <ThemedText style={styles.recordButtonText}>
+                {recordButtonLabel}
+              </ThemedText>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </ThemedView>
+    );
+  }
 
   return (
     <ScrollView
@@ -967,26 +1349,7 @@ export default function LiveTranscriptionScreen() {
               ? "Live OSMD Engraving"
               : "Committed Score"}
           </ThemedText>
-          {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT ? (
-            <PianoSheetMusic
-              results={liveEngravingResult ?? undefined}
-              refinementVersion={liveEngravingVersion}
-              onScoreScrollActiveChange={setIsScoreScrollActive}
-            />
-          ) : hasFinalizedRecording && analysisResult ? (
-            <PianoSheetMusic
-              results={analysisResult}
-              onScoreScrollActiveChange={setIsScoreScrollActive}
-            />
-          ) : (
-            <ThemedText style={styles.placeholderText}>
-              {isRecording
-                ? "Recording… the engraved score will render once you stop."
-                : isWarmingUp
-                  ? "Warming the live neural path. Recording has not started yet."
-                  : "Start a live session to capture notes. The piano roll above updates in real time; sheet music renders after stop."}
-            </ThemedText>
-          )}
+          {renderScoreContent(false)}
         </View>
 
         <View style={styles.card}>
@@ -1049,6 +1412,99 @@ const styles = StyleSheet.create({
     paddingTop: 48,
     paddingBottom: 40,
     gap: 18,
+  },
+  liveSessionScreen: {
+    flex: 1,
+    paddingHorizontal: 16,
+    paddingTop: 48,
+    paddingBottom: 16,
+  },
+  liveSessionWorkspace: {
+    flex: 1,
+    minHeight: 0,
+    gap: 12,
+  },
+  liveTopBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingHorizontal: 4,
+  },
+  liveTopBarTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  liveTopBarMetrics: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: 14,
+  },
+  liveInlineMetric: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: 4,
+  },
+  liveInlineMetricValue: {
+    fontSize: 14,
+    fontWeight: "700",
+    lineHeight: 18,
+  },
+  liveInlineMetricLabel: {
+    fontSize: 10,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+    color: "#64748b",
+    fontWeight: "600",
+  },
+  liveScorePane: {
+    flex: 1,
+    minHeight: 0,
+    borderRadius: 16,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  liveStatusChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    flexShrink: 1,
+  },
+  liveStatusChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  liveScoreViewport: {
+    flex: 1,
+    minHeight: 220,
+    minWidth: 0,
+  },
+  liveScorePlaceholder: {
+    flex: 1,
+    minHeight: 220,
+    borderRadius: 10,
+    paddingHorizontal: 18,
+    paddingVertical: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#ffffff",
+  },
+  liveControlDock: {
+    gap: 10,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: "#ffffff",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  liveRecordButton: {
+    minHeight: 44,
   },
   header: {
     gap: 8,
@@ -1189,6 +1645,7 @@ const styles = StyleSheet.create({
   },
   cardTitle: {
     fontSize: 18,
+    color: "#0f172a",
   },
   cardDescription: {
     lineHeight: 21,
@@ -1196,7 +1653,7 @@ const styles = StyleSheet.create({
   },
   placeholderText: {
     lineHeight: 21,
-    opacity: 0.76,
+    color: "#475569",
   },
   eventsList: {
     gap: 10,

@@ -1,10 +1,10 @@
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
+    useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
 } from "react";
 import { Alert, StyleSheet, TouchableOpacity, View } from "react-native";
 import { WebView, WebViewMessageEvent } from "react-native-webview";
@@ -126,6 +126,8 @@ interface PianoSheetMusicProps {
   results?: AnalysisResult;
   timeSignature?: "4/4" | "3/4" | "6/8"; // Time signature for measure grouping
   keySignature?: number; // MusicXML fifths value: -7 (Cb) to +7 (C#), default 0 (C)
+  compact?: boolean;
+  viewportHeight?: number;
   /**
    * Version number for live refinement updates.
    * When this changes, the component will re-render the score even if
@@ -2147,6 +2149,8 @@ export default function PianoSheetMusic({
   results,
   timeSignature = "4/4",
   keySignature = 0,
+  compact = false,
+  viewportHeight,
   refinementVersion,
   onScoreRendered,
   onScoreScrollActiveChange,
@@ -2371,6 +2375,10 @@ export default function PianoSheetMusic({
   const [playbackBPM, setPlaybackBPM] = useState(detectedBPM);
   const [cameraMotionMode, setCameraMotionMode] =
     useState<CameraMotionMode>("smooth");
+  const compactViewportHeight = Math.max(
+    220,
+    Math.round(viewportHeight ?? 280),
+  );
   const lastDetectedBPMRef = useRef<number | undefined>(undefined);
   // webViewReady is state (not just ref) so the render effect re-fires when
   // the bridge becomes ready *after* the score is already populated.
@@ -2418,12 +2426,10 @@ export default function PianoSheetMusic({
     appendDebugEvent("queued playback until score render completes");
   }, [appendDebugEvent, injectWebCommand, playbackBPM, score]);
 
-  // Update BPM when new results come in with detected tempo (only if WebView is ready)
   useEffect(() => {
     if (detectedBPM && detectedBPM !== lastDetectedBPMRef.current) {
       lastDetectedBPMRef.current = detectedBPM;
       setPlaybackBPM(detectedBPM);
-      // Only send to WebView if it's ready
       if (webViewReadyRef.current) {
         injectWebCommand(
           `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(detectedBPM)});`,
@@ -2489,7 +2495,6 @@ export default function PianoSheetMusic({
           // initial main render completed; mark how many measures are present
           if (typeof msg.measures === "number") {
             measuresSentRef.current = msg.measures;
-            // Notify parent that score has been rendered
             onScoreRendered?.(msg.measures);
             appendDebugEvent(
               `rendered request #${msg.requestId ?? "?"} measures=${msg.measures}`,
@@ -2513,9 +2518,9 @@ export default function PianoSheetMusic({
           }
         }
         if (msg.type === "appended") {
-          // appended measures ack - increment our counter if provided
-          if (typeof msg.appended === "number")
+          if (typeof msg.appended === "number") {
             measuresSentRef.current += msg.appended;
+          }
         }
         if (msg.type === "error") {
           appendDebugEvent(`error ${String(msg.error).slice(0, 120)}`);
@@ -2523,13 +2528,11 @@ export default function PianoSheetMusic({
         }
         if (msg.type === "debugState") {
           setDebugSnapshot(msg.snapshot ?? null);
-          // console.log("[OSMD Debug Snapshot]", msg.snapshot ?? null);
           appendDebugEvent(
             `snapshot ${msg.snapshot?.reason ?? "unknown"} measures=${msg.snapshot?.renderedMeasureCount ?? "?"} svg=${msg.snapshot?.stageSvgCount ?? "?"}`,
           );
         }
 
-        // Playback events
         if (msg.type === "playbackStarted") {
           setIsPlaying(true);
           setIsPaused(false);
@@ -2562,7 +2565,6 @@ export default function PianoSheetMusic({
         if (msg.type === "bpmSet") {
           setPlaybackBPM(msg.bpm);
         }
-        // Handle exit fullscreen from WebView controls
         if (msg.type === "exitFullscreen") {
           try {
             await ScreenOrientation.lockAsync(
@@ -2573,7 +2575,6 @@ export default function PianoSheetMusic({
             console.warn("Exit fullscreen failed", err);
           }
         }
-        // Handle BPM changes from WebView controls
         if (msg.type === "bpmChanged") {
           setPlaybackBPM(msg.bpm);
         }
@@ -2801,94 +2802,119 @@ export default function PianoSheetMusic({
   }, [cameraMotionMode, injectWebCommand, webViewReady]);
 
   return (
-    <View style={styles.container}>
-      <View style={styles.mainContainer}>
-        <View style={styles.playbackSection}>
-          <View style={styles.playbackControls}>
-            <View style={styles.playbackButtonRow}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.controlButton,
-                  styles.playbackButton,
-                  isPlaying && !isPaused
-                    ? styles.warningControlButton
-                    : styles.successControlButton,
-                ]}
-                onPress={() => {
-                  if (!isPlaying) {
-                    requestScorePlayback();
-                  } else if (isPaused) {
-                    requestScorePlayback();
-                  } else {
+    <View style={[styles.container, compact ? styles.compactContainer : null]}>
+      <View style={[styles.mainContainer, compact ? styles.compactMainContainer : null]}>
+        {compact ? null : (
+          <View style={styles.playbackSection}>
+            <View style={styles.playbackControls}>
+              <View style={styles.playbackButtonRow}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.controlButton,
+                    styles.playbackButton,
+                    isPlaying && !isPaused
+                      ? styles.warningControlButton
+                      : styles.successControlButton,
+                  ]}
+                  onPress={() => {
+                    if (!isPlaying) {
+                      requestScorePlayback();
+                    } else if (isPaused) {
+                      requestScorePlayback();
+                    } else {
+                      injectWebCommand(
+                        `if (window.__OSMD_PAUSE) window.__OSMD_PAUSE();`,
+                        "pause-score",
+                      );
+                    }
+                  }}
+                >
+                  <ThemedText style={styles.controlButtonText}>
+                    {isPlaying ? (isPaused ? "Resume" : "Pause") : "Play"}
+                  </ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.controlButton,
+                    styles.playbackButton,
+                    styles.dangerControlButton,
+                  ]}
+                  onPress={() =>
                     injectWebCommand(
-                      `if (window.__OSMD_PAUSE) window.__OSMD_PAUSE();`,
-                      "pause-score",
-                    );
+                      `if (window.__OSMD_STOP) window.__OSMD_STOP();`,
+                      "stop-score",
+                    )
                   }
-                }}
-              >
-                <ThemedText style={styles.controlButtonText}>
-                  {isPlaying ? (isPaused ? "Resume" : "Pause") : "Play"}
-                </ThemedText>
-              </TouchableOpacity>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={[
-                  styles.controlButton,
-                  styles.playbackButton,
-                  styles.dangerControlButton,
-                ]}
-                onPress={() =>
-                  injectWebCommand(
-                    `if (window.__OSMD_STOP) window.__OSMD_STOP();`,
-                    "stop-score",
-                  )
-                }
-              >
-                <ThemedText style={styles.controlButtonText}>Stop</ThemedText>
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.tempoControl}>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.stepperButton}
-                onPress={() => {
-                  const newBPM = Math.max(40, playbackBPM - 10);
-                  setPlaybackBPM(newBPM);
-                  injectWebCommand(
-                    `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(newBPM)});`,
-                    "decrease-bpm",
-                  );
-                }}
-              >
-                <ThemedText style={styles.stepperButtonText}>-</ThemedText>
-              </TouchableOpacity>
-              <View style={styles.bpmDisplay}>
-                <ThemedText style={styles.bpmValue}>{playbackBPM}</ThemedText>
-                <ThemedText style={styles.bpmLabel}>Tempo</ThemedText>
+                >
+                  <ThemedText style={styles.controlButtonText}>Stop</ThemedText>
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                activeOpacity={0.85}
-                style={styles.stepperButton}
-                onPress={() => {
-                  const newBPM = Math.min(240, playbackBPM + 10);
-                  setPlaybackBPM(newBPM);
-                  injectWebCommand(
-                    `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(newBPM)});`,
-                    "increase-bpm",
-                  );
-                }}
-              >
-                <ThemedText style={styles.stepperButtonText}>+</ThemedText>
-              </TouchableOpacity>
+
+              <View style={styles.tempoControl}>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.stepperButton}
+                  onPress={() => {
+                    const newBPM = Math.max(40, playbackBPM - 10);
+                    setPlaybackBPM(newBPM);
+                    injectWebCommand(
+                      `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(newBPM)});`,
+                      "decrease-bpm",
+                    );
+                  }}
+                >
+                  <ThemedText style={styles.stepperButtonText}>-</ThemedText>
+                </TouchableOpacity>
+                <View style={styles.bpmDisplay}>
+                  <ThemedText style={styles.bpmValue}>{playbackBPM}</ThemedText>
+                  <ThemedText style={styles.bpmLabel}>Tempo</ThemedText>
+                </View>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={styles.stepperButton}
+                  onPress={() => {
+                    const newBPM = Math.min(240, playbackBPM + 10);
+                    setPlaybackBPM(newBPM);
+                    injectWebCommand(
+                      `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(newBPM)});`,
+                      "increase-bpm",
+                    );
+                  }}
+                >
+                  <ThemedText style={styles.stepperButtonText}>+</ThemedText>
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
+        )}
 
-        <View style={styles.scoreSection}>
-          <View style={styles.webviewFrame}>
+        <View
+          style={[
+            styles.scoreSection,
+            compact
+              ? {
+                  flex: 1,
+                  minHeight: compactViewportHeight,
+                  marginBottom: 0,
+                  borderWidth: 0,
+                  borderRadius: 0,
+                }
+              : null,
+          ]}
+        >
+          <View
+            style={[
+              styles.webviewFrame,
+              compact
+                ? {
+                    flex: 1,
+                    minHeight: compactViewportHeight,
+                  }
+                : null,
+            ]}
+          >
             <WebView
               ref={webRef}
               originWhitelist={["*"]}
@@ -2902,70 +2928,80 @@ export default function PianoSheetMusic({
               allowFileAccess
               allowUniversalAccessFromFileURLs
               mixedContentMode="always"
-              style={isLandscape ? styles.landscapeWebview : styles.webview}
+              style={[
+                isLandscape ? styles.landscapeWebview : styles.webview,
+                compact
+                  ? {
+                      flex: 1,
+                      height: undefined,
+                    }
+                  : null,
+              ]}
               nestedScrollEnabled
               scrollEnabled
             />
           </View>
         </View>
 
-        <View style={styles.viewControlsSection}>
-          <View style={styles.viewControls}>
-            <View style={styles.cameraModeGroup}>
-              <ThemedText style={styles.controlGroupLabel}>Camera</ThemedText>
-              <View style={styles.cameraModeChips}>
-                {(["smooth", "snap"] as CameraMotionMode[]).map((mode) => (
-                  <TouchableOpacity
-                    key={mode}
-                    activeOpacity={0.85}
-                    style={[
-                      styles.cameraChip,
-                      cameraMotionMode === mode && styles.cameraChipActive,
-                    ]}
-                    onPress={() => setCameraMotionMode(mode)}
-                  >
-                    <ThemedText
+        {compact ? null : (
+          <View style={styles.viewControlsSection}>
+            <View style={styles.viewControls}>
+              <View style={styles.cameraModeGroup}>
+                <ThemedText style={styles.controlGroupLabel}>Camera</ThemedText>
+                <View style={styles.cameraModeChips}>
+                  {(["smooth", "snap"] as CameraMotionMode[]).map((mode) => (
+                    <TouchableOpacity
+                      key={mode}
+                      activeOpacity={0.85}
                       style={[
-                        styles.cameraChipText,
-                        cameraMotionMode === mode &&
-                          styles.cameraChipTextActive,
+                        styles.cameraChip,
+                        cameraMotionMode === mode && styles.cameraChipActive,
                       ]}
+                      onPress={() => setCameraMotionMode(mode)}
                     >
-                      {mode === "smooth" ? "Smooth" : "Reposition"}
-                    </ThemedText>
-                  </TouchableOpacity>
-                ))}
+                      <ThemedText
+                        style={[
+                          styles.cameraChipText,
+                          cameraMotionMode === mode &&
+                            styles.cameraChipTextActive,
+                        ]}
+                      >
+                        {mode === "smooth" ? "Smooth" : "Reposition"}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
+              <TouchableOpacity
+                activeOpacity={0.85}
+                style={[
+                  styles.controlButton,
+                  styles.clearButton,
+                  styles.ghostControlButton,
+                ]}
+                onPress={() => {
+                  setAccumulatedNotes([]);
+                  setAccumulatedChords([]);
+                  lastXmlRef.current = null;
+                  measuresSentRef.current = 0;
+                  pendingXmlRef.current = null;
+                  playAfterRenderRef.current = false;
+                  pendingSentAtRef.current = 0;
+                  pendingRenderIdRef.current = null;
+                  sendRenderXml(
+                    FALLBACK_XML,
+                    "clear-score",
+                    "if (window.__OSMD_STOP) window.__OSMD_STOP();",
+                  );
+                }}
+              >
+                <ThemedText style={styles.ghostControlButtonText}>
+                  Clear
+                </ThemedText>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity
-              activeOpacity={0.85}
-              style={[
-                styles.controlButton,
-                styles.clearButton,
-                styles.ghostControlButton,
-              ]}
-              onPress={() => {
-                setAccumulatedNotes([]);
-                setAccumulatedChords([]);
-                lastXmlRef.current = null;
-                measuresSentRef.current = 0;
-                pendingXmlRef.current = null;
-                playAfterRenderRef.current = false;
-                pendingSentAtRef.current = 0;
-                pendingRenderIdRef.current = null;
-                sendRenderXml(
-                  FALLBACK_XML,
-                  "clear-score",
-                  "if (window.__OSMD_STOP) window.__OSMD_STOP();",
-                );
-              }}
-            >
-              <ThemedText style={styles.ghostControlButtonText}>
-                Clear
-              </ThemedText>
-            </TouchableOpacity>
           </View>
-        </View>
+        )}
       </View>
     </View>
   );
@@ -2981,9 +3017,21 @@ const styles = StyleSheet.create({
     width: "100%",
     overflow: "hidden",
   },
+  compactContainer: {
+    flex: 1,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    marginBottom: 0,
+    backgroundColor: "transparent",
+    borderRadius: 0,
+  },
   mainContainer: {
     width: "100%",
     maxWidth: "100%",
+  },
+  compactMainContainer: {
+    flex: 1,
+    minHeight: 0,
   },
   title: {
     textAlign: "center",

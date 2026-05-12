@@ -42,6 +42,25 @@ interface LiveAudioChunkOptions {
   useNeuralLive?: boolean;
 }
 
+interface LiveAudioChunkTiming {
+  analysisPath?: string;
+  chunkTotalMs?: number;
+  chunkInferenceMs?: number;
+  neuralTotalMs?: number;
+  modelInferenceMs?: number;
+  realTimeFactor?: number;
+  neuralError?: string;
+}
+
+interface ProcessAudioChunkResult {
+  coarseNotes: any[];
+  coarseChords: any[];
+  bpm: number;
+  needsRefresh: boolean;
+  onsets: any[];
+  timing?: LiveAudioChunkTiming;
+}
+
 interface UseLiveRhythmReturn {
   /** Create a new live session */
   createSession: (initialBpm?: number) => Promise<void>;
@@ -49,13 +68,7 @@ interface UseLiveRhythmReturn {
   processAudioChunk: (
     fileUri: string,
     options?: LiveAudioChunkOptions,
-  ) => Promise<{
-    coarseNotes: any[];
-    coarseChords: any[];
-    bpm: number;
-    needsRefresh: boolean;
-    onsets: any[];
-  }>;
+  ) => Promise<ProcessAudioChunkResult>;
   /** Process newly detected notes */
   processNotes: (
     notes: any[],
@@ -331,7 +344,10 @@ export function useLiveRhythm(
   );
 
   const processAudioChunk = useCallback(
-    async (fileUri: string, options: LiveAudioChunkOptions = {}) => {
+    async (
+      fileUri: string,
+      options: LiveAudioChunkOptions = {},
+    ): Promise<ProcessAudioChunkResult> => {
       const activeSessionId = sessionIdRef.current;
       const activeBpm = currentBpmRef.current;
 
@@ -371,13 +387,55 @@ export function useLiveRhythm(
         }
 
         const data = await response.json();
-        const timing = data._timing_ms;
+        const rawTiming =
+          data && typeof data._timing_ms === "object" && data._timing_ms
+            ? (data._timing_ms as Record<string, unknown>)
+            : undefined;
+        const timing: LiveAudioChunkTiming | undefined = rawTiming
+          ? {
+              analysisPath:
+                typeof rawTiming.analysis_path === "string"
+                  ? rawTiming.analysis_path
+                  : typeof data.analysis_path === "string"
+                    ? data.analysis_path
+                    : undefined,
+              chunkTotalMs:
+                typeof rawTiming.chunk_total === "number"
+                  ? rawTiming.chunk_total
+                  : undefined,
+              chunkInferenceMs:
+                typeof rawTiming.chunk_inference === "number"
+                  ? rawTiming.chunk_inference
+                  : undefined,
+              neuralTotalMs:
+                typeof rawTiming.neural_total === "number"
+                  ? rawTiming.neural_total
+                  : undefined,
+              modelInferenceMs:
+                typeof rawTiming.neural_model_inference === "number"
+                  ? rawTiming.neural_model_inference
+                  : undefined,
+              realTimeFactor:
+                typeof rawTiming.real_time_factor === "number"
+                  ? rawTiming.real_time_factor
+                  : undefined,
+              neuralError:
+                typeof rawTiming.neural_error === "string"
+                  ? rawTiming.neural_error
+                  : typeof data.neural_error === "string"
+                    ? data.neural_error
+                    : typeof data.fallback_reason === "string"
+                      ? data.fallback_reason
+                      : typeof data.stream_info?.neural_error === "string"
+                        ? data.stream_info.neural_error
+                        : undefined,
+            }
+          : undefined;
 
         if (timing) {
-          const analysisPath =
-            timing.analysis_path ?? data.analysis_path ?? "unknown";
+          const analysisPath = timing.analysisPath ?? "unknown";
           const neuralError =
-            timing.neural_error ??
+            timing.neuralError ??
             data.neural_error ??
             data.fallback_reason ??
             data.stream_info?.neural_error;
@@ -390,13 +448,13 @@ export function useLiveRhythm(
 
           console.log("[LiveRhythm] Chunk latency", {
             analysisPath,
-            totalMs: timing.chunk_total,
-            inferenceMs: timing.chunk_inference,
-            neuralTotalMs: timing.neural_total,
-            modelInferenceMs: timing.neural_model_inference,
+            totalMs: timing.chunkTotalMs,
+            inferenceMs: timing.chunkInferenceMs,
+            neuralTotalMs: timing.neuralTotalMs,
+            modelInferenceMs: timing.modelInferenceMs,
             neuralError,
             fallbackDiagnostic,
-            realTimeFactor: timing.real_time_factor,
+            realTimeFactor: timing.realTimeFactor,
           });
         }
 
@@ -433,6 +491,7 @@ export function useLiveRhythm(
           bpm: data.bpm || currentBpmRef.current,
           needsRefresh: data.needs_refresh || false,
           onsets: data.onsets || [],
+          timing,
         };
       } catch (error) {
         console.error("[LiveRhythm] Failed to process audio chunk:", error);
@@ -442,6 +501,7 @@ export function useLiveRhythm(
           bpm: currentBpmRef.current,
           needsRefresh: false,
           onsets: [],
+          timing: undefined,
         };
       }
     },
