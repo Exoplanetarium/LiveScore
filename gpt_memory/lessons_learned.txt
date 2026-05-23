@@ -44,3 +44,16 @@ LESSONS LEARNED - Things NOT to do on this project
      own NOTE_VALUE_BEATS boundaries, not a separate function (dn_duration_to_note_value).
    - Mismatched boundaries caused a phantom accuracy drop from 0.491 to 0.293 after
      adding dotted_32nd/dotted_16th classes — wasted 6 hours of training.
+
+8. Do NOT refine tempo from raw polyphonic note+chord event order.
+   - Tempo refinement must sort events and collapse near-simultaneous onsets into
+     single onset clusters before computing IOIs.
+   - Raw notes + chords overcount stacked onsets and duplicates, which can bias the
+     quantization search toward the 240 BPM ceiling.
+
+9. Do NOT let the neural onset-grid tempo search score only against beat lines.
+   - In the final neural pass, eighth-note-heavy passages can make doubled tempo
+     look perfect unless slower BPM candidates are allowed to explain simple
+     subdivisions and win near-ceiling ties.
+   - backend/detect_note.py refine_tempo_onset_grid now needs both subdivision-aware
+     alignment and a natural-range tie-break to avoid repeated 240 BPM outputs.

@@ -1,0 +1,344 @@
+LIVESCORE ACCURACY BENCHMARK PLAN
+=================================
+
+UPDATED: 2026-05-23
+
+GOAL
+----
+Measure whether an accuracy tweak improves the system enough to justify keeping
+it, while making sure live latency does not regress beyond the current budget.
+
+
+PRINCIPLES
+----------
+1. Always compare against the same baseline commit/config.
+2. Keep the audio set fixed across A/B runs.
+3. Report both accuracy and latency for every experiment.
+4. Separate live-path quality from finalize quality.
+5. Track duplicate-rate and tempo-octave errors explicitly, not just F1.
+
+
+USE WHAT ALREADY EXISTS
+-----------------------
+Existing repo scripts and signals:
+
+1. backend/test_ensemble_accuracy.py
+   - Measures note precision, recall, F1.
+   - Measures rhythm metrics, tempo error, beat-sum validity.
+   - Command:
+     - from repo root: backend\\env\\Scripts\\python.exe backend\\test_ensemble_accuracy.py --model mel
+
+2. backend/test_rhythm.py
+   - Quick synthetic tempo and quantization sanity checks.
+   - Command:
+     - from repo root: backend\\env\\Scripts\\python.exe backend\\test_rhythm.py
+
+3. backend/test_rhythm_debug.py
+   - Detailed inspection for one audio file.
+   - Useful for failure analysis after benchmark regressions.
+
+4. backend/rhythm_training/evaluate_rhythm.py
+   - Can compare transcription output against MIDI ground truth.
+
+5. backend/main.py live chunk timing logs
+   - analysis_path
+   - chunk_total
+   - chunk_inference
+   - neural_total
+   - real_time_factor
+
+
+BENCHMARK SUITES
+----------------
+
+SUITE A: OFFLINE GROUND-TRUTH SET
+Purpose:
+- Catch note, rhythm, and tempo regressions with trusted labels.
+
+Data:
+- 20 to 30 MAESTRO excerpts.
+- 15 to 30 seconds each.
+- Balanced across:
+  - slow lyrical passages
+  - fast scale passages
+  - dense chords
+  - sparse accompaniment
+  - rubato passages
+  - triplet-heavy passages
+
+Metrics:
+- Note precision
+- Note recall
+- Note F1
+- Tempo absolute error
+- Double/half-tempo error count
+- Rhythm note-value accuracy
+- Beat-sum validity
+
+
+SUITE B: DEVICE-CAPTURE SET
+Purpose:
+- Measure what the app actually hears from phone/tablet microphones.
+
+Data:
+- 10 to 20 recordings made through the real mobile device path.
+- Record the same musical patterns as Suite A where possible.
+- Include these conditions:
+  - quiet room
+  - moderate background noise
+  - soft playing
+  - loud accents
+  - sustain pedal use
+
+Metrics:
+- Same as Suite A where GT exists.
+- Also track subjective classes of errors:
+  - dropped soft notes
+  - duplicate onsets
+  - chopped sustains
+  - wrong chord grouping
+
+
+SUITE C: LIVE STREAMING REPLAY SET
+Purpose:
+- Test the actual chunked live path rather than only full-file inference.
+
+Data:
+- Replay fixed WAV files through the live chunk cadence used by the app.
+- Match current frontend chunk interval as closely as possible.
+- Include 1.0 s, 1.2 s, and 1.5 s windows if you experiment with chunk size.
+
+Metrics:
+- Time to first correct note
+- Live note F1 over time
+- Stabilization latency
+  - how long before the live result matches the final result for a note/event
+- Duplicate-rate per minute
+- Boundary miss rate
+  - percentage of missed or duplicated notes whose onsets land near chunk seams
+- P50 and P95 chunk latency
+- Real-time factor
+
+
+KEY METRICS TO REPORT FOR EVERY EXPERIMENT
+------------------------------------------
+1. Note F1
+   - Use 50 ms onset tolerance and exact pitch match.
+
+2. Offset-aware note F1
+   - Important for sustain and chopped-note problems.
+
+3. Tempo MAE
+   - Mean absolute BPM error.
+
+4. Tempo octave error rate
+   - Fraction of samples where tempo lands at roughly 0.5x or 2x the musical beat.
+
+5. Duplicate-rate
+   - duplicate onsets per minute, or duplicates per 100 detected notes.
+
+6. Miss rate near chunk boundaries
+   - a direct test for overlap/seam fixes.
+
+7. Rhythm note-value accuracy
+   - use the existing track-split IOI metric, sustain metric, and beat-sum validity.
+
+8. Time-to-visible
+   - median ms from chunk capture start to visible note in UI.
+
+9. P95 chunk latency
+   - must stay within the live budget.
+
+
+SUGGESTED PASS / FAIL GATES
+---------------------------
+Keep an experiment only if at least one of these is true and latency does not regress too much:
+
+1. Note F1 improves by at least 1.0 absolute point.
+2. Duplicate-rate drops by at least 15%.
+3. Tempo octave error rate drops by at least 30%.
+4. Boundary miss rate drops by at least 20%.
+5. Rhythm note-value accuracy improves by at least 1.0 absolute point.
+
+Latency guardrails:
+
+1. P95 live chunk latency must not exceed the current baseline by more than 10%.
+2. P95 live chunk latency should stay below 500 ms.
+3. Real-time factor should not worsen meaningfully on the replay suite.
+
+
+FIRST EXPERIMENT MATRIX
+-----------------------
+Run these as separate A/B experiments, not all at once:
+
+1. Baseline
+   - current master
+
+2. Adaptive onset threshold
+   - only threshold logic changes
+
+3. Per-key hysteresis / debounce
+   - only merge logic changes
+
+4. High-confidence direct note_value use
+   - only high-confidence note-value routing changes
+
+5. Overlap seam retro-correction
+   - only boundary handling changes
+
+6. Beat-tracker prior from live BPM in finalize
+   - finalize-only tempo change
+
+This makes attribution easy.
+
+
+EXPERIMENT 1: ADAPTIVE ONSET THRESHOLDING V1
+--------------------------------------------
+What this experiment is testing:
+- Whether a tiny per-chunk onset-threshold adjustment improves live note accuracy
+  without materially changing latency.
+- More specifically:
+  - quiet, sparse chunks should recover more soft note onsets
+  - loud, dense chunks should emit fewer duplicate or noisy onsets
+- This experiment does NOT change:
+  - the model
+  - the chunk size
+  - the frame threshold
+  - the deferred refinement logic
+
+Control vs treatment:
+1. Control
+   - send adaptive_onset_threshold=false on /live/audio-chunk
+   - this keeps the fixed live thresholds
+
+2. Treatment
+   - send adaptive_onset_threshold=true on /live/audio-chunk
+   - this enables the loudness-based selector in backend/detect_note.py
+
+Current treatment policy:
+1. Lower the onset threshold by 0.04 when:
+   - chunk RMS < 0.018
+   - and peak level < 0.40
+   - profile label: soft_sparse_recall
+
+2. Raise the onset threshold by 0.03 when:
+   - chunk RMS > 0.090
+   - or chunk RMS > 0.045 and crest factor < 2.40
+   - profile label: loud_dense_precision
+
+3. Otherwise:
+   - keep the base threshold unchanged
+   - profile label: baseline_nominal
+
+Instrumentation now emitted by the backend:
+1. analysis_summary.live_onset_threshold_experiment
+2. analysis_summary.live_onset_threshold_profile
+3. analysis_summary.live_onset_threshold
+4. _timing_ms.neural_onset_threshold_selected
+5. _timing_ms.neural_chunk_rms
+6. _timing_ms.neural_chunk_peak
+7. _timing_ms.neural_chunk_crest_factor
+
+Primary slices to compare:
+1. Quiet / soft-playing device captures
+   - target metric: note recall
+   - failure metric: duplicate-rate
+
+2. Loud / accented device captures
+   - target metric: duplicate-rate and precision
+   - failure metric: soft-note recall collapse
+
+3. Mixed real pieces in the live replay suite
+   - target metric: overall note F1
+   - guardrail: P95 chunk latency and real-time factor
+
+Success criteria for this specific experiment:
+1. Quiet-slice note recall improves by at least 1.5 absolute points or the quiet-slice
+   miss rate drops by at least 10%.
+2. Loud-slice duplicate-rate drops by at least 10%.
+3. Overall P95 live chunk latency does not regress by more than 5%.
+4. No material increase in boundary miss rate.
+
+
+BENCHMARK TABLE TEMPLATE
+------------------------
+For each experiment, record:
+
+- Experiment name
+- Commit SHA
+- Data suite
+- Note F1
+- Offset-aware F1
+- Tempo MAE
+- Tempo octave error rate
+- Duplicate-rate
+- Boundary miss rate
+- Rhythm note-value accuracy
+- Beat-sum validity
+- P50 latency ms
+- P95 latency ms
+- P95 real-time factor
+- Decision: keep / drop
+
+
+FAILURE ANALYSIS CHECKLIST
+--------------------------
+When an experiment regresses, inspect one sample in detail with:
+
+- backend/test_rhythm_debug.py
+- chunk timing logs from backend/main.py
+- live frontend chunk pipeline logs in app/index.tsx
+
+Look specifically for:
+
+1. More dropped soft notes
+2. More duplicated re-attacks
+3. Worse chunk-boundary behavior
+4. More 0.5x / 2x tempo outcomes
+5. Worse sustain handling
+
+
+CONCRETE BENCHMARKS TO BUILD NEXT
+---------------------------------
+1. A small live replay harness for /live/audio-chunk.
+   What it should do:
+   - feed one WAV through the same chunk cadence as the phone app
+   - collect chunk timings and live outputs
+   - compare live evolving output to the final output and MIDI GT
+
+2. A duplicate/boundary metric helper.
+   What it should compute:
+   - duplicates per pitch within a short window
+   - misses or duplicates within N ms of chunk boundaries
+
+3. A tempo-octave regression test set.
+   What it should contain:
+   - quarter-only excerpts
+   - eighth-heavy excerpts
+   - triplet excerpts
+   - rubato excerpts
+
+
+RECOMMENDED BENCHMARK ORDER
+---------------------------
+1. Establish baseline with backend/test_ensemble_accuracy.py --model mel.
+2. Freeze a 20 to 30 clip benchmark set.
+3. Add one live replay benchmark harness.
+4. Run one experiment at a time.
+5. Reject any tweak that improves one metric while clearly worsening duplicate-rate,
+   tempo octave errors, or P95 latency.
+
+
+BOTTOM LINE
+-----------
+The most useful benchmark setup here is not a single number. It is a compact
+dashboard with:
+
+- note F1
+- tempo octave error rate
+- duplicate-rate
+- boundary miss rate
+- beat-sum validity
+- P95 live latency
+
+That combination will catch the kinds of regressions this repo has been hitting.

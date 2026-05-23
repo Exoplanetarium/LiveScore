@@ -1,0 +1,3 @@
+- The Android WebView in this repo executes agent-injected JS, but inline <script> inside the HTML source did not run during OSMD debugging.
+- The OSMD 1.9.2 CDN bundle is modern JS, not ES5-safe: fetched bundle contains class/const/let, for...of, optional chaining, and nullish coalescing.
+- components/osmdHTML.ts now loads OSMD by fetching the bundle text and compiling it inside try/catch, so parse failures from the external bundle surface as explicit runtime errors instead of generic script-load failures.

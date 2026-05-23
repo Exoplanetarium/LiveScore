@@ -1,0 +1,4 @@
+- PianoSheetMusic.tsx previously recomputed note/chord durations from note_value/dotted/triplet and ignored backend note_divisions.
+- First implementation slice now prefers backend note_divisions when choosing MusicXML duration/type/dot/triplet spec for notes and chords.
+- Measure placement now prefers backend start_beat metadata, so the frontend no longer has to rebuild beat positions from time_seconds when authoritative timing is available.
+- detect_note.py now regularizes detected beats into a local tempo curve, reconciles onset-driven durations with acoustic offsets, and emits backend timing authority fields such as start_beat/end_beat.

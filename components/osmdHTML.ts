@@ -329,6 +329,7 @@ export const OSMD_HTML = `
       applyLayoutViewportWidth(false);
 
       const scale = getRenderedSvgScale();
+      const portraitWrapped = usesWrappedPortraitLayout();
       const svgNodes = scoreRoot.querySelectorAll('svg');
       svgNodes.forEach((svg) => {
         let baseWidth = parseFloat(svg.getAttribute('width') || '0');
@@ -338,6 +339,29 @@ export const OSMD_HTML = `
           baseWidth = svg.viewBox.baseVal.width;
           baseHeight = svg.viewBox.baseVal.height;
         }
+
+        let contentWidth = baseWidth;
+        let contentHeight = baseHeight;
+        try {
+          if (typeof svg.getBBox === 'function') {
+            const bbox = svg.getBBox();
+            if (bbox) {
+              const bboxRight = Number.isFinite(bbox.x) && Number.isFinite(bbox.width)
+                ? bbox.x + bbox.width
+                : bbox.width;
+              const bboxBottom = Number.isFinite(bbox.y) && Number.isFinite(bbox.height)
+                ? bbox.y + bbox.height
+                : bbox.height;
+
+              if (Number.isFinite(bbox.width) && bbox.width > 0) {
+                contentWidth = Math.max(contentWidth || 0, bbox.width, bboxRight || 0);
+              }
+              if (Number.isFinite(bbox.height) && bbox.height > 0) {
+                contentHeight = Math.max(contentHeight || 0, bbox.height, bboxBottom || 0);
+              }
+            }
+          }
+        } catch (e) {}
 
         let shell = svg.parentElement;
         if (!shell || !shell.classList || !shell.classList.contains('osmd-svg-scale-shell')) {
@@ -364,11 +388,11 @@ export const OSMD_HTML = `
           return;
         }
 
-        const layoutWidth = Number.isFinite(baseWidth) && baseWidth > 0
-          ? Math.max(1, baseWidth * scale * PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER)
+        const layoutWidth = Number.isFinite(contentWidth) && contentWidth > 0
+          ? Math.max(1, contentWidth * scale * PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER)
           : 0;
-        const layoutHeight = Number.isFinite(baseHeight) && baseHeight > 0
-          ? Math.max(1, baseHeight * scale)
+        const layoutHeight = Number.isFinite(contentHeight) && contentHeight > 0
+          ? Math.max(1, contentHeight * scale)
           : 0;
 
         if (layoutWidth > 0) {
@@ -378,17 +402,69 @@ export const OSMD_HTML = `
           shell.style.height = layoutHeight.toFixed(2) + 'px';
         }
 
-        if (Number.isFinite(baseWidth) && baseWidth > 0) {
-          svg.style.width = Math.max(1, baseWidth).toFixed(2) + 'px';
+        if (Number.isFinite(contentWidth) && contentWidth > 0) {
+          svg.style.width = Math.max(1, contentWidth).toFixed(2) + 'px';
           svg.style.maxWidth = 'none';
         }
-        if (Number.isFinite(baseHeight) && baseHeight > 0) {
-          svg.style.height = Math.max(1, baseHeight).toFixed(2) + 'px';
+        if (Number.isFinite(contentHeight) && contentHeight > 0) {
+          svg.style.height = Math.max(1, contentHeight).toFixed(2) + 'px';
         }
         svg.style.display = 'block';
         svg.style.transformOrigin = 'top left';
         svg.style.transform = 'scale(' + scale.toFixed(4) + ')';
+
+        if (portraitWrapped) {
+          const renderedRect = svg.getBoundingClientRect();
+          const renderedHeight = Number.isFinite(renderedRect.height)
+            ? renderedRect.height
+            : 0;
+          if (renderedHeight > 0) {
+            shell.style.height = Math.max(layoutHeight, renderedHeight).toFixed(2) + 'px';
+          }
+        }
       });
+
+      syncPortraitScrollExtent();
+    }
+
+    function syncPortraitScrollExtent() {
+      const scoreRoot = getScoreRoot();
+      const stage = getStage();
+      if (!scoreRoot || !stage) return;
+
+      if (!usesWrappedPortraitLayout()) {
+        scoreRoot.style.minHeight = '';
+        stage.style.minHeight = '';
+        return;
+      }
+
+      const shells = scoreRoot.querySelectorAll('.osmd-svg-scale-shell');
+      let maxBottom = 0;
+
+      for (let index = 0; index < shells.length; index++) {
+        const shell = shells[index];
+        const rect = shell.getBoundingClientRect();
+        const shellHeight = Math.max(
+          shell.offsetHeight || 0,
+          Number.isFinite(rect.height) ? rect.height : 0,
+        );
+        maxBottom = Math.max(maxBottom, shell.offsetTop + shellHeight);
+      }
+
+      const fallbackHeight = Math.max(
+        scoreRoot.scrollHeight || 0,
+        Math.ceil(scoreRoot.getBoundingClientRect().height || 0),
+      );
+      const targetHeight = Math.max(
+        fallbackHeight,
+        Math.ceil(maxBottom + (cameraState.paddingBottom || 24)),
+      );
+
+      if (targetHeight > 0) {
+        const targetHeightPx = targetHeight + 'px';
+        scoreRoot.style.minHeight = targetHeightPx;
+        stage.style.minHeight = targetHeightPx;
+      }
     }
 
     function cancelCameraAnimation() {

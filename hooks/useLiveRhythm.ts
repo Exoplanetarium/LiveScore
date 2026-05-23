@@ -40,6 +40,7 @@ interface UseLiveRhythmOptions {
 interface LiveAudioChunkOptions {
   noiseProfile?: string;
   useNeuralLive?: boolean;
+  useAdaptiveOnsetThreshold?: boolean;
 }
 
 interface LiveAudioChunkTiming {
@@ -50,6 +51,12 @@ interface LiveAudioChunkTiming {
   modelInferenceMs?: number;
   realTimeFactor?: number;
   neuralError?: string;
+  onsetThreshold?: number;
+  onsetThresholdProfile?: string;
+  onsetThresholdExperiment?: string;
+  chunkRms?: number;
+  chunkPeak?: number;
+  chunkCrestFactor?: number;
 }
 
 interface ProcessAudioChunkResult {
@@ -365,6 +372,8 @@ export function useLiveRhythm(
       try {
         const formData = new FormData();
         const useNeuralLive = options.useNeuralLive ?? true;
+        const useAdaptiveOnsetThreshold =
+          options.useAdaptiveOnsetThreshold ?? true;
         // @ts-ignore React Native FormData supports file objects
         formData.append("file", {
           uri: fileUri,
@@ -373,6 +382,10 @@ export function useLiveRhythm(
         });
         formData.append("session_id", activeSessionId);
         formData.append("use_neural_live", useNeuralLive ? "true" : "false");
+        formData.append(
+          "adaptive_onset_threshold",
+          useAdaptiveOnsetThreshold ? "true" : "false",
+        );
         if (options.noiseProfile) {
           formData.append("noise_profile", options.noiseProfile);
         }
@@ -390,6 +403,12 @@ export function useLiveRhythm(
         const rawTiming =
           data && typeof data._timing_ms === "object" && data._timing_ms
             ? (data._timing_ms as Record<string, unknown>)
+            : undefined;
+        const analysisSummary =
+          data &&
+          typeof data.analysis_summary === "object" &&
+          data.analysis_summary
+            ? (data.analysis_summary as Record<string, unknown>)
             : undefined;
         const timing: LiveAudioChunkTiming | undefined = rawTiming
           ? {
@@ -429,6 +448,32 @@ export function useLiveRhythm(
                       : typeof data.stream_info?.neural_error === "string"
                         ? data.stream_info.neural_error
                         : undefined,
+              onsetThreshold:
+                typeof rawTiming.neural_onset_threshold_selected === "number"
+                  ? rawTiming.neural_onset_threshold_selected
+                  : undefined,
+              onsetThresholdProfile:
+                typeof analysisSummary?.live_onset_threshold_profile ===
+                "string"
+                  ? analysisSummary.live_onset_threshold_profile
+                  : undefined,
+              onsetThresholdExperiment:
+                typeof analysisSummary?.live_onset_threshold_experiment ===
+                "string"
+                  ? analysisSummary.live_onset_threshold_experiment
+                  : undefined,
+              chunkRms:
+                typeof rawTiming.neural_chunk_rms === "number"
+                  ? rawTiming.neural_chunk_rms
+                  : undefined,
+              chunkPeak:
+                typeof rawTiming.neural_chunk_peak === "number"
+                  ? rawTiming.neural_chunk_peak
+                  : undefined,
+              chunkCrestFactor:
+                typeof rawTiming.neural_chunk_crest_factor === "number"
+                  ? rawTiming.neural_chunk_crest_factor
+                  : undefined,
             }
           : undefined;
 
@@ -452,6 +497,12 @@ export function useLiveRhythm(
             inferenceMs: timing.chunkInferenceMs,
             neuralTotalMs: timing.neuralTotalMs,
             modelInferenceMs: timing.modelInferenceMs,
+            onsetThreshold: timing.onsetThreshold,
+            onsetThresholdProfile: timing.onsetThresholdProfile,
+            onsetThresholdExperiment: timing.onsetThresholdExperiment,
+            chunkRms: timing.chunkRms,
+            chunkPeak: timing.chunkPeak,
+            chunkCrestFactor: timing.chunkCrestFactor,
             neuralError,
             fallbackDiagnostic,
             realTimeFactor: timing.realTimeFactor,

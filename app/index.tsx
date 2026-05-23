@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as FileSystem from "expo-file-system";
+import { LinearGradient } from "expo-linear-gradient";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -22,6 +23,7 @@ const BACKEND_URL =
   "https://exoplanetarium--livescore-gpu-fastapi-app.modal.run";
 const CHUNK_INTERVAL_MS = 600;
 const USE_LIVE_NEURAL_PATH = true;
+const USE_LIVE_ADAPTIVE_ONSET_THRESHOLD_EXPERIMENT = true;
 const USE_LIVE_OSMD_ENGRAVING_EXPERIMENT = true;
 const LIVE_OSMD_BATCH_MS = 40;
 
@@ -371,6 +373,12 @@ export default function LiveTranscriptionScreen() {
         modelInferenceMs?: number;
         realTimeFactor?: number;
         neuralError?: string;
+        onsetThreshold?: number;
+        onsetThresholdProfile?: string;
+        onsetThresholdExperiment?: string;
+        chunkRms?: number;
+        chunkPeak?: number;
+        chunkCrestFactor?: number;
       },
     ) => {
       const captureWindowMs =
@@ -400,6 +408,12 @@ export default function LiveTranscriptionScreen() {
         mergeToFrameMs,
         timeToVisibleMs,
         analysisPath: timing?.analysisPath,
+        onsetThreshold: timing?.onsetThreshold,
+        onsetThresholdProfile: timing?.onsetThresholdProfile,
+        onsetThresholdExperiment: timing?.onsetThresholdExperiment,
+        chunkRms: timing?.chunkRms,
+        chunkPeak: timing?.chunkPeak,
+        chunkCrestFactor: timing?.chunkCrestFactor,
         neuralError: timing?.neuralError,
         realTimeFactor: timing?.realTimeFactor,
       });
@@ -608,6 +622,8 @@ export default function LiveTranscriptionScreen() {
         const chunk = await processAudioChunk(resolvedPath, {
           noiseProfile,
           useNeuralLive: USE_LIVE_NEURAL_PATH,
+          useAdaptiveOnsetThreshold:
+            USE_LIVE_ADAPTIVE_ONSET_THRESHOLD_EXPERIMENT,
         });
         const uploadFinishedAtMs = Date.now();
         const mergeQueuedAtMs = Date.now();
@@ -675,6 +691,40 @@ export default function LiveTranscriptionScreen() {
       }
     })();
   }, [processRecordedChunk]);
+
+  const waitForChunkQueueToDrain = useCallback(async (timeoutMs = 4000) => {
+    if (
+      inFlightUploadsRef.current === 0 &&
+      pendingChunkUploadRef.current == null
+    ) {
+      return;
+    }
+
+    await withTimeout(
+      new Promise<void>((resolve) => {
+        const pollQueue = () => {
+          if (
+            inFlightUploadsRef.current === 0 &&
+            pendingChunkUploadRef.current == null
+          ) {
+            resolve();
+            return;
+          }
+
+          setTimeout(pollQueue, 50);
+        };
+
+        pollQueue();
+      }),
+      timeoutMs,
+    ).catch((error) => {
+      console.warn("[Live] Timed out waiting for chunk queue to drain", {
+        error,
+        inFlightUploads: inFlightUploadsRef.current,
+        hasPendingChunk: pendingChunkUploadRef.current != null,
+      });
+    });
+  }, []);
 
   const enqueueRecordedChunkUpload = useCallback(
     (path: string, telemetry: RecordedChunkTelemetry) => {
@@ -933,6 +983,14 @@ export default function LiveTranscriptionScreen() {
           console.warn("Failed to capture final chunk", error);
         }
 
+        if (
+          inFlightUploadsRef.current > 0 ||
+          pendingChunkUploadRef.current != null
+        ) {
+          drainPendingChunkUploads();
+          await waitForChunkQueueToDrain();
+        }
+
         if (finalChunkPath) {
           const finalTelemetry: RecordedChunkTelemetry = {
             sequenceNumber: chunkSequenceRef.current + 1,
@@ -985,7 +1043,13 @@ export default function LiveTranscriptionScreen() {
       inFlightUploadsRef.current = 0;
       setIsProcessing(false);
     }
-  }, [finalizeSession, processRecordedChunk, resolveRecordedFilePath]);
+  }, [
+    drainPendingChunkUploads,
+    finalizeSession,
+    processRecordedChunk,
+    resolveRecordedFilePath,
+    waitForChunkQueueToDrain,
+  ]);
 
   const recentEvents = [
     ...(analysisResult?.notes ?? []).map((note) => ({
@@ -1064,12 +1128,17 @@ export default function LiveTranscriptionScreen() {
     const liveStatusColor = getConnectionStatusColor(connectionStatus);
 
     return (
-      <ThemedView style={styles.liveSessionScreen}>
+      <LinearGradient
+        colors={["#04070f", "#0b1220", "#111c30"]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={styles.liveSessionScreen}
+      >
         <View style={styles.liveSessionWorkspace}>
           <View style={styles.liveTopBar}>
             <ThemedText
               style={styles.liveTopBarTitle}
-              lightColor="#0f172a"
+              lightColor="#f8fafc"
               darkColor="#f8fafc"
               numberOfLines={1}
             >
@@ -1080,7 +1149,7 @@ export default function LiveTranscriptionScreen() {
               <View style={styles.liveInlineMetric}>
                 <ThemedText
                   style={styles.liveInlineMetricValue}
-                  lightColor="#0f172a"
+                  lightColor="#f8fafc"
                   darkColor="#f8fafc"
                 >
                   {formatDuration(duration)}
@@ -1092,7 +1161,7 @@ export default function LiveTranscriptionScreen() {
               <View style={styles.liveInlineMetric}>
                 <ThemedText
                   style={styles.liveInlineMetricValue}
-                  lightColor="#0f172a"
+                  lightColor="#f8fafc"
                   darkColor="#f8fafc"
                 >
                   {Math.round(currentBpm || 120)}
@@ -1104,7 +1173,7 @@ export default function LiveTranscriptionScreen() {
               <View style={styles.liveInlineMetric}>
                 <ThemedText
                   style={styles.liveInlineMetricValue}
-                  lightColor="#0f172a"
+                  lightColor="#f8fafc"
                   darkColor="#f8fafc"
                 >
                   {(analysisResult?.analysis_summary.total_notes ?? 0) +
@@ -1128,9 +1197,6 @@ export default function LiveTranscriptionScreen() {
               <View
                 style={[styles.statusDot, { backgroundColor: liveStatusColor }]}
               />
-              {isProcessing || isWarmingUp ? (
-                <ActivityIndicator size="small" color={liveStatusColor} />
-              ) : null}
             </View>
           </View>
 
@@ -1143,7 +1209,12 @@ export default function LiveTranscriptionScreen() {
             </View>
           </View>
 
-          <View style={styles.liveControlDock}>
+          <LinearGradient
+            colors={["rgba(255,255,255,0.1)", "rgba(148,163,184,0.14)"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.liveControlDock}
+          >
             <View style={styles.optionRow}>
               {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
                 const isActive = option.value === noiseProfile;
@@ -1199,209 +1270,258 @@ export default function LiveTranscriptionScreen() {
                 {recordButtonLabel}
               </ThemedText>
             </TouchableOpacity>
-          </View>
+          </LinearGradient>
         </View>
-      </ThemedView>
+      </LinearGradient>
     );
   }
 
   return (
-    <ScrollView
-      ref={scrollViewRef}
-      style={styles.scrollView}
-      contentContainerStyle={styles.scrollContent}
-      showsVerticalScrollIndicator={false}
-      nestedScrollEnabled
-      scrollEnabled={!isScoreScrollActive}
+    <LinearGradient
+      colors={["#f5f7fb", "#e9eef5", "#f8fafc"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.screenBackground}
     >
-      <ThemedView style={styles.container}>
-        <View style={styles.header}>
-          <ThemedText type="title" style={styles.title}>
-            Live Piano Transcription
-          </ThemedText>
-          <ThemedText style={styles.subtitle}>
-            This tab uses the live chunk pipeline. The previous
-            record-then-analyze screen is available in the Classic tab.
-          </ThemedText>
-        </View>
-
-        <View style={styles.statusCard}>
-          <View style={styles.statusRow}>
-            <View
-              style={[
-                styles.statusDot,
-                { backgroundColor: getConnectionStatusColor(connectionStatus) },
-              ]}
-            />
-            <ThemedText style={styles.statusLabel}>
-              {getConnectionStatusText(
-                connectionStatus,
-                isProcessing,
-                isWarmingUp,
-              )}
+      <ScrollView
+        ref={scrollViewRef}
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        nestedScrollEnabled
+        scrollEnabled={!isScoreScrollActive}
+      >
+        <ThemedView
+          style={styles.container}
+          lightColor="transparent"
+          darkColor="transparent"
+        >
+          <View style={styles.header}>
+            <ThemedText type="title" style={styles.title}>
+              Live Piano Transcription
             </ThemedText>
-            {isProcessing || isWarmingUp ? (
-              <ActivityIndicator size="small" color="#2f95dc" />
-            ) : null}
+            <ThemedText style={styles.subtitle}>
+              This tab uses the live chunk pipeline. The previous
+              record-then-analyze screen is available in the Classic tab.
+            </ThemedText>
           </View>
 
-          <View style={styles.statsRow}>
-            <View style={styles.statBox}>
-              <ThemedText style={styles.statValue}>
-                {formatDuration(duration)}
-              </ThemedText>
-              <ThemedText style={styles.statLabel}>Elapsed</ThemedText>
-            </View>
-            <View style={styles.statBox}>
-              <ThemedText style={styles.statValue}>
-                {Math.round(currentBpm || 120)}
-              </ThemedText>
-              <ThemedText style={styles.statLabel}>BPM</ThemedText>
-            </View>
-            <View style={styles.statBox}>
-              <ThemedText style={styles.statValue}>
-                {analysisResult?.analysis_summary.total_notes ?? 0}
-              </ThemedText>
-              <ThemedText style={styles.statLabel}>Notes</ThemedText>
-            </View>
-            <View style={styles.statBox}>
-              <ThemedText style={styles.statValue}>
-                {analysisResult?.analysis_summary.total_chords ?? 0}
-              </ThemedText>
-              <ThemedText style={styles.statLabel}>Chords</ThemedText>
-            </View>
-          </View>
-
-          <View style={styles.controlSection}>
-            <View style={styles.controlHeaderRow}>
-              <ThemedText style={styles.controlLabel}>
-                Low-noise filter
-              </ThemedText>
-              <ThemedText style={styles.controlValue}>
-                {selectedNoiseProfile.label}
+          <LinearGradient
+            colors={["rgba(255,255,255,0.96)", "rgba(226,232,240,0.82)"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.statusCard}
+          >
+            <View style={styles.statusRow}>
+              <View
+                style={[
+                  styles.statusDot,
+                  {
+                    backgroundColor: getConnectionStatusColor(connectionStatus),
+                  },
+                ]}
+              />
+              <ThemedText style={styles.statusLabel}>
+                {getConnectionStatusText(
+                  connectionStatus,
+                  isProcessing,
+                  isWarmingUp,
+                )}
               </ThemedText>
             </View>
 
-            <View style={styles.optionRow}>
-              {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
-                const isActive = option.value === noiseProfile;
+            <View style={styles.statsRow}>
+              <View style={styles.statBox}>
+                <ThemedText style={styles.statValue}>
+                  {formatDuration(duration)}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>Elapsed</ThemedText>
+              </View>
+              <View style={styles.statBox}>
+                <ThemedText style={styles.statValue}>
+                  {Math.round(currentBpm || 120)}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>BPM</ThemedText>
+              </View>
+              <View style={styles.statBox}>
+                <ThemedText style={styles.statValue}>
+                  {analysisResult?.analysis_summary.total_notes ?? 0}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>Notes</ThemedText>
+              </View>
+              <View style={styles.statBox}>
+                <ThemedText style={styles.statValue}>
+                  {analysisResult?.analysis_summary.total_chords ?? 0}
+                </ThemedText>
+                <ThemedText style={styles.statLabel}>Chords</ThemedText>
+              </View>
+            </View>
 
-                return (
-                  <TouchableOpacity
-                    key={option.value}
-                    style={[
-                      styles.optionChip,
-                      isActive ? styles.optionChipActive : null,
-                    ]}
-                    onPress={() => setNoiseProfile(option.value)}
-                  >
-                    <ThemedText
+            <View style={styles.controlSection}>
+              <View style={styles.controlHeaderRow}>
+                <ThemedText style={styles.controlLabel}>
+                  Low-noise filter
+                </ThemedText>
+                <ThemedText style={styles.controlValue}>
+                  {selectedNoiseProfile.label}
+                </ThemedText>
+              </View>
+
+              <View style={styles.optionRow}>
+                {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
+                  const isActive = option.value === noiseProfile;
+
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
                       style={[
-                        styles.optionChipText,
-                        isActive ? styles.optionChipTextActive : null,
+                        styles.optionChip,
+                        isActive ? styles.optionChipActive : null,
+                      ]}
+                      onPress={() => setNoiseProfile(option.value)}
+                    >
+                      <ThemedText
+                        style={[
+                          styles.optionChipText,
+                          isActive ? styles.optionChipTextActive : null,
+                        ]}
+                      >
+                        {option.label}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+
+              <ThemedText style={styles.controlHint}>
+                {selectedNoiseProfile.description}
+              </ThemedText>
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.recordButton,
+                isRecording
+                  ? styles.stopButton
+                  : isWarmingUp
+                    ? styles.warmingButton
+                    : styles.startButton,
+                isStartDisabled ? styles.recordButtonDisabled : null,
+              ]}
+              onPress={
+                isRecording ? stopLiveTranscription : startLiveTranscription
+              }
+              disabled={isStartDisabled}
+            >
+              {isWarmingUp ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <Ionicons
+                  name={isRecording ? "stop" : "radio"}
+                  size={24}
+                  color="white"
+                />
+              )}
+              <ThemedText style={styles.recordButtonText}>
+                {recordButtonLabel}
+              </ThemedText>
+            </TouchableOpacity>
+          </LinearGradient>
+
+          <LinearGradient
+            colors={["rgba(255,255,255,0.92)", "rgba(241,245,249,0.76)"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.card}
+            onLayout={handleLiveScoreSectionLayout}
+          >
+            <ThemedText type="subtitle" style={styles.cardTitle}>
+              {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT
+                ? "Live OSMD Engraving"
+                : "Committed Score"}
+            </ThemedText>
+            {renderScoreContent(false)}
+          </LinearGradient>
+
+          <LinearGradient
+            colors={["rgba(255,255,255,0.92)", "rgba(241,245,249,0.76)"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.card}
+          >
+            <ThemedText type="subtitle" style={styles.cardTitle}>
+              Recent Detections
+            </ThemedText>
+            {recentEvents.length === 0 ? (
+              <ThemedText style={styles.placeholderText}>
+                No notes detected yet.
+              </ThemedText>
+            ) : (
+              <View style={styles.eventsList}>
+                {recentEvents.map((event) => (
+                  <View key={event.key} style={styles.eventRow}>
+                    <View
+                      style={[
+                        styles.eventIcon,
+                        { backgroundColor: `${event.color}1A` },
                       ]}
                     >
-                      {option.label}
-                    </ThemedText>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            <ThemedText style={styles.controlHint}>
-              {selectedNoiseProfile.description}
-            </ThemedText>
-          </View>
-
-          <TouchableOpacity
-            style={[
-              styles.recordButton,
-              isRecording
-                ? styles.stopButton
-                : isWarmingUp
-                  ? styles.warmingButton
-                  : styles.startButton,
-              isStartDisabled ? styles.recordButtonDisabled : null,
-            ]}
-            onPress={
-              isRecording ? stopLiveTranscription : startLiveTranscription
-            }
-            disabled={isStartDisabled}
-          >
-            {isWarmingUp ? (
-              <ActivityIndicator size="small" color="#ffffff" />
-            ) : (
-              <Ionicons
-                name={isRecording ? "stop" : "radio"}
-                size={24}
-                color="white"
-              />
+                      <Ionicons
+                        name={event.icon}
+                        size={16}
+                        color={event.color}
+                      />
+                    </View>
+                    <View style={styles.eventTextWrap}>
+                      <ThemedText style={styles.eventLabel}>
+                        {event.label}
+                      </ThemedText>
+                      <ThemedText style={styles.eventDetail}>
+                        {event.time.toFixed(2)}s · {event.detail}
+                      </ThemedText>
+                    </View>
+                  </View>
+                ))}
+              </View>
             )}
-            <ThemedText style={styles.recordButtonText}>
-              {recordButtonLabel}
+          </LinearGradient>
+
+          <LinearGradient
+            colors={["#0f172a", "#111827", "#0f172a"]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.infoCard}
+          >
+            <ThemedText
+              style={styles.infoTitle}
+              lightColor="#f8fafc"
+              darkColor="#f8fafc"
+            >
+              Live pipeline notes
             </ThemedText>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.card} onLayout={handleLiveScoreSectionLayout}>
-          <ThemedText type="subtitle" style={styles.cardTitle}>
-            {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT
-              ? "Live OSMD Engraving"
-              : "Committed Score"}
-          </ThemedText>
-          {renderScoreContent(false)}
-        </View>
-
-        <View style={styles.card}>
-          <ThemedText type="subtitle" style={styles.cardTitle}>
-            Recent Detections
-          </ThemedText>
-          {recentEvents.length === 0 ? (
-            <ThemedText style={styles.placeholderText}>
-              No notes detected yet.
+            <ThemedText
+              style={styles.infoText}
+              lightColor="rgba(226,232,240,0.84)"
+              darkColor="rgba(226,232,240,0.84)"
+            >
+              Audio is captured in short WAV chunks, sent to the overlap-aware
+              live endpoint, displayed immediately with coarse rhythm values,
+              and then refreshed when deferred refinement lands.
             </ThemedText>
-          ) : (
-            <View style={styles.eventsList}>
-              {recentEvents.map((event) => (
-                <View key={event.key} style={styles.eventRow}>
-                  <View
-                    style={[
-                      styles.eventIcon,
-                      { backgroundColor: `${event.color}1A` },
-                    ]}
-                  >
-                    <Ionicons name={event.icon} size={16} color={event.color} />
-                  </View>
-                  <View style={styles.eventTextWrap}>
-                    <ThemedText style={styles.eventLabel}>
-                      {event.label}
-                    </ThemedText>
-                    <ThemedText style={styles.eventDetail}>
-                      {event.time.toFixed(2)}s · {event.detail}
-                    </ThemedText>
-                  </View>
-                </View>
-              ))}
-            </View>
-          )}
-        </View>
-
-        <View style={styles.infoCard}>
-          <ThemedText style={styles.infoTitle}>Live pipeline notes</ThemedText>
-          <ThemedText style={styles.infoText}>
-            Audio is captured in short WAV chunks, sent to the overlap-aware
-            live endpoint, displayed immediately with coarse rhythm values, and
-            then refreshed when deferred refinement lands.
-          </ThemedText>
-        </View>
-      </ThemedView>
-    </ScrollView>
+          </LinearGradient>
+        </ThemedView>
+      </ScrollView>
+    </LinearGradient>
   );
 }
 
 const styles = StyleSheet.create({
+  screenBackground: {
+    flex: 1,
+  },
   scrollView: {
     flex: 1,
+    backgroundColor: "transparent",
   },
   scrollContent: {
     flexGrow: 1,
@@ -1412,6 +1532,7 @@ const styles = StyleSheet.create({
     paddingTop: 48,
     paddingBottom: 40,
     gap: 18,
+    backgroundColor: "transparent",
   },
   liveSessionScreen: {
     flex: 1,
@@ -1428,12 +1549,18 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
-    paddingHorizontal: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 18,
+    backgroundColor: "rgba(255,255,255,0.05)",
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.12)",
   },
   liveTopBarTitle: {
     fontSize: 18,
     fontWeight: "800",
     letterSpacing: -0.3,
+    color: "#f8fafc",
   },
   liveTopBarMetrics: {
     flex: 1,
@@ -1450,28 +1577,35 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     lineHeight: 18,
+    color: "#f8fafc",
   },
   liveInlineMetricLabel: {
     fontSize: 10,
     textTransform: "uppercase",
-    letterSpacing: 0.5,
-    color: "#64748b",
-    fontWeight: "600",
+    letterSpacing: 0.8,
+    color: "rgba(191,219,254,0.72)",
+    fontWeight: "700",
   },
   liveScorePane: {
     flex: 1,
     minHeight: 0,
-    borderRadius: 16,
+    borderRadius: 24,
     overflow: "hidden",
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: "rgba(148,163,184,0.2)",
+    backgroundColor: "rgba(248,250,252,0.96)",
+    shadowColor: "#020617",
+    shadowOffset: { width: 0, height: 20 },
+    shadowOpacity: 0.22,
+    shadowRadius: 32,
+    elevation: 12,
   },
   liveStatusChip: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
     borderRadius: 999,
     borderWidth: 1,
     flexShrink: 1,
@@ -1488,40 +1622,56 @@ const styles = StyleSheet.create({
   liveScorePlaceholder: {
     flex: 1,
     minHeight: 220,
-    borderRadius: 10,
+    borderRadius: 18,
     paddingHorizontal: 18,
     paddingVertical: 20,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#ffffff",
+    backgroundColor: "rgba(255,255,255,0.92)",
   },
   liveControlDock: {
-    gap: 10,
-    padding: 12,
-    borderRadius: 16,
-    backgroundColor: "#ffffff",
+    gap: 12,
+    padding: 14,
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: "#e2e8f0",
+    borderColor: "rgba(148,163,184,0.18)",
+    shadowColor: "#020617",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.18,
+    shadowRadius: 24,
+    elevation: 8,
   },
   liveRecordButton: {
     minHeight: 44,
   },
   header: {
-    gap: 8,
+    gap: 10,
   },
   title: {
     textAlign: "center",
+    color: "#0b1220",
+    letterSpacing: -1,
   },
   subtitle: {
     textAlign: "center",
-    lineHeight: 21,
-    opacity: 0.78,
+    lineHeight: 22,
+    opacity: 1,
+    color: "#475569",
+    alignSelf: "center",
+    maxWidth: 680,
   },
   statusCard: {
-    borderRadius: 18,
-    padding: 18,
-    backgroundColor: "rgba(47, 149, 220, 0.08)",
-    gap: 16,
+    borderRadius: 24,
+    padding: 20,
+    gap: 18,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.18)",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.08,
+    shadowRadius: 32,
+    elevation: 10,
+    overflow: "hidden",
   },
   statusRow: {
     flexDirection: "row",
@@ -1533,36 +1683,44 @@ const styles = StyleSheet.create({
     height: 10,
     borderRadius: 999,
   },
+  statusSpinner: {
+    width: 10,
+    height: 10,
+  },
   statusLabel: {
     flex: 1,
     fontSize: 15,
-    fontWeight: "600",
+    fontWeight: "700",
+    color: "#0b1220",
   },
   statsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
+    gap: 12,
   },
   statBox: {
     minWidth: "22%",
     flex: 1,
-    borderRadius: 14,
+    borderRadius: 18,
     paddingVertical: 12,
     paddingHorizontal: 10,
-    borderColor: "#2563eb1A",
+    borderColor: "rgba(148,163,184,0.16)",
     borderWidth: 1,
     alignItems: "center",
     gap: 4,
+    backgroundColor: "rgba(255,255,255,0.58)",
   },
   statValue: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: "700",
+    color: "#0f172a",
   },
   statLabel: {
     fontSize: 9,
-    opacity: 0.72,
+    opacity: 1,
     textTransform: "uppercase",
-    letterSpacing: 0.4,
+    letterSpacing: 0.8,
+    color: "#64748b",
   },
   controlSection: {
     gap: 10,
@@ -1576,11 +1734,12 @@ const styles = StyleSheet.create({
   controlLabel: {
     fontSize: 13,
     fontWeight: "700",
+    color: "#0f172a",
   },
   controlValue: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#2563eb",
+    color: "#0f766e",
   },
   optionRow: {
     flexDirection: "row",
@@ -1590,62 +1749,79 @@ const styles = StyleSheet.create({
   optionChip: {
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: "#2563eb33",
-    backgroundColor: "rgba(255, 255, 255, 0.55)",
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    borderColor: "rgba(15,23,42,0.08)",
+    backgroundColor: "rgba(255,255,255,0.64)",
+    paddingHorizontal: 14,
+    paddingVertical: 9,
   },
   optionChipActive: {
-    backgroundColor: "#2563eb",
-    borderColor: "#2563eb",
+    backgroundColor: "#0f172a",
+    borderColor: "#0f172a",
   },
   optionChipText: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#1d4ed8",
+    color: "#334155",
+    letterSpacing: 0.2,
   },
   optionChipTextActive: {
-    color: "#ffffff",
+    color: "#f8fafc",
   },
   controlHint: {
     fontSize: 12,
-    lineHeight: 18,
-    opacity: 0.72,
+    lineHeight: 19,
+    opacity: 1,
+    color: "#64748b",
   },
   recordButton: {
-    borderRadius: 16,
-    minHeight: 56,
+    borderRadius: 18,
+    minHeight: 58,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 10,
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    elevation: 8,
   },
   startButton: {
-    backgroundColor: "#2563eb",
+    backgroundColor: "#0f172a",
   },
   warmingButton: {
-    backgroundColor: "#f59e0b",
+    backgroundColor: "#d97706",
   },
   stopButton: {
     backgroundColor: "#dc2626",
   },
   recordButtonDisabled: {
-    opacity: 0.92,
+    opacity: 0.7,
   },
   recordButtonText: {
-    color: "white",
+    color: "#ffffff",
     fontSize: 16,
     fontWeight: "700",
+    letterSpacing: 0.2,
   },
   card: {
-    borderRadius: 18,
+    borderRadius: 24,
     paddingVertical: 18,
-    backgroundColor: "rgba(15, 23, 42, 0.04)",
     gap: 12,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.16)",
+    shadowColor: "#0f172a",
+    shadowOffset: { width: 0, height: 16 },
+    shadowOpacity: 0.08,
+    shadowRadius: 30,
+    elevation: 8,
+    overflow: "hidden",
   },
   cardTitle: {
     fontSize: 18,
     color: "#0f172a",
+    paddingHorizontal: 18,
+    letterSpacing: -0.3,
   },
   cardDescription: {
     lineHeight: 21,
@@ -1653,10 +1829,12 @@ const styles = StyleSheet.create({
   },
   placeholderText: {
     lineHeight: 21,
-    color: "#475569",
+    color: "#64748b",
   },
   eventsList: {
     gap: 10,
+    paddingHorizontal: 18,
+    paddingBottom: 4,
   },
   eventRow: {
     flexDirection: "row",
@@ -1678,23 +1856,34 @@ const styles = StyleSheet.create({
   eventLabel: {
     fontSize: 15,
     fontWeight: "600",
+    color: "#0f172a",
   },
   eventDetail: {
     fontSize: 12,
-    opacity: 0.72,
+    opacity: 1,
+    color: "#64748b",
   },
   infoCard: {
-    borderRadius: 18,
-    padding: 18,
-    backgroundColor: "rgba(245, 158, 11, 0.12)",
-    gap: 8,
+    borderRadius: 24,
+    padding: 20,
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.16)",
+    shadowColor: "#020617",
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.2,
+    shadowRadius: 28,
+    elevation: 8,
+    overflow: "hidden",
   },
   infoTitle: {
     fontSize: 15,
     fontWeight: "700",
+    color: "#f8fafc",
   },
   infoText: {
-    lineHeight: 20,
-    opacity: 0.82,
+    lineHeight: 21,
+    opacity: 1,
+    color: "rgba(226,232,240,0.84)",
   },
 });

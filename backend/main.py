@@ -566,6 +566,7 @@ async def _analyze_uploaded_stream_chunk(
     debug: bool = False,
     noise_profile: str = "balanced",
     use_neural_live: bool = True,
+    adaptive_onset_threshold: bool = True,
 ) -> Dict:
     """Decode one uploaded chunk, preserve overlap continuity, and return absolute-time events."""
     TIMER.start("chunk_total")
@@ -609,6 +610,7 @@ async def _analyze_uploaded_stream_chunk(
             "_timing_ms": {
                 "analysis_path": "buffering",
                 "neural_requested": bool(use_neural_live),
+                "adaptive_onset_threshold_requested": bool(adaptive_onset_threshold),
                 "chunk_decode": round(chunk_decode_ms, 2),
                 "chunk_inference": 0.0,
                 "chunk_total": round(TIMER.stop("chunk_total"), 2),
@@ -630,6 +632,7 @@ async def _analyze_uploaded_stream_chunk(
             debug,
             60,
             "cuda",
+            adaptive_onset_threshold,
         )
         if results.get("error"):
             neural_error = str(results.get("error"))
@@ -1332,6 +1335,7 @@ async def live_process_audio_chunk(
     file: UploadFile = File(...),
     noise_profile: str = Form("balanced"),
     use_neural_live: bool = Form(True),
+    adaptive_onset_threshold: bool = Form(True),
     debug: bool = False,
 ):
     """
@@ -1349,6 +1353,7 @@ async def live_process_audio_chunk(
             debug,
             noise_profile,
             use_neural_live,
+            adaptive_onset_threshold,
         )
 
         session = get_live_session(session_id)

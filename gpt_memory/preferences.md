@@ -1,0 +1,1 @@
+- Mirror Copilot memory files into the workspace gpt_memory folder when possible for this repo.

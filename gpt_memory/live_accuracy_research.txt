@@ -1,0 +1,227 @@
+LIVESCORE LOW-LATENCY ACCURACY RESEARCH
+=======================================
+
+UPDATED: 2026-05-23
+
+SCOPE
+-----
+This note focuses on accuracy improvements that should not materially increase
+live-path latency. The recommendations are based on:
+
+- the current repo architecture and latency budget
+- current repo findings already recorded in gpt_memory
+- current backend evaluation scripts and live timing hooks
+- established piano-transcription ideas from Onsets and Frames and Kong et al.
+
+
+CURRENT CONSTRAINTS FROM THIS REPO
+----------------------------------
+1. The live path should stay under about 500 ms P95 on warmed GPU.
+2. The mel-only baseline is already the best accuracy/latency tradeoff in this repo.
+3. Heavy steps like full beat detection, tempo-grid search, and full notation cleanup
+   do not belong in the live critical path.
+4. The live architecture already has a cheap immediate stage plus deferred refinement.
+5. The repo already exposes chunk timings, analysis_path, and real_time_factor,
+   so latency-aware A/B testing is possible.
+
+
+HIGHEST-ROI IDEAS
+-----------------
+
+1. Use the existing note_value head more aggressively, but only when confidence is high.
+   Why it should help:
+   - The mel baseline already predicts note values during the neural forward pass.
+   - That is essentially zero extra inference cost because the head already exists.
+   - High-confidence note-value predictions can bypass brittle IOI heuristics for a subset
+     of notes, especially in clean monophonic or lightly polyphonic passages.
+   Latency impact:
+   - Near zero on the live path.
+   Repo touchpoints:
+   - backend/detect_note.py
+   - backend/rhythm_training/train_mel_baseline.py
+   - backend/test_ensemble_accuracy.py
+   Suggested experiment:
+   - Preserve direct note_value head outputs in live mode only when confidence >= 0.75 or 0.80.
+   - Keep the current coarse quantizer as fallback.
+
+2. Make onset thresholding adaptive per chunk instead of fixed.
+   Why it should help:
+   - The current live path uses fixed thresholds even though chunk noise floor and note density vary.
+   - Quiet accompaniment and noisy chunks need opposite behavior.
+   - The repo already has noise profiles and chunk timing/logging, so this is a natural fit.
+   Latency impact:
+   - Very low. This is decision logic, not heavier inference.
+   Repo touchpoints:
+   - backend/detect_note.py
+   - backend/main.py
+   - app/index.tsx noise profile plumbing
+   Suggested experiment:
+   - Lower onset threshold slightly in sparse, low-RMS chunks.
+   - Raise threshold slightly in noisy/high-transient chunks.
+   - Start with a tiny range such as 0.35 to 0.45 rather than a large sweep.
+
+3. Add overlap-boundary retro-correction instead of enlarging the live chunk.
+   Why it should help:
+   - Boundary misses and duplicate onsets are common live errors.
+   - The repo already uses overlap-aware chunk timing; a small seam-reconciliation pass is cheaper
+     than a larger window or a second full inference.
+   Latency impact:
+   - Low if restricted to the overlap seam and recent low-confidence events only.
+   Repo touchpoints:
+   - backend/main.py _analyze_uploaded_stream_chunk
+   - backend/live_rhythm.py
+   Suggested experiment:
+   - Re-check only the last 150 to 250 ms of the previous chunk plus the first 150 to 250 ms
+     of the new chunk.
+   - Resolve split notes, duplicate onsets, and premature offsets at the seam.
+
+4. Add per-key onset hysteresis / debounce in the live merge layer.
+   Why it should help:
+   - A common live error is repeated short re-attacks of the same key caused by chunk edges,
+     noisy onset peaks, or overlapping detections.
+   - Hysteresis is a cheap way to improve note precision without touching the model.
+   Latency impact:
+   - Negligible.
+   Repo touchpoints:
+   - backend/live_rhythm.py
+   - backend/main.py live audio-chunk merge path
+   Suggested experiment:
+   - If the same MIDI pitch reappears within a small window and the prior note is still plausible,
+     merge it instead of creating a new onset.
+   - Start with a 40 to 80 ms debounce window.
+
+5. Add confidence-aware acoustic verification for uncertain notes only.
+   Why it should help:
+   - False positives are usually clustered among low-confidence note events.
+   - A cheap spectral or frame-activation check on only uncertain notes can improve precision
+     without running heavier model logic.
+   Latency impact:
+   - Low if applied only to a small tail of low-confidence candidates.
+   Repo touchpoints:
+   - backend/detect_note.py
+   - backend/gpu_ops.py
+   Suggested experiment:
+   - For notes with confidence in a narrow gray zone, require a small amount of local sustain,
+     harmonic support, or neighboring frame agreement before admission.
+
+6. Feed the live BPM into final beat tracking as a prior instead of letting beat tracking free-run.
+   Why it should help:
+   - The current neural finalize path relies on librosa beat tracking plus later tempo refinement.
+   - librosa.beat.beat_track supports a supplied BPM / prior, and your live tracker already provides
+     a session BPM estimate.
+   - This is a low-cost way to reduce doubled-tempo or half-tempo mistakes in finalize.
+   Latency impact:
+   - Very low.
+   Repo touchpoints:
+   - backend/detect_note.py detect_beats_neural
+   - backend/live_rhythm.py IncrementalTempoTracker
+   Suggested experiment:
+   - Seed beat tracking from current live BPM when confidence is above a threshold.
+   - Fall back to unconstrained beat tracking only when live BPM confidence is weak.
+
+7. Keep a tiny amount of cross-chunk note state instead of treating every chunk independently.
+   Why it should help:
+   - Cross-chunk state is often cheaper than bigger chunks.
+   - A tiny active-note cache can improve offset continuity and reduce chopped sustains.
+   Latency impact:
+   - Low.
+   Repo touchpoints:
+   - backend/live_rhythm.py
+   - backend/main.py overlap-aware stream state
+   Suggested experiment:
+   - Maintain the last active notes per key for a short carryover window.
+   - Prefer extending an active note over emitting a new onset when the evidence is ambiguous.
+
+8. Improve hand assignment and chord grouping with temporal context instead of a hard MIDI-60 split.
+   Why it should help:
+   - The repo notes already call out crossed-hand passages as an accuracy bottleneck.
+   - Smarter hand assignment improves notation and rhythm logic without touching inference.
+   Latency impact:
+   - Low to moderate, but still much cheaper than larger models.
+   Repo touchpoints:
+   - backend/detect_note.py
+   - backend/live_rhythm.py
+   Suggested experiment:
+   - Use local pitch trajectory, chord span, and recent hand history rather than only note pitch.
+
+9. Add a small asynchronous retro-correction window every few chunks.
+   Why it should help:
+   - The latency budget document already recommends background retro-correction.
+   - This is the cleanest way to raise live accuracy without damaging the immediate feel.
+   Latency impact:
+   - Zero on the user-blocking path if kept asynchronous.
+   Repo touchpoints:
+   - backend/main.py
+   - backend/live_rhythm.py deferred refinement layer
+   Suggested experiment:
+   - Re-run only the most recent 2.5 to 4.0 seconds every 2 to 3 live updates.
+   - Revise only low-confidence or recently changed notes.
+
+10. Calibrate confidence, not just predictions.
+   Why it should help:
+   - Several of the cheap ideas above depend on confidence thresholds.
+   - If confidence is poorly calibrated, threshold-based logic becomes unstable.
+   Latency impact:
+   - Near zero at inference.
+   Repo touchpoints:
+   - backend/rhythm_training/train_mel_baseline.py
+   - backend/test_ensemble_accuracy.py
+   Suggested experiment:
+   - Fit simple temperature scaling or threshold calibration on a held-out set.
+   - Optimize for downstream note F1 and duplicate-rate reduction, not raw logit sharpness.
+
+
+IDEAS TO AVOID IN THE LIVE CRITICAL PATH
+----------------------------------------
+1. Larger live chunks just to improve context.
+   - Accuracy may improve, but latency and time-to-visible usually worsen immediately.
+
+2. Reintroducing the large multi-resolution feature stack for live use.
+   - This repo already found that the simpler mel input outperformed the complex stack.
+
+3. Full beat tracking and full tempo-grid search on every live chunk.
+   - The latency budget explicitly warns against this.
+
+4. Full notation cleanup in the live path.
+   - Better done in deferred refinement or finalize.
+
+
+RECOMMENDED IMPLEMENTATION ORDER
+--------------------------------
+1. Adaptive onset thresholding.
+2. Per-key hysteresis / debounce.
+3. High-confidence direct use of the note_value head.
+4. Boundary retro-correction around chunk seams.
+5. Finalize beat-tracker prior from live BPM.
+6. Tiny cross-chunk note-state carryover.
+7. Asynchronous rolling retro-correction window.
+
+This order keeps the early experiments cheap, easy to isolate, and easy to benchmark.
+
+
+RESEARCH TAKEAWAYS
+------------------
+1. Onsets and Frames remains directly relevant here:
+   - onset-conditioned note starts are still one of the highest-value structural ideas
+     for keeping note starts precise.
+
+2. Kong et al. is directly relevant to this repo's mel baseline:
+   - high-resolution onset/offset regression and better onset targets improve onset quality
+     without needing a heavier multi-resolution feature stack.
+
+3. librosa beat_track is useful but should not be trusted as an unconstrained final authority:
+   - it supports priors and should be guided by live BPM when the live tracker is confident.
+
+
+BOTTOM LINE
+-----------
+The best low-latency accuracy gains in this repo are most likely to come from
+better use of information you already have:
+
+- note_value head confidence
+- chunk noise / density context
+- overlap seam timing
+- live BPM prior
+- short-term per-key state
+
+Those are better first bets than heavier models or longer windows.

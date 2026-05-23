@@ -3850,6 +3850,29 @@ def refine_tempo_by_quantization(notes, initial_bpm, min_bpm=40, max_bpm=240):
             'beat_interval': 60.0 / initial_bpm,
             'refinement_factor': 1.0
         }
+
+    # Tempo should be inferred from successive onset clusters, not every raw
+    # polyphonic event. Sorting and collapsing near-simultaneous events avoids
+    # note stacks and note+chord duplicates from masquerading as ultra-fast IOIs.
+    onset_cluster_tolerance = 0.03
+    event_times = sorted(
+        float(note.get('time_seconds', 0.0) or 0.0)
+        for note in notes
+        if note.get('time_seconds') is not None
+    )
+
+    clustered_times = []
+    for time_seconds in event_times:
+        if not clustered_times or time_seconds - clustered_times[-1] > onset_cluster_tolerance:
+            clustered_times.append(time_seconds)
+
+    if len(clustered_times) < 3:
+        return {
+            'bpm': initial_bpm,
+            'confidence': 0.5,
+            'beat_interval': 60.0 / initial_bpm,
+            'refinement_factor': 1.0
+        }
     
     # Test these multipliers of the initial tempo
     # These correspond to common tempo confusions:
@@ -3863,9 +3886,11 @@ def refine_tempo_by_quantization(notes, initial_bpm, min_bpm=40, max_bpm=240):
     # More granular multipliers for better coverage
     multipliers = [0.25, 0.33, 0.4, 0.5, 0.67, 0.75, 1.0, 1.33, 1.5, 2.0, 3.0]
     
-    # Calculate IOIs
-    times = [n.get('time_seconds', 0) for n in notes]
-    iois = np.diff(times)
+    # Calculate IOIs from clustered onset times and ignore gaps outside the
+    # plausible beat/subdivision search window.
+    iois = np.diff(np.array(clustered_times, dtype=float))
+    max_interval = 60.0 / min_bpm * 4.0
+    iois = iois[(iois > 0) & (iois <= max_interval)]
     
     if len(iois) == 0:
         return {
@@ -4046,12 +4071,31 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
         mean_angle = np.arctan2(mean_sin, mean_cos)
         phase_offset = (mean_angle / (2 * np.pi)) % 1.0
 
-        # Distance of each onset to nearest grid point (with optimal phase)
-        shifted = (phases - phase_offset + 0.5) % 1.0 - 0.5  # range [-0.5, 0.5]
-        errors = np.abs(shifted) * beat_period  # convert back to seconds
+        shifted = (phases - phase_offset) % 1.0
 
-        # Mean error, weighted more heavily for errors > 1/8 beat
-        mean_err = np.mean(errors)
+        # Let slower tempi explain onsets via simple subdivisions instead of
+        # forcing every fast subdivision to become its own beat.
+        subdivision_specs = (
+            (np.array([0.0]), 0.0),
+            (np.array([0.0, 0.5]), beat_period * 0.035),
+            (np.array([0.0, 1 / 3, 2 / 3]), beat_period * 0.05),
+            (np.array([0.0, 0.25, 0.5, 0.75]), beat_period * 0.08),
+        )
+
+        onset_costs = []
+        for onset_phase in shifted:
+            best_cost = beat_period * 0.5
+            for subdivision_points, penalty in subdivision_specs:
+                distances = np.abs(
+                    ((onset_phase - subdivision_points + 0.5) % 1.0) - 0.5
+                )
+                best_cost = min(
+                    best_cost,
+                    float(np.min(distances)) * beat_period + penalty,
+                )
+            onset_costs.append(best_cost)
+
+        mean_err = float(np.mean(onset_costs))
 
         return mean_err, phase_offset * beat_period
 
@@ -4062,9 +4106,11 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
 
     best_bpm = initial_bpm
     best_error, best_phase = grid_alignment_error(initial_bpm)
+    tested_candidates = [(float(initial_bpm), float(best_error), float(best_phase))]
 
     for c_bpm in candidates:
         err, phase = grid_alignment_error(c_bpm)
+        tested_candidates.append((float(c_bpm), float(err), float(phase)))
         if err < best_error - 0.001:  # require meaningful improvement
             best_error = err
             best_bpm = c_bpm
@@ -4075,11 +4121,32 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
         c_bpm = initial_bpm * mult
         if 30 <= c_bpm <= 300:
             err, phase = grid_alignment_error(c_bpm)
+            tested_candidates.append((float(c_bpm), float(err), float(phase)))
             # Require substantially better alignment for half/double switch
             if err < best_error * 0.85:
                 best_error = err
                 best_bpm = c_bpm
                 best_phase = phase
+
+    # If the search still lands near the ceiling, prefer a slower natural-range
+    # candidate when its grid fit is effectively tied.
+    if best_bpm >= 200:
+        tie_tolerance = max(0.012, (60.0 / best_bpm) * 0.05)
+        natural_candidates = [
+            (cand_bpm, cand_error, cand_phase)
+            for cand_bpm, cand_error, cand_phase in tested_candidates
+            if 60 <= cand_bpm <= 160
+            and cand_bpm <= best_bpm / 1.25
+            and cand_error <= best_error + tie_tolerance
+        ]
+        if natural_candidates:
+            natural_bpm, natural_error, natural_phase = min(
+                natural_candidates,
+                key=lambda item: (item[1], -item[0]),
+            )
+            best_bpm = natural_bpm
+            best_error = natural_error
+            best_phase = natural_phase
 
     # Round to nearest 0.5 BPM
     best_bpm = round(best_bpm * 2) / 2
@@ -8329,7 +8396,56 @@ def _convert_neural_note_events_to_results(note_events, split_midi=60):
     }
 
 
-def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_midi=60, device='cuda'):
+def _select_live_neural_onset_threshold(audio_chunk, base_onset_threshold, enabled=True):
+    """Adjust live onset sensitivity from cheap chunk loudness stats only."""
+    experiment = 'adaptive_onset_loudness_v1' if enabled else 'fixed_onset_baseline'
+
+    if audio_chunk is None:
+        return float(base_onset_threshold), {
+            'experiment': experiment,
+            'profile': 'no_audio',
+            'chunk_rms': 0.0,
+            'peak_level': 0.0,
+            'crest_factor': 0.0,
+        }
+
+    audio = np.asarray(audio_chunk, dtype=np.float32)
+    if audio.size == 0:
+        return float(base_onset_threshold), {
+            'experiment': experiment,
+            'profile': 'empty_audio',
+            'chunk_rms': 0.0,
+            'peak_level': 0.0,
+            'crest_factor': 0.0,
+        }
+
+    audio64 = audio.astype(np.float64, copy=False)
+    abs_audio = np.abs(audio64)
+    chunk_rms = float(np.sqrt(np.mean(audio64 * audio64)))
+    peak_level = float(np.max(abs_audio))
+    crest_factor = float(peak_level / max(chunk_rms, 1e-6))
+
+    selected = float(base_onset_threshold)
+    profile = 'fixed_baseline' if not enabled else 'baseline_nominal'
+
+    if enabled:
+        if chunk_rms < 0.024 and peak_level < 0.45:
+            selected = max(0.30, base_onset_threshold - 0.04)
+            profile = 'soft_sparse_recall'
+        elif chunk_rms > 0.110 or (chunk_rms > 0.060 and crest_factor < 2.30):
+            selected = min(0.46, base_onset_threshold + 0.02)
+            profile = 'loud_dense_precision'
+
+    return float(selected), {
+        'experiment': experiment,
+        'profile': profile,
+        'chunk_rms': chunk_rms,
+        'peak_level': peak_level,
+        'crest_factor': crest_factor,
+    }
+
+
+def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_midi=60, device='cuda', adaptive_onset_threshold=True):
     """Run a minimal array-based neural transcription path for live chunk updates."""
     import time
 
@@ -8364,6 +8480,13 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
     note_events = []
     model_sr = sr
     inference_detail = {}
+    selected_onset_threshold = 0.0
+    onset_threshold_profile = 'not_used'
+    onset_threshold_experiment = (
+        'adaptive_onset_loudness_v1'
+        if adaptive_onset_threshold
+        else 'fixed_onset_baseline'
+    )
     mel_status = {
         'reason': 'not_attempted',
         'selected_path': None,
@@ -8391,10 +8514,25 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 model_audio = audio_full_sr
             timings['neural_resample'] = (time.perf_counter() - t0) * 1000
 
+            selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
+                model_audio,
+                0.38,
+                enabled=adaptive_onset_threshold,
+            )
+            onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
+            onset_threshold_experiment = str(
+                threshold_debug.get('experiment') or onset_threshold_experiment
+            )
+            timings['neural_onset_threshold_base'] = 0.38
+            timings['neural_onset_threshold_selected'] = selected_onset_threshold
+            timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
+            timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
+            timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
+
             t0 = time.perf_counter()
             transcribed_dict = ensemble_model.transcribe(
                 model_audio,
-                onset_threshold=0.4,
+                onset_threshold=selected_onset_threshold,
                 frame_threshold=0.5,
             )
             timings['neural_transcribe'] = (time.perf_counter() - t0) * 1000
@@ -8417,10 +8555,25 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 model_audio = audio_full_sr
             timings['neural_resample'] = (time.perf_counter() - t0) * 1000
 
+            selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
+                model_audio,
+                0.33,
+                enabled=adaptive_onset_threshold,
+            )
+            onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
+            onset_threshold_experiment = str(
+                threshold_debug.get('experiment') or onset_threshold_experiment
+            )
+            timings['neural_onset_threshold_base'] = 0.33
+            timings['neural_onset_threshold_selected'] = selected_onset_threshold
+            timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
+            timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
+            timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
+
             t0 = time.perf_counter()
             transcribed_dict = custom_model.transcribe(
                 model_audio,
-                onset_threshold=0.35,
+                onset_threshold=selected_onset_threshold,
                 frame_threshold=0.25,
             )
             timings['neural_transcribe'] = (time.perf_counter() - t0) * 1000
@@ -8476,6 +8629,7 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
     if debug:
         print(
             f"[Live Neural] model={model_name} notes={len(converted['notes'])} chords={len(converted['chords'])} "
+            f"onset_threshold={selected_onset_threshold:.2f} profile={onset_threshold_profile} "
             f"total={total_ms:.1f}ms rtf={timings['neural_real_time_factor']:.2f}x"
         )
 
@@ -8492,6 +8646,9 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             'analysis_path': 'live_neural',
             'neural_model': model_name,
             'event_groups': converted['event_groups'],
+            'live_onset_threshold_experiment': onset_threshold_experiment,
+            'live_onset_threshold_profile': onset_threshold_profile,
+            'live_onset_threshold': round(float(selected_onset_threshold), 3),
         },
         '_timing_ms': {key: round(float(value), 3) for key, value in timings.items()},
     }

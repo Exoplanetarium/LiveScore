@@ -2260,6 +2260,7 @@ export default function PianoSheetMusic({
     detectedBPM,
     keySignature,
   ]);
+  const hasPlayableScore = score !== FALLBACK_XML;
 
   const webRef = useRef<WebView>(null);
   const source = useMemo(
@@ -2425,6 +2426,42 @@ export default function PianoSheetMusic({
     playAfterRenderRef.current = true;
     appendDebugEvent("queued playback until score render completes");
   }, [appendDebugEvent, injectWebCommand, playbackBPM, score]);
+
+  const handlePlayPause = useCallback(() => {
+    if (!isPlaying || isPaused) {
+      requestScorePlayback();
+      return;
+    }
+
+    injectWebCommand(
+      `if (window.__OSMD_PAUSE) window.__OSMD_PAUSE();`,
+      "pause-score",
+    );
+  }, [injectWebCommand, isPaused, isPlaying, requestScorePlayback]);
+
+  const handleStopPlayback = useCallback(() => {
+    playAfterRenderRef.current = false;
+    injectWebCommand(
+      `if (window.__OSMD_STOP) window.__OSMD_STOP();`,
+      "stop-score",
+    );
+  }, [injectWebCommand]);
+
+  const updatePlaybackTempo = useCallback(
+    (delta: number) => {
+      const nextBpm = Math.max(40, Math.min(240, playbackBPM + delta));
+      if (nextBpm === playbackBPM) {
+        return;
+      }
+
+      setPlaybackBPM(nextBpm);
+      injectWebCommand(
+        `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(nextBpm)});`,
+        delta > 0 ? "increase-bpm" : "decrease-bpm",
+      );
+    },
+    [injectWebCommand, playbackBPM],
+  );
 
   useEffect(() => {
     if (detectedBPM && detectedBPM !== lastDetectedBPMRef.current) {
@@ -2803,7 +2840,12 @@ export default function PianoSheetMusic({
 
   return (
     <View style={[styles.container, compact ? styles.compactContainer : null]}>
-      <View style={[styles.mainContainer, compact ? styles.compactMainContainer : null]}>
+      <View
+        style={[
+          styles.mainContainer,
+          compact ? styles.compactMainContainer : null,
+        ]}
+      >
         {compact ? null : (
           <View style={styles.playbackSection}>
             <View style={styles.playbackControls}>
@@ -2817,18 +2859,7 @@ export default function PianoSheetMusic({
                       ? styles.warningControlButton
                       : styles.successControlButton,
                   ]}
-                  onPress={() => {
-                    if (!isPlaying) {
-                      requestScorePlayback();
-                    } else if (isPaused) {
-                      requestScorePlayback();
-                    } else {
-                      injectWebCommand(
-                        `if (window.__OSMD_PAUSE) window.__OSMD_PAUSE();`,
-                        "pause-score",
-                      );
-                    }
-                  }}
+                  onPress={handlePlayPause}
                 >
                   <ThemedText style={styles.controlButtonText}>
                     {isPlaying ? (isPaused ? "Resume" : "Pause") : "Play"}
@@ -2841,12 +2872,7 @@ export default function PianoSheetMusic({
                     styles.playbackButton,
                     styles.dangerControlButton,
                   ]}
-                  onPress={() =>
-                    injectWebCommand(
-                      `if (window.__OSMD_STOP) window.__OSMD_STOP();`,
-                      "stop-score",
-                    )
-                  }
+                  onPress={handleStopPlayback}
                 >
                   <ThemedText style={styles.controlButtonText}>Stop</ThemedText>
                 </TouchableOpacity>
@@ -2856,14 +2882,7 @@ export default function PianoSheetMusic({
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.stepperButton}
-                  onPress={() => {
-                    const newBPM = Math.max(40, playbackBPM - 10);
-                    setPlaybackBPM(newBPM);
-                    injectWebCommand(
-                      `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(newBPM)});`,
-                      "decrease-bpm",
-                    );
-                  }}
+                  onPress={() => updatePlaybackTempo(-10)}
                 >
                   <ThemedText style={styles.stepperButtonText}>-</ThemedText>
                 </TouchableOpacity>
@@ -2874,14 +2893,7 @@ export default function PianoSheetMusic({
                 <TouchableOpacity
                   activeOpacity={0.85}
                   style={styles.stepperButton}
-                  onPress={() => {
-                    const newBPM = Math.min(240, playbackBPM + 10);
-                    setPlaybackBPM(newBPM);
-                    injectWebCommand(
-                      `if (window.__OSMD_SET_BPM) window.__OSMD_SET_BPM(${JSON.stringify(newBPM)});`,
-                      "increase-bpm",
-                    );
-                  }}
+                  onPress={() => updatePlaybackTempo(10)}
                 >
                   <ThemedText style={styles.stepperButtonText}>+</ThemedText>
                 </TouchableOpacity>
@@ -2940,6 +2952,52 @@ export default function PianoSheetMusic({
               nestedScrollEnabled
               scrollEnabled
             />
+            {compact && !isLandscape ? (
+              <View
+                pointerEvents="box-none"
+                style={styles.compactPlaybackOverlay}
+              >
+                <View style={styles.compactPlaybackBar}>
+                  <ThemedText style={styles.compactPlaybackBpm}>
+                    {playbackBPM} BPM
+                  </ThemedText>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={[
+                      styles.compactPlaybackButton,
+                      isPlaying && !isPaused
+                        ? styles.compactPlaybackButtonActive
+                        : styles.compactPlaybackButtonPrimary,
+                      !hasPlayableScore && !isPlaying && !isPaused
+                        ? styles.compactPlaybackButtonDisabled
+                        : null,
+                    ]}
+                    onPress={handlePlayPause}
+                    disabled={!hasPlayableScore && !isPlaying && !isPaused}
+                  >
+                    <ThemedText style={styles.compactPlaybackButtonText}>
+                      {isPlaying ? (isPaused ? "Resume" : "Pause") : "Play"}
+                    </ThemedText>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    style={[
+                      styles.compactPlaybackButton,
+                      styles.compactPlaybackButtonSecondary,
+                      !isPlaying && !isPaused
+                        ? styles.compactPlaybackButtonDisabled
+                        : null,
+                    ]}
+                    onPress={handleStopPlayback}
+                    disabled={!isPlaying && !isPaused}
+                  >
+                    <ThemedText style={styles.compactPlaybackButtonText}>
+                      Stop
+                    </ThemedText>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
           </View>
         </View>
 
@@ -3167,6 +3225,55 @@ const styles = StyleSheet.create({
     minHeight: 560,
     maxWidth: "100%",
     overflow: "hidden",
+  },
+  compactPlaybackOverlay: {
+    position: "absolute",
+    top: 12,
+    right: 12,
+    zIndex: 3,
+    elevation: 6,
+  },
+  compactPlaybackBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: "rgba(15,23,42,0.78)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.16)",
+  },
+  compactPlaybackBpm: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: "rgba(226,232,240,0.88)",
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+  },
+  compactPlaybackButton: {
+    minHeight: 32,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  compactPlaybackButtonPrimary: {
+    backgroundColor: "#0f766e",
+  },
+  compactPlaybackButtonActive: {
+    backgroundColor: "#c56a1f",
+  },
+  compactPlaybackButtonSecondary: {
+    backgroundColor: "rgba(255,255,255,0.16)",
+  },
+  compactPlaybackButtonDisabled: {
+    opacity: 0.48,
+  },
+  compactPlaybackButtonText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#ffffff",
   },
   debugSection: {
     backgroundColor: "#f7f9fb",

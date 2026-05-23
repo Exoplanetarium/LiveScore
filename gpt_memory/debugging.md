@@ -1,0 +1,1 @@
+- On Windows PowerShell, local npm shims like npx can fail with PSSecurityException; use npx.cmd for lint/test commands instead.

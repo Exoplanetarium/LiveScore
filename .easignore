@@ -13,3 +13,21 @@ node_modules/
 # Large training data
 backend/rhythm_training/rhythm_training_data.jsonl
 backend/rhythm_training/maestro_midi/
+
+# dataset
+dataset/
+
+# virtual environment
+env/
+
+# audio
+*.wav
+*.mp3
+
+# datasets
+maestro_midi/
+*.jsonl
+precomputed_features/
+precomputed_features_mel/
+nul
+
