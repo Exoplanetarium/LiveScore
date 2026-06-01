@@ -13,13 +13,18 @@ threshold; period tracks BPM updates continuously.
 """
 
 import math
+import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from fractions import Fraction
+from itertools import combinations
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+from display_chord_pairwise_model import canonicalize_pairwise_chord_group
+from display_chord_pairwise_model import \
+    load_pairwise_model as load_display_pairwise_model
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Constants
@@ -79,6 +84,19 @@ _LIVE_FRAC_SORTED = sorted(
 )
 _LIVE_FRAC_VALS = [x[0] for x in _LIVE_FRAC_SORTED]
 _LIVE_FRAC_KEYS = [x[1] for x in _LIVE_FRAC_SORTED]
+LIVE_TEMPO_ONSET_CLUSTER_TOLERANCE_SEC = 0.03
+LIVE_TEMPO_NATURAL_MIN_BPM = 60.0
+LIVE_TEMPO_NATURAL_MAX_BPM = 160.0
+# The IOI cost/alignment metrics are octave-biased: dense 16th/32nd runs fit a
+# doubled grid as eighths, so a fit-based selection cannot undo a 2x (or 1.5x)
+# tempo error and the tracker collapses to 193/230/240 on busy passages. Fold the
+# estimate back into the natural range as a prior. Env-gated for A/B testing.
+LIVE_TEMPO_OCTAVE_GUARD = os.environ.get("LIVE_TEMPO_OCTAVE_GUARD", "1") != "0"
+DISPLAY_EVENT_DEDUPE_TOLERANCE_SEC = 0.05
+DISPLAY_EVENT_GROUP_TOLERANCE_SEC = 0.03
+DISPLAY_CHORD_RECONCILE_TOLERANCE_SEC = 0.01
+DISPLAY_CHORD_EARLY_TIE_TOLERANCE_SEC = 0.003
+MIDI_NOTE_NAMES = ('C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B')
 
 
 def _fraction_snap(beats, max_denom=16):
@@ -118,6 +136,346 @@ def _fraction_snap(beats, max_denom=16):
             note_type = nt
             break
     return (note_type, best_beats, is_dotted, False)
+
+
+def _cluster_live_onset_times(
+    notes: List[Dict],
+    tolerance_sec: float = LIVE_TEMPO_ONSET_CLUSTER_TOLERANCE_SEC,
+) -> List[float]:
+    onset_times = sorted(
+        float(note.get('time_seconds', 0.0) or 0.0)
+        for note in (notes or [])
+        if note.get('time_seconds') is not None
+    )
+    clustered: List[float] = []
+    for onset_time in onset_times:
+        if not clustered or onset_time - clustered[-1] > tolerance_sec:
+            clustered.append(onset_time)
+    return clustered
+
+
+def _note_name_from_midi(midi_note: int) -> str:
+    octave = (int(midi_note) // 12) - 1
+    return f"{MIDI_NOTE_NAMES[int(midi_note) % 12]}{octave}"
+
+
+def _display_event_time(event: Dict) -> float:
+    return float(event.get('time_seconds', event.get('onset_time', 0.0)) or 0.0)
+
+
+def _display_event_slot(event: Dict) -> Optional[int]:
+    raw_idx = event.get('start_grid_idx')
+    try:
+        if raw_idx is not None:
+            return int(raw_idx)
+    except (TypeError, ValueError):
+        pass
+
+    raw_beat = event.get('start_beat')
+    raw_subdivision = event.get('grid_subdivision')
+    try:
+        beat_value = float(raw_beat)
+        subdivision = int(raw_subdivision)
+    except (TypeError, ValueError):
+        return None
+
+    if subdivision <= 0:
+        return None
+
+    return int(round(beat_value * subdivision))
+
+
+def _display_event_rank(event: Dict) -> int:
+    source = str(event.get('_display_source') or '')
+    if source == 'refined_note':
+        return 3
+    if source == 'note':
+        return 2
+    if source == 'chord_member':
+        return 1
+    return 0
+
+
+def _display_event_score(event: Dict) -> tuple:
+    return (
+        _display_event_rank(event),
+        1 if _display_event_slot(event) is not None else 0,
+        float(event.get('quantization_confidence', 0.0) or 0.0),
+        float(event.get('confidence', 0.0) or 0.0),
+    )
+
+
+def _display_event_sort_key(event: Dict) -> tuple:
+    slot = _display_event_slot(event)
+    try:
+        midi_note = int(event.get('midi_note', 0) or 0)
+    except (TypeError, ValueError):
+        midi_note = 0
+
+    return (
+        0 if slot is not None else 1,
+        slot if slot is not None else 0,
+        _display_event_time(event),
+        midi_note,
+    )
+
+
+def _sanitize_display_event(event: Dict) -> Dict:
+    return {key: value for key, value in dict(event).items() if not str(key).startswith('_')}
+
+
+def _display_chord_pitch_tuple(chord: Dict) -> tuple[int, ...]:
+    pitches: List[int] = []
+    for midi_note in chord.get('midi_notes') or []:
+        try:
+            pitches.append(int(midi_note))
+        except (TypeError, ValueError):
+            continue
+    return tuple(sorted(pitches))
+
+
+def _display_chords_conflict(
+    left: Dict,
+    right: Dict,
+    overlap_threshold: float = 0.34,
+) -> tuple[bool, float]:
+    left_pitches = set(_display_chord_pitch_tuple(left))
+    right_pitches = set(_display_chord_pitch_tuple(right))
+    if not left_pitches or not right_pitches:
+        return False, 0.0
+
+    union = left_pitches | right_pitches
+    if not union:
+        return False, 0.0
+
+    overlap = len(left_pitches & right_pitches) / len(union)
+    subset_pair = left_pitches <= right_pitches or right_pitches <= left_pitches
+    return (subset_pair or overlap >= overlap_threshold), overlap
+
+
+def _select_display_chord_subset_heuristic(chord_group: List[Dict]) -> List[Dict]:
+    if len(chord_group) > 7:
+        earliest_time = min(_display_event_time(chord) for chord in chord_group)
+        earliest_candidates = [
+            chord
+            for chord in chord_group
+            if abs(_display_event_time(chord) - earliest_time) <= DISPLAY_CHORD_EARLY_TIE_TOLERANCE_SEC
+        ]
+        return [
+            max(
+                earliest_candidates,
+                key=lambda chord: (
+                    float(chord.get('confidence', 0.0) or 0.0),
+                    len(_display_chord_pitch_tuple(chord)),
+                ),
+            )
+        ]
+
+    best_key = None
+    best_subset = [
+        max(
+            chord_group,
+            key=lambda chord: (
+                float(chord.get('confidence', 0.0) or 0.0),
+                len(_display_chord_pitch_tuple(chord)),
+            ),
+        )
+    ]
+
+    for subset_size in range(1, len(chord_group) + 1):
+        for subset in combinations(chord_group, subset_size):
+            confidence_score = sum(float(chord.get('confidence', 0.0) or 0.0) for chord in subset)
+            density_bonus = 0.015 * sum(len(_display_chord_pitch_tuple(chord)) for chord in subset)
+            conflict_penalty = 0.0
+            for left, right in combinations(subset, 2):
+                conflicts, overlap = _display_chords_conflict(left, right)
+                if conflicts:
+                    conflict_penalty += 1.1 + overlap
+
+            score = confidence_score + density_bonus - conflict_penalty
+            key = (score, -len(subset))
+            if best_key is None or key > best_key:
+                best_key = key
+                best_subset = list(subset)
+
+    return sorted(best_subset, key=_display_event_time)
+
+
+def _select_display_chord_group(chord_group: List[Dict]) -> Dict[str, List[Dict]]:
+    learned_model = load_display_pairwise_model()
+    if learned_model is not None and 1 < len(chord_group) <= 7:
+        canonical = canonicalize_pairwise_chord_group(chord_group, learned_model)
+        return {
+            'notes': list(canonical.get('notes') or ()),
+            'chords': list(canonical.get('chords') or ()),
+        }
+
+    if len(chord_group) <= 1:
+        return {
+            'notes': [],
+            'chords': list(chord_group),
+        }
+
+    return {
+        'notes': [],
+        'chords': _select_display_chord_subset_heuristic(chord_group),
+    }
+
+
+def _expand_display_chords_to_note_events(chords: List[Dict]) -> List[Dict]:
+    note_events: List[Dict] = []
+
+    for chord in chords or []:
+        chord_dict = dict(chord)
+        midi_notes = chord_dict.get('midi_notes') or []
+        note_names = list(chord_dict.get('note_names') or [])
+
+        for note_index, midi_note in enumerate(midi_notes):
+            try:
+                midi_value = int(midi_note)
+            except (TypeError, ValueError):
+                continue
+
+            note_event = dict(chord_dict)
+            note_event['midi_note'] = midi_value
+            note_event['note_name'] = (
+                note_names[note_index]
+                if note_index < len(note_names)
+                else _note_name_from_midi(midi_value)
+            )
+            note_event['_display_source'] = 'chord_member'
+            note_events.append(note_event)
+
+    return note_events
+
+
+def _dedupe_display_note_events(
+    note_events: List[Dict],
+    time_tolerance_sec: float = DISPLAY_EVENT_DEDUPE_TOLERANCE_SEC,
+) -> List[Dict]:
+    deduped: List[Dict] = []
+
+    for event in sorted(note_events or [], key=_display_event_sort_key):
+        event_copy = dict(event)
+
+        try:
+            midi_note = int(event_copy.get('midi_note', 0) or 0)
+        except (TypeError, ValueError):
+            deduped.append(event_copy)
+            continue
+
+        event_copy['midi_note'] = midi_note
+        event_slot = _display_event_slot(event_copy)
+        event_time = _display_event_time(event_copy)
+
+        duplicate_idx = None
+        for idx in range(len(deduped) - 1, -1, -1):
+            existing = deduped[idx]
+            if existing.get('midi_note') != midi_note:
+                continue
+
+            existing_slot = _display_event_slot(existing)
+            same_slot = (
+                event_slot is not None
+                and existing_slot is not None
+                and event_slot == existing_slot
+            )
+            same_time = abs(_display_event_time(existing) - event_time) <= time_tolerance_sec
+            if same_slot or same_time:
+                duplicate_idx = idx
+                break
+
+        if duplicate_idx is None:
+            deduped.append(event_copy)
+            continue
+
+        if _display_event_score(event_copy) > _display_event_score(deduped[duplicate_idx]):
+            deduped[duplicate_idx] = event_copy
+
+    return sorted(deduped, key=_display_event_sort_key)
+
+
+def _group_display_note_events(note_events: List[Dict]) -> List[List[Dict]]:
+    groups: List[List[Dict]] = []
+    current_group: List[Dict] = []
+
+    for event in sorted(note_events or [], key=_display_event_sort_key):
+        if not current_group:
+            current_group = [event]
+            continue
+
+        anchor = current_group[0]
+        anchor_slot = _display_event_slot(anchor)
+        event_slot = _display_event_slot(event)
+        same_slot = (
+            anchor_slot is not None
+            and event_slot is not None
+            and anchor_slot == event_slot
+        )
+        same_time = abs(_display_event_time(event) - _display_event_time(anchor)) <= DISPLAY_EVENT_GROUP_TOLERANCE_SEC
+
+        if same_slot or ((anchor_slot is None or event_slot is None) and same_time):
+            current_group.append(event)
+            continue
+
+        groups.append(current_group)
+        current_group = [event]
+
+    if current_group:
+        groups.append(current_group)
+
+    return groups
+
+
+def _build_display_surface(
+    notes: List[Dict],
+    chords: List[Dict],
+) -> Dict[str, List[Dict]]:
+    sanitized_notes: List[Dict] = [_sanitize_display_event(note) for note in (notes or [])]
+    sanitized_chords: List[Dict] = [_sanitize_display_event(chord) for chord in (chords or [])]
+
+    generated_notes: List[Dict] = []
+    reconciled_chords: List[Dict] = []
+    chord_groups: List[List[Dict]] = []
+    for chord in sorted(sanitized_chords, key=_display_event_time):
+        chord_time = _display_event_time(chord)
+        if (
+            not chord_groups
+            or (chord_time - _display_event_time(chord_groups[-1][0])) > DISPLAY_CHORD_RECONCILE_TOLERANCE_SEC
+        ):
+            chord_groups.append([chord])
+            continue
+        chord_groups[-1].append(chord)
+
+    for chord_group in chord_groups:
+        selected = _select_display_chord_group(chord_group)
+        generated_notes.extend(selected.get('notes') or [])
+        reconciled_chords.extend(selected.get('chords') or [])
+
+    display_note_candidates: List[Dict] = []
+    for note in sanitized_notes:
+        note_copy = dict(note)
+        note_copy['_display_source'] = 'note'
+        display_note_candidates.append(note_copy)
+    for note in generated_notes:
+        note_copy = dict(note)
+        note_copy['_display_source'] = 'note'
+        display_note_candidates.append(note_copy)
+
+    display_notes_internal = (
+        _dedupe_display_note_events(display_note_candidates)
+        if generated_notes
+        else display_note_candidates
+    )
+
+    note_events: List[Dict] = list(display_notes_internal)
+    note_events.extend(_expand_display_chords_to_note_events(reconciled_chords))
+
+    return {
+        'notes': [_sanitize_display_event(event) for event in display_notes_internal],
+        'chords': reconciled_chords,
+        'note_events': [_sanitize_display_event(event) for event in _dedupe_display_note_events(note_events)],
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -280,6 +638,10 @@ class IncrementalTempoTracker:
         if len(self.ioi_buffer) < 4:
             return
         iois = np.array(self.ioi_buffer)
+        iois = iois[np.isfinite(iois) & (iois > 0)]
+        if len(iois) < 4:
+            return
+
         candidates = []
         for ioi in iois:
             for divisor in [0.25, 0.5, 1.0, 2.0, 4.0]:
@@ -303,23 +665,106 @@ class IncrementalTempoTracker:
             peak_count += hist[peak_idx + 1]
         self.confidence = min(1.0, peak_count / max(total, 1) * 1.5)
 
-        best_bpm = peak_bpm
-        best_score = self._alignment_score(iois, 60.0 / peak_bpm)
-        for mult in [0.5, 2.0]:
-            alt_bpm = peak_bpm * mult
-            if self.min_bpm <= alt_bpm <= self.max_bpm:
-                alt_score = self._alignment_score(iois, 60.0 / alt_bpm)
-                if alt_score > best_score * 1.05:
-                    best_bpm = alt_bpm
-                    best_score = alt_score
+        candidate_bpms = {
+            round(float(bpm) * 2.0) / 2.0
+            for bpm in candidates
+            if self.min_bpm <= bpm <= self.max_bpm
+        }
+        candidate_bpms.add(round(float(peak_bpm) * 2.0) / 2.0)
+        candidate_bpms.add(round(float(self.current_bpm) * 2.0) / 2.0)
+        for base_bpm in [peak_bpm, self.current_bpm]:
+            for mult in [0.5, 0.67, 0.75, 1.0, 1.33, 1.5, 2.0]:
+                cand_bpm = float(base_bpm) * mult
+                if self.min_bpm <= cand_bpm <= self.max_bpm:
+                    candidate_bpms.add(round(cand_bpm * 2.0) / 2.0)
 
-        alpha = 0.3 if self.confidence > 0.5 else 0.1
+        tested_candidates = []
+        best_bpm = peak_bpm
+        best_cost = float('inf')
+        best_alignment = float('-inf')
+        for cand_bpm in sorted(candidate_bpms):
+            cost = self._tempo_cost(iois, cand_bpm)
+            alignment = self._alignment_score(iois, 60.0 / cand_bpm)
+            tested_candidates.append((cand_bpm, cost, alignment))
+            if (
+                cost < best_cost - 0.005
+                or (
+                    abs(cost - best_cost) <= 0.005
+                    and alignment > best_alignment + 1e-6
+                )
+            ):
+                best_bpm = cand_bpm
+                best_cost = cost
+                best_alignment = alignment
+
+        natural_candidates = [
+            item for item in tested_candidates
+            if LIVE_TEMPO_NATURAL_MIN_BPM <= item[0] <= LIVE_TEMPO_NATURAL_MAX_BPM
+            and item[1] <= best_cost + 0.01
+            and item[2] >= best_alignment * 0.97
+        ]
+        if natural_candidates and (
+            best_bpm >= 180
+            or best_bpm <= 55
+            or natural_candidates[0][1] <= best_cost + 0.003
+        ):
+            natural_bpm, natural_cost, natural_alignment = min(
+                natural_candidates,
+                key=lambda item: (item[1], -item[2], abs(item[0] - self.current_bpm)),
+            )
+            best_bpm = natural_bpm
+            best_cost = natural_cost
+            best_alignment = natural_alignment
+
+        # Octave-doubling guard. The cost/alignment metrics above genuinely favor
+        # the doubled tempo on dense passages, so this prior — not a fit gate — is
+        # what undoes it. Fold back into the natural range before smoothing.
+        if LIVE_TEMPO_OCTAVE_GUARD:
+            while (
+                best_bpm > LIVE_TEMPO_NATURAL_MAX_BPM
+                and best_bpm / 2.0 >= self.min_bpm
+            ):
+                best_bpm /= 2.0
+
+        alpha = 0.5 if self.confidence >= 0.5 else 0.2
         self.current_bpm = self.current_bpm * (1 - alpha) + best_bpm * alpha
         common_tempos = [60, 72, 80, 90, 100, 108, 120, 132, 140, 160, 180, 200]
+        snap_tolerance = max(0.75, self.current_bpm * 0.01)
         for ct in common_tempos:
-            if abs(self.current_bpm - ct) < 3:
+            if abs(self.current_bpm - ct) <= snap_tolerance:
                 self.current_bpm = ct
                 break
+
+    @staticmethod
+    def _tempo_cost(iois: np.ndarray, test_bpm: float) -> float:
+        beat_period = 60.0 / max(test_bpm, 1.0)
+        errors = []
+        n_32nd = 0
+        n_16th = 0
+        for ioi in iois:
+            beats = max(0.0625, min(float(ioi) / beat_period, 8.0))
+            note_type, note_beats, _, _ = _fraction_snap(beats, max_denom=16)
+            errors.append(abs(beats - note_beats) / max(note_beats, 1e-6))
+            if note_type == '32nd':
+                n_32nd += 1
+            elif note_type == '16th':
+                n_16th += 1
+
+        if not errors:
+            return 1.0
+
+        base_error = float(np.mean(errors))
+        n = len(errors)
+        frac_32 = n_32nd / n
+        frac_short = (n_32nd + n_16th) / n
+        penalty = 0.0
+        if frac_32 > 0.15:
+            penalty += (frac_32 - 0.15) * 1.5
+        if frac_32 > 0.50:
+            penalty += (frac_32 - 0.50) * 2.0
+        if frac_short > 0.50:
+            penalty += (frac_short - 0.50) * 0.8
+        return base_error + penalty
 
     @staticmethod
     def _alignment_score(iois, beat_period):
@@ -349,6 +794,9 @@ def _annotate_grid_position(note: Dict, grid: BeatGrid) -> None:
     note['start_grid_idx'] = idx
     note['start_beat'] = idx / max(grid.subdivision, 1)
     note['grid_subdivision'] = grid.subdivision
+    # Preserve the raw neural onset for runtime logic and expose a separate
+    # snapped onset only for evaluation-side cluster grouping.
+    note['cluster_metric_time_seconds'] = round(grid.time_at_idx(idx), 4)
 
 
 def quantize_coarse(
@@ -570,6 +1018,7 @@ def apply_window_decode(
         note['grid_subdivision'] = sub
         observed = float(note.get('time_seconds', 0.0) or 0.0)
         target_t = grid.time_at_idx(idx)
+        note['cluster_metric_time_seconds'] = round(target_t, 4)
         timing_err = abs(observed - target_t)
         note['quantization_confidence'] = max(
             0.55, 1.0 - timing_err / max(grid.period, 0.01)
@@ -774,8 +1223,11 @@ class LiveTranscriptionSession:
         current_time = time.time()
         self.last_update = current_time
 
-        for note in notes:
-            onset = note.get('time_seconds', 0)
+        timing_events = list(notes or [])
+        if chords:
+            timing_events.extend(chords)
+
+        for onset in _cluster_live_onset_times(timing_events):
             self.tempo_tracker.add_onset(onset)
 
         bpm = self.tempo_tracker.current_bpm
@@ -811,6 +1263,9 @@ class LiveTranscriptionSession:
 
     def get_all_notes(self) -> List[Dict]:
         return self.refinement_state.get_all_notes()
+
+    def get_display_state(self) -> Dict[str, List[Dict]]:
+        return _build_display_surface(self.get_all_notes(), self.coarse_chords)
 
     def get_current_bpm(self) -> Tuple[float, float]:
         return (self.tempo_tracker.current_bpm, self.tempo_tracker.confidence)

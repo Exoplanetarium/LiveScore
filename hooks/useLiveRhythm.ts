@@ -7,7 +7,7 @@
  * 1. Call `createSession()` when starting recording
  * 2. After each analysis result, call `processNotes(notes, chords)`
  * 3. The hook polls for refinements and triggers `onRefinementReady` callback
- * 4. Call `finalizeSession()` when recording stops
+ * 4. Call `stopPolling()` when recording stops
  *
  * The `onRefinementReady` callback receives all notes with best quantization,
  * plus a `version` number for cache invalidation.
@@ -85,8 +85,6 @@ interface UseLiveRhythmReturn {
     bpm: number;
     needsRefresh: boolean;
   }>;
-  /** Finalize session and get all refined notes */
-  finalizeSession: () => Promise<LiveRefinementResult>;
   /** Reset the current session */
   resetSession: () => Promise<void>;
   /** Current session ID */
@@ -101,7 +99,7 @@ interface UseLiveRhythmReturn {
   isPolling: boolean;
   /** Manually start polling (usually auto-started) */
   startPolling: () => void;
-  /** Stop polling (usually auto-stopped on finalize) */
+  /** Stop polling when recording stops or the session is reset */
   stopPolling: () => void;
 }
 
@@ -576,67 +574,6 @@ export function useLiveRhythm(
     console.log("[LiveRhythm] Polling started");
   }, [pollForRefinements, pollIntervalMs]);
 
-  // Finalize session
-  const finalizeSession =
-    useCallback(async (): Promise<LiveRefinementResult> => {
-      stopPolling();
-
-      if (!sessionId) {
-        return {
-          onsets: [],
-          notes: [],
-          chords: [],
-          bpm: currentBpm,
-          bpmConfidence: 0,
-          version: 0,
-        };
-      }
-
-      try {
-        const response = await fetch(`${BACKEND_URL}/live/finalize`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionIdRef.current }),
-        });
-
-        if (!response.ok) {
-          throw new Error(`Failed to finalize session: ${response.status}`);
-        }
-
-        const data = await response.json();
-
-        const result: LiveRefinementResult = {
-          onsets: data.onsets || [],
-          notes: data.notes || [],
-          chords: data.chords || [],
-          bpm: data.bpm || currentBpmRef.current,
-          bpmConfidence: data.bpm_confidence || 0,
-          version: data.refinement_version || version,
-        };
-
-        // Notify callback with final refinement
-        onRefinementReady?.(result);
-
-        console.log(
-          "[LiveRhythm] Session finalized:",
-          data.total_notes,
-          "notes",
-        );
-
-        return result;
-      } catch (error) {
-        console.error("[LiveRhythm] Failed to finalize session:", error);
-        return {
-          onsets: [],
-          notes: [],
-          chords: [],
-          bpm: currentBpmRef.current,
-          bpmConfidence: 0,
-          version,
-        };
-      }
-    }, [stopPolling, sessionId, currentBpm, version, onRefinementReady]);
-
   // Reset session
   const resetSession = useCallback(async () => {
     stopPolling();
@@ -675,7 +612,6 @@ export function useLiveRhythm(
     createSession,
     processAudioChunk,
     processNotes,
-    finalizeSession,
     resetSession,
     sessionId,
     isActive,

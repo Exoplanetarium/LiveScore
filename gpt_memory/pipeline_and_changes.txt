@@ -2,7 +2,11 @@
 LiveScore - Transcription Pipeline & Change Log
 ===============================================================================
 
-LAST UPDATED: 2026-03-17
+LAST UPDATED: 2026-05-29
+
+RECENT LIVE-ACCURACY UPDATES:
+  See gpt_memory/repo/live-change-log.md for the running May 2026 change log,
+  benchmark diagnostics, validations, and rolled-back experiments.
 
 ===============================================================================
 PIPELINE OVERVIEW

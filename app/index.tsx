@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
+import { Midi } from "@tonejs/midi";
 import * as FileSystem from "expo-file-system";
 import { LinearGradient } from "expo-linear-gradient";
+import * as Sharing from "expo-sharing";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -302,7 +304,7 @@ export default function LiveTranscriptionScreen() {
   const chunkSequenceRef = useRef(0);
   // Track concurrent uploads so the spinner only clears when the queue drains.
   const inFlightUploadsRef = useRef(0);
-  const [hasFinalizedRecording, setHasFinalizedRecording] = useState(false);
+  const [hasStoppedRecording, setHasStoppedRecording] = useState(false);
   const selectedNoiseProfile =
     LIVE_NOISE_PROFILE_OPTIONS.find(
       (option) => option.value === noiseProfile,
@@ -314,6 +316,9 @@ export default function LiveTranscriptionScreen() {
     : isWarmingUp
       ? "Warming Neural Path..."
       : "Start Live Session";
+  const exportableEventCount =
+    (analysisResult?.notes.length ?? 0) + (analysisResult?.chords.length ?? 0);
+  const hasExportableScore = exportableEventCount > 0;
 
   useEffect(() => {
     sessionReadyRef.current = sessionReady;
@@ -444,8 +449,8 @@ export default function LiveTranscriptionScreen() {
   const {
     createSession,
     processAudioChunk,
-    finalizeSession,
     resetSession,
+    stopPolling,
     currentBpm,
     version: liveRefinementVersion,
   } = useLiveRhythm({
@@ -852,7 +857,7 @@ export default function LiveTranscriptionScreen() {
       isRecordingRef.current = false;
       setSessionReady(false);
       sessionReadyRef.current = false;
-      setHasFinalizedRecording(false);
+      setHasStoppedRecording(false);
       inFlightUploadsRef.current = 0;
       clearPendingChunkUpload();
       currentChunkStartedAtRef.current = null;
@@ -1011,33 +1016,17 @@ export default function LiveTranscriptionScreen() {
         }
       }
 
-      const finalResult = await finalizeSession();
-      if (finalResult.notes.length > 0 || finalResult.chords.length > 0) {
-        setAnalysisResult((previous) =>
-          buildLiveAnalysisResult(
-            finalResult.notes as NoteResult[],
-            finalResult.chords as ChordResult[],
-            (finalResult.onsets as OnsetResult[] | undefined) ??
-              previous?.onsets ??
-              [],
-            finalResult.bpm,
-            finalResult.bpmConfidence,
-          ),
-        );
-      }
+      stopPolling();
 
       setSessionReady(false);
       sessionReadyRef.current = false;
-      setHasFinalizedRecording(true);
+      setHasStoppedRecording(true);
     } catch (error) {
       console.error("Failed to stop live transcription", error);
       setSessionReady(false);
       sessionReadyRef.current = false;
       setConnectionStatus("error");
-      Alert.alert(
-        "Error",
-        "Failed to finalize the live transcription session.",
-      );
+      Alert.alert("Error", "Failed to stop the live transcription session.");
     } finally {
       setConnectionStatus("disconnected");
       inFlightUploadsRef.current = 0;
@@ -1045,11 +1034,128 @@ export default function LiveTranscriptionScreen() {
     }
   }, [
     drainPendingChunkUploads,
-    finalizeSession,
     processRecordedChunk,
     resolveRecordedFilePath,
+    stopPolling,
     waitForChunkQueueToDrain,
   ]);
+
+  const exportMIDI = useCallback(async () => {
+    if (!analysisResult || !hasExportableScore) {
+      Alert.alert(
+        "No Score Yet",
+        "Finish generating a score before exporting MIDI.",
+      );
+      return;
+    }
+
+    try {
+      const bpm =
+        analysisResult.analysis_summary?.detected_bpm || currentBpm || 120;
+      const midi = new Midi();
+      midi.header.setTempo(bpm);
+
+      const track = midi.addTrack();
+      track.name = "Piano";
+      track.channel = 0;
+
+      for (const note of analysisResult.notes || []) {
+        const duration =
+          note.duration_seconds ??
+          (note.offset_seconds != null
+            ? note.offset_seconds - note.time_seconds
+            : 0.25);
+        track.addNote({
+          midi: note.midi_note,
+          time: note.time_seconds,
+          duration: Math.max(duration, 0.01),
+          velocity: note.confidence ?? 0.8,
+        });
+      }
+
+      for (const chord of analysisResult.chords || []) {
+        if (!chord.midi_notes) {
+          continue;
+        }
+
+        const duration =
+          chord.duration_seconds ??
+          (chord.offset_seconds != null
+            ? chord.offset_seconds - chord.time_seconds
+            : 0.25);
+        for (const pitch of chord.midi_notes) {
+          track.addNote({
+            midi: pitch,
+            time: chord.time_seconds,
+            duration: Math.max(duration, 0.01),
+            velocity: chord.confidence ?? 0.8,
+          });
+        }
+      }
+
+      if (!FileSystem.cacheDirectory) {
+        throw new Error("Cache directory is unavailable on this device.");
+      }
+
+      const fileUri = `${FileSystem.cacheDirectory}live_score.mid`;
+      const midiBytes = midi.toArray();
+      const binary = String.fromCharCode(...midiBytes);
+      const base64 = btoa(binary);
+
+      await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await Sharing.shareAsync(fileUri, {
+        mimeType: "audio/midi",
+        dialogTitle: "Export MIDI",
+        UTI: "public.midi-audio",
+      });
+    } catch (error: any) {
+      Alert.alert("Export Failed", error.message || "Could not export MIDI.");
+    }
+  }, [analysisResult, currentBpm, hasExportableScore]);
+
+  const renderMidiExportCard = () => (
+    <LinearGradient
+      colors={["rgba(15,23,42,0.96)", "rgba(30,41,59,0.92)"]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={styles.exportCard}
+    >
+      <View style={styles.exportCardHeader}>
+        <ThemedText
+          style={styles.exportCardTitle}
+          lightColor="#f8fafc"
+          darkColor="#f8fafc"
+        >
+          MIDI Export
+        </ThemedText>
+        <ThemedText
+          style={styles.exportCardHint}
+          lightColor="rgba(226,232,240,0.8)"
+          darkColor="rgba(226,232,240,0.8)"
+        >
+          {hasExportableScore
+            ? `${exportableEventCount} events ready to share as a .mid file.`
+            : "Generate a score first, then export it as a .mid file."}
+        </ThemedText>
+      </View>
+
+      <TouchableOpacity
+        style={[
+          styles.exportActionButton,
+          !hasExportableScore ? styles.exportActionButtonDisabled : null,
+        ]}
+        onPress={exportMIDI}
+        disabled={!hasExportableScore}
+      >
+        <Ionicons name="download-outline" size={18} color="#ffffff" />
+        <ThemedText style={styles.exportActionButtonText}>
+          Download MIDI
+        </ThemedText>
+      </TouchableOpacity>
+    </LinearGradient>
+  );
 
   const recentEvents = [
     ...(analysisResult?.notes ?? []).map((note) => ({
@@ -1100,7 +1206,7 @@ export default function LiveTranscriptionScreen() {
       );
     }
 
-    if (hasFinalizedRecording && analysisResult) {
+    if (hasStoppedRecording && analysisResult) {
       return (
         <PianoSheetMusic
           results={analysisResult}
@@ -1134,144 +1240,161 @@ export default function LiveTranscriptionScreen() {
         end={{ x: 1, y: 1 }}
         style={styles.liveSessionScreen}
       >
-        <View style={styles.liveSessionWorkspace}>
-          <View style={styles.liveTopBar}>
-            <ThemedText
-              style={styles.liveTopBarTitle}
-              lightColor="#f8fafc"
-              darkColor="#f8fafc"
-              numberOfLines={1}
-            >
-              {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT ? "Live" : "Score"}
-            </ThemedText>
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.liveSessionScrollView}
+          contentContainerStyle={styles.liveSessionScrollContent}
+          showsVerticalScrollIndicator={false}
+          nestedScrollEnabled
+          scrollEnabled={!isScoreScrollActive}
+        >
+          <View style={styles.liveSessionWorkspace}>
+            <View style={styles.liveTopBar}>
+              <ThemedText
+                style={styles.liveTopBarTitle}
+                lightColor="#f8fafc"
+                darkColor="#f8fafc"
+                numberOfLines={1}
+              >
+                {USE_LIVE_OSMD_ENGRAVING_EXPERIMENT ? "Live" : "Score"}
+              </ThemedText>
 
-            <View style={styles.liveTopBarMetrics}>
-              <View style={styles.liveInlineMetric}>
-                <ThemedText
-                  style={styles.liveInlineMetricValue}
-                  lightColor="#f8fafc"
-                  darkColor="#f8fafc"
-                >
-                  {formatDuration(duration)}
-                </ThemedText>
-                <ThemedText style={styles.liveInlineMetricLabel}>
-                  time
-                </ThemedText>
+              <View style={styles.liveTopBarMetrics}>
+                <View style={styles.liveInlineMetric}>
+                  <ThemedText
+                    style={styles.liveInlineMetricValue}
+                    lightColor="#f8fafc"
+                    darkColor="#f8fafc"
+                  >
+                    {formatDuration(duration)}
+                  </ThemedText>
+                  <ThemedText style={styles.liveInlineMetricLabel}>
+                    time
+                  </ThemedText>
+                </View>
+                <View style={styles.liveInlineMetric}>
+                  <ThemedText
+                    style={styles.liveInlineMetricValue}
+                    lightColor="#f8fafc"
+                    darkColor="#f8fafc"
+                  >
+                    {Math.round(currentBpm || 120)}
+                  </ThemedText>
+                  <ThemedText style={styles.liveInlineMetricLabel}>
+                    bpm
+                  </ThemedText>
+                </View>
+                <View style={styles.liveInlineMetric}>
+                  <ThemedText
+                    style={styles.liveInlineMetricValue}
+                    lightColor="#f8fafc"
+                    darkColor="#f8fafc"
+                  >
+                    {(analysisResult?.analysis_summary.total_notes ?? 0) +
+                      (analysisResult?.analysis_summary.total_chords ?? 0)}
+                  </ThemedText>
+                  <ThemedText style={styles.liveInlineMetricLabel}>
+                    events
+                  </ThemedText>
+                </View>
               </View>
-              <View style={styles.liveInlineMetric}>
-                <ThemedText
-                  style={styles.liveInlineMetricValue}
-                  lightColor="#f8fafc"
-                  darkColor="#f8fafc"
-                >
-                  {Math.round(currentBpm || 120)}
-                </ThemedText>
-                <ThemedText style={styles.liveInlineMetricLabel}>
-                  bpm
-                </ThemedText>
-              </View>
-              <View style={styles.liveInlineMetric}>
-                <ThemedText
-                  style={styles.liveInlineMetricValue}
-                  lightColor="#f8fafc"
-                  darkColor="#f8fafc"
-                >
-                  {(analysisResult?.analysis_summary.total_notes ?? 0) +
-                    (analysisResult?.analysis_summary.total_chords ?? 0)}
-                </ThemedText>
-                <ThemedText style={styles.liveInlineMetricLabel}>
-                  events
-                </ThemedText>
+
+              <View
+                style={[
+                  styles.liveStatusChip,
+                  {
+                    backgroundColor: `${liveStatusColor}1f`,
+                    borderColor: `${liveStatusColor}55`,
+                  },
+                ]}
+              >
+                <View
+                  style={[
+                    styles.statusDot,
+                    { backgroundColor: liveStatusColor },
+                  ]}
+                />
               </View>
             </View>
 
             <View
-              style={[
-                styles.liveStatusChip,
-                {
-                  backgroundColor: `${liveStatusColor}1f`,
-                  borderColor: `${liveStatusColor}55`,
-                },
-              ]}
+              style={styles.liveScorePane}
+              onLayout={handleLiveScoreSectionLayout}
             >
               <View
-                style={[styles.statusDot, { backgroundColor: liveStatusColor }]}
-              />
+                style={styles.liveScoreViewport}
+                onLayout={handleLiveScoreViewportLayout}
+              >
+                {renderScoreContent(true)}
+              </View>
             </View>
-          </View>
 
-          <View style={styles.liveScorePane}>
-            <View
-              style={styles.liveScoreViewport}
-              onLayout={handleLiveScoreViewportLayout}
+            <LinearGradient
+              colors={["rgba(255,255,255,0.1)", "rgba(148,163,184,0.14)"]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.liveControlDock}
             >
-              {renderScoreContent(true)}
-            </View>
-          </View>
+              <View style={styles.optionRow}>
+                {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
+                  const isActive = option.value === noiseProfile;
 
-          <LinearGradient
-            colors={["rgba(255,255,255,0.1)", "rgba(148,163,184,0.14)"]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.liveControlDock}
-          >
-            <View style={styles.optionRow}>
-              {LIVE_NOISE_PROFILE_OPTIONS.map((option) => {
-                const isActive = option.value === noiseProfile;
-
-                return (
-                  <TouchableOpacity
-                    key={option.value}
-                    style={[
-                      styles.optionChip,
-                      isActive ? styles.optionChipActive : null,
-                    ]}
-                    onPress={() => setNoiseProfile(option.value)}
-                  >
-                    <ThemedText
+                  return (
+                    <TouchableOpacity
+                      key={option.value}
                       style={[
-                        styles.optionChipText,
-                        isActive ? styles.optionChipTextActive : null,
+                        styles.optionChip,
+                        isActive ? styles.optionChipActive : null,
                       ]}
+                      onPress={() => setNoiseProfile(option.value)}
                     >
-                      {option.label}
-                    </ThemedText>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
+                      <ThemedText
+                        style={[
+                          styles.optionChipText,
+                          isActive ? styles.optionChipTextActive : null,
+                        ]}
+                      >
+                        {option.label}
+                      </ThemedText>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
 
-            <TouchableOpacity
-              style={[
-                styles.recordButton,
-                styles.liveRecordButton,
-                isRecording
-                  ? styles.stopButton
-                  : isWarmingUp
-                    ? styles.warmingButton
-                    : styles.startButton,
-                isStartDisabled ? styles.recordButtonDisabled : null,
-              ]}
-              onPress={
-                isRecording ? stopLiveTranscription : startLiveTranscription
-              }
-              disabled={isStartDisabled}
-            >
-              {isWarmingUp ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <Ionicons
-                  name={isRecording ? "stop" : "radio"}
-                  size={20}
-                  color="white"
-                />
-              )}
-              <ThemedText style={styles.recordButtonText}>
-                {recordButtonLabel}
-              </ThemedText>
-            </TouchableOpacity>
-          </LinearGradient>
-        </View>
+              <TouchableOpacity
+                style={[
+                  styles.recordButton,
+                  styles.liveRecordButton,
+                  isRecording
+                    ? styles.stopButton
+                    : isWarmingUp
+                      ? styles.warmingButton
+                      : styles.startButton,
+                  isStartDisabled ? styles.recordButtonDisabled : null,
+                ]}
+                onPress={
+                  isRecording ? stopLiveTranscription : startLiveTranscription
+                }
+                disabled={isStartDisabled}
+              >
+                {isWarmingUp ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <Ionicons
+                    name={isRecording ? "stop" : "radio"}
+                    size={20}
+                    color="white"
+                  />
+                )}
+                <ThemedText style={styles.recordButtonText}>
+                  {recordButtonLabel}
+                </ThemedText>
+              </TouchableOpacity>
+            </LinearGradient>
+
+            {renderMidiExportCard()}
+          </View>
+        </ScrollView>
       </LinearGradient>
     );
   }
@@ -1428,6 +1551,8 @@ export default function LiveTranscriptionScreen() {
             </TouchableOpacity>
           </LinearGradient>
 
+          {renderMidiExportCard()}
+
           <LinearGradient
             colors={["rgba(255,255,255,0.92)", "rgba(241,245,249,0.76)"]}
             start={{ x: 0, y: 0 }}
@@ -1540,6 +1665,13 @@ const styles = StyleSheet.create({
     paddingTop: 48,
     paddingBottom: 16,
   },
+  liveSessionScrollView: {
+    flex: 1,
+  },
+  liveSessionScrollContent: {
+    flexGrow: 1,
+    paddingBottom: 4,
+  },
   liveSessionWorkspace: {
     flex: 1,
     minHeight: 0,
@@ -1643,6 +1775,52 @@ const styles = StyleSheet.create({
   },
   liveRecordButton: {
     minHeight: 44,
+  },
+  exportCard: {
+    borderRadius: 24,
+    padding: 16,
+    gap: 14,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.24)",
+    shadowColor: "#020617",
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.16,
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  exportCardHeader: {
+    gap: 6,
+  },
+  exportCardTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#f8fafc",
+    letterSpacing: -0.2,
+  },
+  exportCardHint: {
+    fontSize: 12,
+    lineHeight: 19,
+    color: "rgba(226,232,240,0.8)",
+  },
+  exportActionButton: {
+    minHeight: 48,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    backgroundColor: "rgba(255,255,255,0.12)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  exportActionButtonDisabled: {
+    opacity: 0.45,
+  },
+  exportActionButtonText: {
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.2,
   },
   header: {
     gap: 10,

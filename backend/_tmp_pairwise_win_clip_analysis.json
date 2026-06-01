@@ -1,0 +1,114 @@
+{
+  "clip_006": [
+    {
+      "group_index": 14,
+      "group_time": 2.96012,
+      "input_chords": [
+        {
+          "time": 2.96012,
+          "slot": 48,
+          "confidence": 0.706,
+          "pitches": [
+            70,
+            74,
+            78,
+            82,
+            86
+          ]
+        },
+        {
+          "time": 2.96212,
+          "slot": 57,
+          "confidence": 0.651,
+          "pitches": [
+            66,
+            70,
+            74,
+            78,
+            82,
+            86
+          ]
+        }
+      ],
+      "subset_pitches": [
+        70,
+        74,
+        78,
+        82,
+        86
+      ],
+      "pairwise_pitches": [
+        66,
+        70,
+        74,
+        78,
+        82,
+        86
+      ],
+      "gt_cluster_pitches": [
+        62,
+        66,
+        70,
+        74,
+        78,
+        82,
+        86
+      ]
+    },
+    {
+      "group_index": 18,
+      "group_time": 3.52912,
+      "input_chords": [
+        {
+          "time": 3.52912,
+          "slot": 71,
+          "confidence": 0.68,
+          "pitches": [
+            70,
+            74,
+            78,
+            82,
+            86
+          ]
+        },
+        {
+          "time": 3.53012,
+          "slot": 78,
+          "confidence": 0.638,
+          "pitches": [
+            62,
+            66,
+            70,
+            74,
+            78,
+            82,
+            86
+          ]
+        }
+      ],
+      "subset_pitches": [
+        70,
+        74,
+        78,
+        82,
+        86
+      ],
+      "pairwise_pitches": [
+        66,
+        70,
+        74,
+        78,
+        82,
+        86
+      ],
+      "gt_cluster_pitches": [
+        66,
+        70,
+        74,
+        78,
+        82,
+        86
+      ]
+    }
+  ]
+}

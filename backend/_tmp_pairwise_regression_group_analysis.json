@@ -1,0 +1,513 @@
+{
+  "clip_018": [
+    {
+      "group_index": 22,
+      "group_time": 3.56012,
+      "group_slot": 78,
+      "input_chords": [
+        {
+          "time": 3.56012,
+          "slot": 78,
+          "confidence": 0.567,
+          "pitches": [
+            42,
+            45,
+            54,
+            69,
+            74,
+            81
+          ]
+        },
+        {
+          "time": 3.56512,
+          "slot": 76,
+          "confidence": 0.562,
+          "pitches": [
+            38,
+            45,
+            69,
+            74,
+            81
+          ]
+        }
+      ],
+      "subset_pitches": [
+        42,
+        45,
+        54,
+        69,
+        74,
+        81
+      ],
+      "pairwise_pitches": [
+        38,
+        45,
+        69,
+        74,
+        81
+      ],
+      "lost_pitches": [
+        42,
+        54
+      ],
+      "gained_pitches": [
+        38
+      ],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        38,
+        45,
+        69,
+        74,
+        81
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [
+        42,
+        54
+      ],
+      "gt_cluster_pitches": [
+        42,
+        54,
+        69,
+        74,
+        81
+      ]
+    },
+    {
+      "group_index": 28,
+      "group_time": 4.69912,
+      "group_slot": 112,
+      "input_chords": [
+        {
+          "time": 4.69912,
+          "slot": 112,
+          "confidence": 0.58,
+          "pitches": [
+            45,
+            57,
+            69,
+            76,
+            81
+          ]
+        },
+        {
+          "time": 4.70712,
+          "slot": 115,
+          "confidence": 0.559,
+          "pitches": [
+            57,
+            76
+          ]
+        }
+      ],
+      "subset_pitches": [
+        45,
+        57,
+        69,
+        76,
+        81
+      ],
+      "pairwise_pitches": [
+        57,
+        76
+      ],
+      "lost_pitches": [
+        45,
+        69,
+        81
+      ],
+      "gained_pitches": [],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        45,
+        57,
+        69,
+        76,
+        81
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [
+        45,
+        69,
+        81
+      ],
+      "gt_cluster_pitches": [
+        45,
+        57,
+        69,
+        76,
+        81
+      ]
+    }
+  ],
+  "clip_027": [
+    {
+      "group_index": 20,
+      "group_time": 3.51512,
+      "group_slot": null,
+      "input_chords": [
+        {
+          "time": 3.51512,
+          "slot": null,
+          "confidence": 0.556,
+          "pitches": [
+            62,
+            74,
+            78
+          ]
+        },
+        {
+          "time": 3.51512,
+          "slot": null,
+          "confidence": 0.571,
+          "pitches": [
+            62,
+            78
+          ]
+        }
+      ],
+      "subset_pitches": [
+        62,
+        74,
+        78
+      ],
+      "pairwise_pitches": [
+        62,
+        78
+      ],
+      "lost_pitches": [
+        74
+      ],
+      "gained_pitches": [],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        62,
+        74,
+        78
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [
+        74
+      ],
+      "gt_cluster_pitches": [
+        62,
+        74,
+        78
+      ]
+    },
+    {
+      "group_index": 23,
+      "group_time": 4.13712,
+      "group_slot": null,
+      "input_chords": [
+        {
+          "time": 4.13712,
+          "slot": null,
+          "confidence": 0.656,
+          "pitches": [
+            54,
+            69,
+            74,
+            81
+          ]
+        },
+        {
+          "time": 4.14012,
+          "slot": null,
+          "confidence": 0.624,
+          "pitches": [
+            42,
+            54,
+            69,
+            74
+          ]
+        }
+      ],
+      "subset_pitches": [
+        54,
+        69,
+        74,
+        81
+      ],
+      "pairwise_pitches": [
+        42,
+        54,
+        69,
+        74
+      ],
+      "lost_pitches": [
+        81
+      ],
+      "gained_pitches": [
+        42
+      ],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        42,
+        54,
+        69,
+        74,
+        81
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [
+        81
+      ],
+      "gt_cluster_pitches": [
+        42,
+        54,
+        69,
+        74,
+        81
+      ]
+    },
+    {
+      "group_index": 26,
+      "group_time": 4.75712,
+      "group_slot": null,
+      "input_chords": [
+        {
+          "time": 4.75712,
+          "slot": null,
+          "confidence": 0.63,
+          "pitches": [
+            40,
+            62,
+            69,
+            78,
+            81
+          ]
+        },
+        {
+          "time": 4.75712,
+          "slot": -12,
+          "confidence": 0.635,
+          "pitches": [
+            50,
+            62,
+            78
+          ]
+        }
+      ],
+      "subset_pitches": [
+        40,
+        50,
+        62,
+        69,
+        78,
+        81
+      ],
+      "pairwise_pitches": [
+        62,
+        78
+      ],
+      "lost_pitches": [
+        40,
+        50,
+        69,
+        81
+      ],
+      "gained_pitches": [],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        50,
+        62,
+        78
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [
+        50,
+        69,
+        81
+      ],
+      "gt_cluster_pitches": [
+        50,
+        62,
+        69,
+        78,
+        81
+      ]
+    }
+  ],
+  "clip_021": [
+    {
+      "group_index": 5,
+      "group_time": 1.73212,
+      "group_slot": 24,
+      "input_chords": [
+        {
+          "time": 1.73212,
+          "slot": 24,
+          "confidence": 0.496,
+          "pitches": [
+            65,
+            70,
+            74
+          ]
+        },
+        {
+          "time": 1.74112,
+          "slot": 22,
+          "confidence": 0.48,
+          "pitches": [
+            65,
+            70,
+            74,
+            77
+          ]
+        }
+      ],
+      "subset_pitches": [
+        65,
+        70,
+        74
+      ],
+      "pairwise_pitches": [
+        65,
+        70,
+        74,
+        77
+      ],
+      "lost_pitches": [],
+      "gained_pitches": [
+        77
+      ],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        65,
+        70,
+        74,
+        77
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [],
+      "gt_cluster_pitches": [
+        65,
+        70,
+        74,
+        86
+      ]
+    },
+    {
+      "group_index": 14,
+      "group_time": 2.93512,
+      "group_slot": 58,
+      "input_chords": [
+        {
+          "time": 2.93512,
+          "slot": 58,
+          "confidence": 0.58,
+          "pitches": [
+            65,
+            76,
+            77
+          ]
+        },
+        {
+          "time": 2.94412,
+          "slot": 63,
+          "confidence": 0.525,
+          "pitches": [
+            65,
+            69,
+            76
+          ]
+        }
+      ],
+      "subset_pitches": [
+        65,
+        76,
+        77
+      ],
+      "pairwise_pitches": [
+        65,
+        69,
+        76,
+        77
+      ],
+      "lost_pitches": [],
+      "gained_pitches": [
+        69
+      ],
+      "note_support_pitches": [],
+      "chord_support_pitches": [
+        65,
+        76,
+        77
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [],
+      "gt_cluster_pitches": [
+        65,
+        76,
+        84
+      ]
+    }
+  ],
+  "clip_015": [
+    {
+      "group_index": 22,
+      "group_time": 4.12412,
+      "group_slot": 98,
+      "input_chords": [
+        {
+          "time": 4.12412,
+          "slot": 98,
+          "confidence": 0.506,
+          "pitches": [
+            64,
+            68,
+            74,
+            78
+          ]
+        },
+        {
+          "time": 4.12812,
+          "slot": 100,
+          "confidence": 0.438,
+          "pitches": [
+            68,
+            74,
+            78
+          ]
+        }
+      ],
+      "subset_pitches": [
+        64,
+        68,
+        74,
+        78
+      ],
+      "pairwise_pitches": [
+        68,
+        74,
+        78
+      ],
+      "lost_pitches": [
+        64
+      ],
+      "gained_pitches": [],
+      "note_support_pitches": [
+        80
+      ],
+      "chord_support_pitches": [
+        64,
+        68,
+        74,
+        78
+      ],
+      "lost_pitches_with_note_support": [],
+      "lost_pitches_in_gt_cluster": [
+        64
+      ],
+      "gt_cluster_pitches": [
+        64,
+        68,
+        71,
+        74,
+        78
+      ]
+    }
+  ]
+}

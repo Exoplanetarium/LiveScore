@@ -1,0 +1,367 @@
+{
+  "summary": {
+    "clips": [
+      {
+        "clip_id": "clip_001",
+        "groups": 4,
+        "pair_examples": 0,
+        "pitch_examples": 9,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_002",
+        "groups": 26,
+        "pair_examples": 0,
+        "pitch_examples": 59,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_003",
+        "groups": 1,
+        "pair_examples": 0,
+        "pitch_examples": 2,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_004",
+        "groups": 9,
+        "pair_examples": 0,
+        "pitch_examples": 23,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_005",
+        "groups": 1,
+        "pair_examples": 0,
+        "pitch_examples": 2,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_006",
+        "groups": 35,
+        "pair_examples": 2,
+        "pitch_examples": 165,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_007",
+        "groups": 4,
+        "pair_examples": 0,
+        "pitch_examples": 10,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_008",
+        "groups": 34,
+        "pair_examples": 2,
+        "pitch_examples": 107,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_009",
+        "groups": 0,
+        "pair_examples": 0,
+        "pitch_examples": 0,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_010",
+        "groups": 23,
+        "pair_examples": 1,
+        "pitch_examples": 101,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_011",
+        "groups": 5,
+        "pair_examples": 0,
+        "pitch_examples": 11,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_012",
+        "groups": 8,
+        "pair_examples": 0,
+        "pitch_examples": 22,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_013",
+        "groups": 6,
+        "pair_examples": 0,
+        "pitch_examples": 13,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_014",
+        "groups": 6,
+        "pair_examples": 0,
+        "pitch_examples": 12,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_015",
+        "groups": 28,
+        "pair_examples": 0,
+        "pitch_examples": 89,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_016",
+        "groups": 32,
+        "pair_examples": 1,
+        "pitch_examples": 108,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_017",
+        "groups": 37,
+        "pair_examples": 3,
+        "pitch_examples": 156,
+        "duplicate_pair_groups": 2
+      },
+      {
+        "clip_id": "clip_018",
+        "groups": 35,
+        "pair_examples": 2,
+        "pitch_examples": 120,
+        "duplicate_pair_groups": 2
+      },
+      {
+        "clip_id": "clip_019",
+        "groups": 38,
+        "pair_examples": 1,
+        "pitch_examples": 122,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_020",
+        "groups": 34,
+        "pair_examples": 3,
+        "pitch_examples": 113,
+        "duplicate_pair_groups": 2
+      },
+      {
+        "clip_id": "clip_021",
+        "groups": 27,
+        "pair_examples": 0,
+        "pitch_examples": 87,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_022",
+        "groups": 40,
+        "pair_examples": 1,
+        "pitch_examples": 104,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_023",
+        "groups": 29,
+        "pair_examples": 0,
+        "pitch_examples": 61,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_024",
+        "groups": 19,
+        "pair_examples": 1,
+        "pitch_examples": 90,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_025",
+        "groups": 30,
+        "pair_examples": 1,
+        "pitch_examples": 67,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_026",
+        "groups": 14,
+        "pair_examples": 0,
+        "pitch_examples": 29,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_027",
+        "groups": 30,
+        "pair_examples": 4,
+        "pitch_examples": 97,
+        "duplicate_pair_groups": 3
+      },
+      {
+        "clip_id": "clip_028",
+        "groups": 29,
+        "pair_examples": 1,
+        "pitch_examples": 62,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_029",
+        "groups": 22,
+        "pair_examples": 1,
+        "pitch_examples": 63,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_030",
+        "groups": 20,
+        "pair_examples": 0,
+        "pitch_examples": 83,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_031",
+        "groups": 32,
+        "pair_examples": 2,
+        "pitch_examples": 136,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_032",
+        "groups": 47,
+        "pair_examples": 1,
+        "pitch_examples": 104,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_033",
+        "groups": 19,
+        "pair_examples": 1,
+        "pitch_examples": 79,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_034",
+        "groups": 32,
+        "pair_examples": 0,
+        "pitch_examples": 82,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_035",
+        "groups": 23,
+        "pair_examples": 1,
+        "pitch_examples": 54,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_036",
+        "groups": 15,
+        "pair_examples": 0,
+        "pitch_examples": 50,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_037",
+        "groups": 12,
+        "pair_examples": 0,
+        "pitch_examples": 33,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_038",
+        "groups": 15,
+        "pair_examples": 0,
+        "pitch_examples": 34,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_039",
+        "groups": 15,
+        "pair_examples": 0,
+        "pitch_examples": 49,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_040",
+        "groups": 31,
+        "pair_examples": 0,
+        "pitch_examples": 79,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_041",
+        "groups": 3,
+        "pair_examples": 0,
+        "pitch_examples": 7,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_042",
+        "groups": 30,
+        "pair_examples": 0,
+        "pitch_examples": 91,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_043",
+        "groups": 26,
+        "pair_examples": 1,
+        "pitch_examples": 54,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_044",
+        "groups": 7,
+        "pair_examples": 1,
+        "pitch_examples": 36,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_045",
+        "groups": 3,
+        "pair_examples": 0,
+        "pitch_examples": 7,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_046",
+        "groups": 13,
+        "pair_examples": 0,
+        "pitch_examples": 26,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_047",
+        "groups": 6,
+        "pair_examples": 0,
+        "pitch_examples": 14,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_048",
+        "groups": 12,
+        "pair_examples": 0,
+        "pitch_examples": 25,
+        "duplicate_pair_groups": 0
+      }
+    ],
+    "groups": 967,
+    "pair_examples": 31,
+    "pitch_examples": 2947,
+    "duplicate_pair_groups": 19,
+    "mining_passes": [
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "balanced"
+      }
+    ]
+  },
+  "counts": {
+    "total_duplicate_pair_groups": 19,
+    "exact_gt_in_candidates": 14,
+    "candidate_space_limit_gt_subset_of_observed_union": 0,
+    "upstream_missing_gt_pitch": 5,
+    "runtime_selects_exact_gt_when_exact_candidate_exists": 4,
+    "runtime_misses_exact_gt_despite_exact_candidate": 10
+  },
+  "rates": {
+    "exact_gt_in_candidates": 0.7368421052631579,
+    "candidate_space_limit_gt_subset_of_observed_union": 0.0,
+    "upstream_missing_gt_pitch": 0.2631578947368421,
+    "runtime_selects_exact_gt_when_exact_candidate_exists": 0.21052631578947367,
+    "runtime_misses_exact_gt_despite_exact_candidate": 0.5263157894736842
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "clip_031": {
+    "delta": 0.0,
+    "cluster_f1": 0.1492537313432836,
+    "note_f1": 0.7520661157024794,
+    "gated_group_count": 0
+  },
+  "clip_024": {
+    "delta": 0.0,
+    "cluster_f1": 0.23809523809523808,
+    "note_f1": 0.797752808988764,
+    "gated_group_count": 0
+  },
+  "clip_017": {
+    "delta": -0.02057008521892445,
+    "cluster_f1": 0.2926829268292683,
+    "note_f1": 0.813299232736573,
+    "gated_group_count": 0
+  },
+  "clip_006": {
+    "delta": 0.0,
+    "cluster_f1": 0.16666666666666666,
+    "note_f1": 0.8756218905472637,
+    "gated_group_count": 0
+  },
+  "clip_027": {
+    "delta": 0.015131578947368385,
+    "cluster_f1": 0.5625,
+    "note_f1": 0.865546218487395,
+    "gated_group_count": 0
+  },
+  "clip_035": {
+    "delta": 0.0,
+    "cluster_f1": 0.28169014084507044,
+    "note_f1": 0.736196319018405,
+    "gated_group_count": 0
+  }
+}

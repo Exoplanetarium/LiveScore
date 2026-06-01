@@ -1,0 +1,995 @@
+{
+  "summary": {
+    "clips": [
+      {
+        "clip_id": "clip_001",
+        "groups": 4,
+        "pair_examples": 0,
+        "pitch_examples": 9,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_002",
+        "groups": 26,
+        "pair_examples": 0,
+        "pitch_examples": 59,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_003",
+        "groups": 1,
+        "pair_examples": 0,
+        "pitch_examples": 2,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_004",
+        "groups": 9,
+        "pair_examples": 0,
+        "pitch_examples": 23,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_005",
+        "groups": 1,
+        "pair_examples": 0,
+        "pitch_examples": 2,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_006",
+        "groups": 35,
+        "pair_examples": 2,
+        "pitch_examples": 165,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_007",
+        "groups": 4,
+        "pair_examples": 0,
+        "pitch_examples": 10,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_008",
+        "groups": 34,
+        "pair_examples": 2,
+        "pitch_examples": 107,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_009",
+        "groups": 0,
+        "pair_examples": 0,
+        "pitch_examples": 0,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_010",
+        "groups": 23,
+        "pair_examples": 1,
+        "pitch_examples": 101,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_011",
+        "groups": 5,
+        "pair_examples": 0,
+        "pitch_examples": 11,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_012",
+        "groups": 8,
+        "pair_examples": 0,
+        "pitch_examples": 22,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_013",
+        "groups": 6,
+        "pair_examples": 0,
+        "pitch_examples": 13,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_014",
+        "groups": 6,
+        "pair_examples": 0,
+        "pitch_examples": 12,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_015",
+        "groups": 28,
+        "pair_examples": 0,
+        "pitch_examples": 89,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_016",
+        "groups": 32,
+        "pair_examples": 1,
+        "pitch_examples": 108,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_017",
+        "groups": 37,
+        "pair_examples": 3,
+        "pitch_examples": 156,
+        "duplicate_pair_groups": 2
+      },
+      {
+        "clip_id": "clip_018",
+        "groups": 35,
+        "pair_examples": 2,
+        "pitch_examples": 120,
+        "duplicate_pair_groups": 2
+      },
+      {
+        "clip_id": "clip_019",
+        "groups": 38,
+        "pair_examples": 1,
+        "pitch_examples": 122,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_020",
+        "groups": 34,
+        "pair_examples": 3,
+        "pitch_examples": 113,
+        "duplicate_pair_groups": 2
+      },
+      {
+        "clip_id": "clip_021",
+        "groups": 27,
+        "pair_examples": 0,
+        "pitch_examples": 87,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_022",
+        "groups": 40,
+        "pair_examples": 1,
+        "pitch_examples": 104,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_023",
+        "groups": 29,
+        "pair_examples": 0,
+        "pitch_examples": 61,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_024",
+        "groups": 19,
+        "pair_examples": 1,
+        "pitch_examples": 90,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_025",
+        "groups": 30,
+        "pair_examples": 1,
+        "pitch_examples": 67,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_026",
+        "groups": 14,
+        "pair_examples": 0,
+        "pitch_examples": 29,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_027",
+        "groups": 30,
+        "pair_examples": 4,
+        "pitch_examples": 97,
+        "duplicate_pair_groups": 3
+      },
+      {
+        "clip_id": "clip_028",
+        "groups": 29,
+        "pair_examples": 1,
+        "pitch_examples": 62,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_029",
+        "groups": 22,
+        "pair_examples": 1,
+        "pitch_examples": 63,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_030",
+        "groups": 20,
+        "pair_examples": 0,
+        "pitch_examples": 83,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_031",
+        "groups": 32,
+        "pair_examples": 2,
+        "pitch_examples": 136,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_032",
+        "groups": 47,
+        "pair_examples": 1,
+        "pitch_examples": 104,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_033",
+        "groups": 19,
+        "pair_examples": 1,
+        "pitch_examples": 79,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_034",
+        "groups": 32,
+        "pair_examples": 0,
+        "pitch_examples": 82,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_035",
+        "groups": 23,
+        "pair_examples": 1,
+        "pitch_examples": 54,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_036",
+        "groups": 15,
+        "pair_examples": 0,
+        "pitch_examples": 50,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_037",
+        "groups": 12,
+        "pair_examples": 0,
+        "pitch_examples": 33,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_038",
+        "groups": 15,
+        "pair_examples": 0,
+        "pitch_examples": 34,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_039",
+        "groups": 15,
+        "pair_examples": 0,
+        "pitch_examples": 49,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_040",
+        "groups": 31,
+        "pair_examples": 0,
+        "pitch_examples": 79,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_041",
+        "groups": 3,
+        "pair_examples": 0,
+        "pitch_examples": 7,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_042",
+        "groups": 30,
+        "pair_examples": 0,
+        "pitch_examples": 91,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_043",
+        "groups": 26,
+        "pair_examples": 1,
+        "pitch_examples": 54,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_044",
+        "groups": 7,
+        "pair_examples": 1,
+        "pitch_examples": 36,
+        "duplicate_pair_groups": 1
+      },
+      {
+        "clip_id": "clip_045",
+        "groups": 3,
+        "pair_examples": 0,
+        "pitch_examples": 7,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_046",
+        "groups": 13,
+        "pair_examples": 0,
+        "pitch_examples": 26,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_047",
+        "groups": 6,
+        "pair_examples": 0,
+        "pitch_examples": 14,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_048",
+        "groups": 12,
+        "pair_examples": 0,
+        "pitch_examples": 25,
+        "duplicate_pair_groups": 0
+      }
+    ],
+    "groups": 967,
+    "pair_examples": 31,
+    "pitch_examples": 2947,
+    "duplicate_pair_groups": 19,
+    "mining_passes": [
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "balanced"
+      }
+    ]
+  },
+  "counts": {
+    "total_duplicate_pair_groups": 19,
+    "exact_gt_in_candidates": 10,
+    "candidate_space_limit_gt_subset_of_observed_union": 4,
+    "upstream_missing_gt_pitch": 5,
+    "runtime_selects_exact_gt_when_exact_candidate_exists": 6,
+    "runtime_misses_exact_gt_despite_exact_candidate": 4
+  },
+  "rates": {
+    "exact_gt_in_candidates": 0.5263157894736842,
+    "candidate_space_limit_gt_subset_of_observed_union": 0.21052631578947367,
+    "upstream_missing_gt_pitch": 0.2631578947368421,
+    "runtime_selects_exact_gt_when_exact_candidate_exists": 0.3157894736842105,
+    "runtime_misses_exact_gt_despite_exact_candidate": 0.21052631578947367
+  },
+  "by_clip": {
+    "clip_006": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 0,
+      "candidate_space_limit_gt_subset_of_observed_union": 1,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_008": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 0,
+      "candidate_space_limit_gt_subset_of_observed_union": 1,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_010": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 0,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 1,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_017": {
+      "total_duplicate_pair_groups": 2,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 1,
+      "runtime_misses_exact_gt_despite_exact_candidate": 1
+    },
+    "clip_018": {
+      "total_duplicate_pair_groups": 2,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 1,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 1
+    },
+    "clip_019": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_020": {
+      "total_duplicate_pair_groups": 2,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 1,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_022": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 0,
+      "candidate_space_limit_gt_subset_of_observed_union": 1,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_024": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_027": {
+      "total_duplicate_pair_groups": 3,
+      "exact_gt_in_candidates": 2,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 1,
+      "runtime_misses_exact_gt_despite_exact_candidate": 1
+    },
+    "clip_029": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_032": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    },
+    "clip_035": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 1,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 0,
+      "runtime_misses_exact_gt_despite_exact_candidate": 1
+    },
+    "clip_044": {
+      "total_duplicate_pair_groups": 1,
+      "exact_gt_in_candidates": 0,
+      "candidate_space_limit_gt_subset_of_observed_union": 0,
+      "upstream_missing_gt_pitch": 1,
+      "runtime_misses_exact_gt_despite_exact_candidate": 0
+    }
+  },
+  "samples": {
+    "candidate_space_limit_gt_subset_of_observed_union": [
+      {
+        "clip_id": "clip_006",
+        "group_index": 18,
+        "gt": [
+          66,
+          70,
+          74,
+          78,
+          82,
+          86
+        ],
+        "candidates": [
+          [
+            70,
+            74,
+            78,
+            82,
+            86,
+            94
+          ],
+          [
+            62,
+            66,
+            70,
+            74,
+            78,
+            82,
+            86
+          ],
+          [
+            62,
+            66,
+            70,
+            74,
+            78,
+            82,
+            86,
+            94
+          ]
+        ],
+        "observed_union": [
+          62,
+          66,
+          70,
+          74,
+          78,
+          82,
+          86,
+          94
+        ],
+        "best_candidate_f1": 0.9230769230769231
+      },
+      {
+        "clip_id": "clip_008",
+        "group_index": 7,
+        "gt": [
+          65,
+          70,
+          74,
+          79
+        ],
+        "candidates": [
+          [
+            65,
+            70,
+            74
+          ],
+          [
+            65,
+            70,
+            74,
+            77,
+            79
+          ]
+        ],
+        "observed_union": [
+          65,
+          70,
+          74,
+          77,
+          79
+        ],
+        "best_candidate_f1": 0.8888888888888888
+      },
+      {
+        "clip_id": "clip_018",
+        "group_index": 22,
+        "gt": [
+          42,
+          54,
+          69,
+          74,
+          81
+        ],
+        "candidates": [
+          [
+            42,
+            45,
+            54,
+            69,
+            74,
+            81
+          ],
+          [
+            50,
+            54,
+            69,
+            74,
+            81
+          ],
+          [
+            42,
+            45,
+            50,
+            54,
+            69,
+            74,
+            81
+          ]
+        ],
+        "observed_union": [
+          42,
+          45,
+          50,
+          54,
+          69,
+          74,
+          81
+        ],
+        "best_candidate_f1": 0.9090909090909091
+      },
+      {
+        "clip_id": "clip_022",
+        "group_index": 36,
+        "gt": [
+          86,
+          92,
+          95
+        ],
+        "candidates": [
+          [
+            86,
+            89,
+            92,
+            95
+          ],
+          [
+            86,
+            92
+          ]
+        ],
+        "observed_union": [
+          86,
+          89,
+          92,
+          95
+        ],
+        "best_candidate_f1": 0.8571428571428571
+      }
+    ],
+    "upstream_missing_gt_pitch": [
+      {
+        "clip_id": "clip_010",
+        "group_index": 11,
+        "gt": [
+          48,
+          53,
+          57,
+          60,
+          65,
+          69,
+          72,
+          77
+        ],
+        "missing_gt_pitches": [
+          69
+        ],
+        "candidates": [
+          [
+            48,
+            53,
+            57,
+            60,
+            65,
+            72,
+            77
+          ],
+          [
+            48,
+            57,
+            60,
+            65,
+            72,
+            77
+          ]
+        ],
+        "observed_union": [
+          48,
+          53,
+          57,
+          60,
+          65,
+          72,
+          77
+        ],
+        "best_candidate_f1": 0.9333333333333333
+      },
+      {
+        "clip_id": "clip_017",
+        "group_index": 21,
+        "gt": [
+          60,
+          64,
+          67,
+          72,
+          76,
+          79,
+          84
+        ],
+        "missing_gt_pitches": [
+          79,
+          84
+        ],
+        "candidates": [
+          [
+            55,
+            60,
+            61,
+            64,
+            67,
+            72,
+            76
+          ],
+          [
+            60,
+            64,
+            67,
+            72,
+            76
+          ]
+        ],
+        "observed_union": [
+          55,
+          60,
+          61,
+          64,
+          67,
+          72,
+          76
+        ],
+        "best_candidate_f1": 0.8333333333333334
+      },
+      {
+        "clip_id": "clip_020",
+        "group_index": 10,
+        "gt": [
+          71,
+          78,
+          99
+        ],
+        "missing_gt_pitches": [
+          71
+        ],
+        "candidates": [
+          [
+            75,
+            87,
+            94,
+            99
+          ],
+          [
+            75,
+            78,
+            99
+          ],
+          [
+            75,
+            78,
+            87,
+            94,
+            99
+          ]
+        ],
+        "observed_union": [
+          75,
+          78,
+          87,
+          94,
+          99
+        ],
+        "best_candidate_f1": 0.6666666666666666
+      },
+      {
+        "clip_id": "clip_027",
+        "group_index": 12,
+        "gt": [
+          52,
+          55,
+          81
+        ],
+        "missing_gt_pitches": [
+          52
+        ],
+        "candidates": [
+          [
+            55,
+            57,
+            81
+          ],
+          [
+            55,
+            81
+          ]
+        ],
+        "observed_union": [
+          55,
+          57,
+          81
+        ],
+        "best_candidate_f1": 0.8
+      },
+      {
+        "clip_id": "clip_044",
+        "group_index": 2,
+        "gt": [
+          51,
+          57,
+          59,
+          63,
+          66,
+          68,
+          78
+        ],
+        "missing_gt_pitches": [
+          63,
+          68,
+          78
+        ],
+        "candidates": [
+          [
+            47,
+            51,
+            59,
+            66,
+            75
+          ],
+          [
+            51,
+            57,
+            59,
+            66
+          ],
+          [
+            47,
+            51,
+            57,
+            59,
+            66,
+            75
+          ],
+          [
+            51,
+            59,
+            66
+          ]
+        ],
+        "observed_union": [
+          47,
+          51,
+          57,
+          59,
+          66,
+          75
+        ],
+        "best_candidate_f1": 0.7272727272727273
+      }
+    ],
+    "runtime_misses_exact_gt_despite_exact_candidate": [
+      {
+        "clip_id": "clip_017",
+        "group_index": 31,
+        "gt": [
+          58,
+          62,
+          66,
+          70,
+          74,
+          78,
+          82
+        ],
+        "chosen": [
+          58,
+          62,
+          66,
+          70,
+          74,
+          78
+        ],
+        "candidates": [
+          [
+            58,
+            62,
+            66,
+            70,
+            74,
+            78
+          ],
+          [
+            58,
+            62,
+            66,
+            70,
+            74,
+            78,
+            82
+          ]
+        ],
+        "observed_union": [
+          58,
+          62,
+          66,
+          70,
+          74,
+          78,
+          82
+        ],
+        "best_candidate_f1": 1.0
+      },
+      {
+        "clip_id": "clip_018",
+        "group_index": 28,
+        "gt": [
+          45,
+          57,
+          69,
+          76,
+          81
+        ],
+        "chosen": [
+          57,
+          76
+        ],
+        "candidates": [
+          [
+            45,
+            57,
+            69,
+            76,
+            81
+          ],
+          [
+            57,
+            76
+          ]
+        ],
+        "observed_union": [
+          45,
+          57,
+          69,
+          76,
+          81
+        ],
+        "best_candidate_f1": 1.0
+      },
+      {
+        "clip_id": "clip_027",
+        "group_index": 17,
+        "gt": [
+          62,
+          74,
+          78
+        ],
+        "chosen": [
+          62,
+          78
+        ],
+        "candidates": [
+          [
+            62,
+            74,
+            78
+          ],
+          [
+            62,
+            78
+          ]
+        ],
+        "observed_union": [
+          62,
+          74,
+          78
+        ],
+        "best_candidate_f1": 1.0
+      },
+      {
+        "clip_id": "clip_035",
+        "group_index": 19,
+        "gt": [
+          42,
+          54,
+          85
+        ],
+        "chosen": [
+          42,
+          85
+        ],
+        "candidates": [
+          [
+            42,
+            85
+          ],
+          [
+            42,
+            54,
+            85
+          ]
+        ],
+        "observed_union": [
+          42,
+          54,
+          85
+        ],
+        "best_candidate_f1": 1.0
+      }
+    ]
+  }
+}

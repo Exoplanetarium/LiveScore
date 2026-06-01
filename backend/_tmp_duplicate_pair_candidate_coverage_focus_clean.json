@@ -1,0 +1,417 @@
+{
+  "summary": {
+    "clips": [
+      {
+        "clip_id": "clip_018",
+        "groups": 35,
+        "pair_examples": 18,
+        "pitch_examples": 1074,
+        "duplicate_pair_groups": 18
+      },
+      {
+        "clip_id": "clip_027",
+        "groups": 28,
+        "pair_examples": 36,
+        "pitch_examples": 885,
+        "duplicate_pair_groups": 27
+      },
+      {
+        "clip_id": "clip_021",
+        "groups": 27,
+        "pair_examples": 12,
+        "pitch_examples": 822,
+        "duplicate_pair_groups": 12
+      },
+      {
+        "clip_id": "clip_015",
+        "groups": 33,
+        "pair_examples": 6,
+        "pitch_examples": 864,
+        "duplicate_pair_groups": 6
+      },
+      {
+        "clip_id": "clip_006",
+        "groups": 36,
+        "pair_examples": 24,
+        "pitch_examples": 1533,
+        "duplicate_pair_groups": 12
+      },
+      {
+        "clip_id": "clip_002",
+        "groups": 27,
+        "pair_examples": 3,
+        "pitch_examples": 564,
+        "duplicate_pair_groups": 0
+      },
+      {
+        "clip_id": "clip_019",
+        "groups": 35,
+        "pair_examples": 24,
+        "pitch_examples": 1119,
+        "duplicate_pair_groups": 24
+      },
+      {
+        "clip_id": "clip_028",
+        "groups": 31,
+        "pair_examples": 15,
+        "pitch_examples": 630,
+        "duplicate_pair_groups": 6
+      }
+    ],
+    "groups": 252,
+    "pair_examples": 138,
+    "pitch_examples": 7491,
+    "duplicate_pair_groups": 105,
+    "mining_passes": [
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "clean"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "clean"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "clean"
+      }
+    ]
+  },
+  "duplicate_pair_groups_total": 105,
+  "exact_candidate_match_rate": 0.4,
+  "mean_best_candidate_f1": 0.9077005534148384,
+  "exact_match_candidate_kinds": {
+    "left+union": 15,
+    "right+union+vote": 12,
+    "union": 3,
+    "vote": 3,
+    "right": 3,
+    "right+vote": 3,
+    "left": 3
+  },
+  "worst_candidate_misses": [
+    {
+      "clip_id": "clip_021",
+      "group_index": 14,
+      "gt": [
+        65,
+        76,
+        84
+      ],
+      "best_f1": 0.6666666666666666,
+      "candidates": [
+        [
+          65,
+          76,
+          77
+        ],
+        [
+          65,
+          69,
+          76
+        ],
+        [
+          65,
+          69,
+          76,
+          77
+        ]
+      ],
+      "pair_probability": 0.13529034400385193
+    },
+    {
+      "clip_id": "clip_021",
+      "group_index": 14,
+      "gt": [
+        65,
+        76,
+        84
+      ],
+      "best_f1": 0.6666666666666666,
+      "candidates": [
+        [
+          65,
+          76,
+          77
+        ],
+        [
+          65,
+          69,
+          76
+        ],
+        [
+          65,
+          69,
+          76,
+          77
+        ]
+      ],
+      "pair_probability": 0.13529034400385193
+    },
+    {
+      "clip_id": "clip_021",
+      "group_index": 14,
+      "gt": [
+        65,
+        76,
+        84
+      ],
+      "best_f1": 0.6666666666666666,
+      "candidates": [
+        [
+          65,
+          76,
+          77
+        ],
+        [
+          65,
+          69,
+          76
+        ],
+        [
+          65,
+          69,
+          76,
+          77
+        ]
+      ],
+      "pair_probability": 0.13529034400385193
+    },
+    {
+      "clip_id": "clip_018",
+      "group_index": 4,
+      "gt": [
+        50,
+        54,
+        74
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          50,
+          54
+        ],
+        [
+          50,
+          54,
+          62
+        ]
+      ],
+      "pair_probability": 0.9980025994984121
+    },
+    {
+      "clip_id": "clip_018",
+      "group_index": 4,
+      "gt": [
+        50,
+        54,
+        74
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          50,
+          54
+        ],
+        [
+          50,
+          54,
+          62
+        ]
+      ],
+      "pair_probability": 0.9980025994984121
+    },
+    {
+      "clip_id": "clip_018",
+      "group_index": 4,
+      "gt": [
+        50,
+        54,
+        74
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          50,
+          54
+        ],
+        [
+          50,
+          54,
+          62
+        ]
+      ],
+      "pair_probability": 0.9980025994984121
+    },
+    {
+      "clip_id": "clip_027",
+      "group_index": 12,
+      "gt": [
+        52,
+        55,
+        81
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          55,
+          57,
+          81
+        ],
+        [
+          55,
+          81
+        ]
+      ],
+      "pair_probability": 0.9825229254584006
+    },
+    {
+      "clip_id": "clip_027",
+      "group_index": 12,
+      "gt": [
+        52,
+        55,
+        81
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          55,
+          57,
+          81
+        ],
+        [
+          55,
+          81
+        ]
+      ],
+      "pair_probability": 0.9825229254584006
+    },
+    {
+      "clip_id": "clip_027",
+      "group_index": 12,
+      "gt": [
+        52,
+        55,
+        81
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          55,
+          57,
+          81
+        ],
+        [
+          55,
+          81
+        ]
+      ],
+      "pair_probability": 0.9825229254584006
+    },
+    {
+      "clip_id": "clip_027",
+      "group_index": 14,
+      "gt": [
+        52,
+        55,
+        81
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          55,
+          57,
+          81
+        ],
+        [
+          55,
+          81
+        ]
+      ],
+      "pair_probability": 0.7487969809716788
+    },
+    {
+      "clip_id": "clip_027",
+      "group_index": 29,
+      "gt": [
+        45,
+        57,
+        69,
+        76,
+        81
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          40,
+          57,
+          69,
+          76
+        ],
+        [
+          57,
+          69,
+          74,
+          76,
+          81
+        ],
+        [
+          40,
+          57,
+          69,
+          74,
+          76,
+          81
+        ]
+      ],
+      "pair_probability": 0.9935721415759399
+    },
+    {
+      "clip_id": "clip_027",
+      "group_index": 14,
+      "gt": [
+        52,
+        55,
+        81
+      ],
+      "best_f1": 0.8,
+      "candidates": [
+        [
+          55,
+          57,
+          81
+        ],
+        [
+          55,
+          81
+        ]
+      ],
+      "pair_probability": 0.7487969809716788
+    }
+  ]
+}

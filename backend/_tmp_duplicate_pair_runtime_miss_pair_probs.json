@@ -1,0 +1,68 @@
+[
+  {
+    "clip_id": "clip_017",
+    "group_index": 31,
+    "pair_probability": 0.9938510314987425,
+    "left": [
+      58,
+      62,
+      66,
+      70,
+      74,
+      78
+    ],
+    "right": [
+      58,
+      62,
+      66,
+      70,
+      74,
+      78,
+      82
+    ]
+  },
+  {
+    "clip_id": "clip_018",
+    "group_index": 28,
+    "pair_probability": 0.7831791581874558,
+    "left": [
+      45,
+      57,
+      69,
+      76,
+      81
+    ],
+    "right": [
+      57,
+      76
+    ]
+  },
+  {
+    "clip_id": "clip_027",
+    "group_index": 17,
+    "pair_probability": 0.9510012731506315,
+    "left": [
+      62,
+      74,
+      78
+    ],
+    "right": [
+      62,
+      78
+    ]
+  },
+  {
+    "clip_id": "clip_035",
+    "group_index": 19,
+    "pair_probability": 0.9686569265782733,
+    "left": [
+      42,
+      85
+    ],
+    "right": [
+      42,
+      54,
+      85
+    ]
+  }
+]

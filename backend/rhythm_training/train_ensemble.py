@@ -1548,10 +1548,7 @@ def decode_note_events(
                     audio_end = n_frames * frame_time
                     event['offset_time'] = min(max_offset, audio_end)
 
-    # Remove internal fields before returning
-    for event in filtered:
-        event.pop('onset_prob', None)
-        # Keep note_value_class, note_value_confidence, note_value_name for downstream use
+    # Keep onset_prob in returned events — used downstream for per-note neural probability
 
     return filtered
 

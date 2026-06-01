@@ -1,0 +1,200 @@
+{
+  "model_path": "c:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\mel_baseline_transcription.pt",
+  "checkpoint_epoch": 22,
+  "checkpoint_onset_f1": 0.8549307378501655,
+  "checkpoint_frame_f1": 0.7373262067753412,
+  "sample_limit": 12,
+  "clip_duration_sec": 30.0,
+  "piece_count": 12,
+  "threshold_summary": [
+    {
+      "threshold": 0.35,
+      "micro_precision": 0.9402322404371585,
+      "micro_recall": 0.9395904436860069,
+      "micro_f1": 0.9399112325025607,
+      "predicted": 2928,
+      "ground_truth": 2930
+    },
+    {
+      "threshold": 0.4,
+      "micro_precision": 0.9523643949930459,
+      "micro_recall": 0.9348122866894198,
+      "micro_f1": 0.9435067171891148,
+      "predicted": 2876,
+      "ground_truth": 2930
+    },
+    {
+      "threshold": 0.45,
+      "micro_precision": 0.9567662565905096,
+      "micro_recall": 0.9290102389078498,
+      "micro_f1": 0.9426839826839827,
+      "predicted": 2845,
+      "ground_truth": 2930
+    },
+    {
+      "threshold": 0.5,
+      "micro_precision": 0.9644128113879004,
+      "micro_recall": 0.9249146757679181,
+      "micro_f1": 0.9442508710801394,
+      "predicted": 2810,
+      "ground_truth": 2930
+    },
+    {
+      "threshold": 0.55,
+      "micro_precision": 0.9715417867435159,
+      "micro_recall": 0.9204778156996587,
+      "micro_f1": 0.9453207150368034,
+      "predicted": 2776,
+      "ground_truth": 2930
+    }
+  ],
+  "best_threshold": 0.55,
+  "best_aggregate": {
+    "micro_precision": 0.9715417867435159,
+    "micro_recall": 0.9204778156996587,
+    "micro_f1": 0.9453207150368034,
+    "matched": 2697,
+    "predicted": 2776,
+    "ground_truth": 2930
+  },
+  "density_split": {
+    "median_density": 5.733333333333333,
+    "low_density": {
+      "pieces": 6,
+      "avg_precision": 0.9847918806079212,
+      "avg_recall": 0.9517704247430078,
+      "avg_f1": 0.9678737337305237
+    },
+    "high_density": {
+      "pieces": 6,
+      "avg_precision": 0.966312456205867,
+      "avg_recall": 0.9202610166772592,
+      "avg_f1": 0.9422133065030742
+    }
+  },
+  "density_f1_correlation": -0.36358792489172986,
+  "pitch_bands": {
+    "low": {
+      "matched": 231,
+      "fp": 7,
+      "fn": 40,
+      "gt": 271,
+      "pred": 238,
+      "precision": 0.9705882352941176,
+      "recall": 0.8523985239852399,
+      "f1": 0.9076620825147348
+    },
+    "mid": {
+      "matched": 1756,
+      "fp": 54,
+      "fn": 139,
+      "gt": 1895,
+      "pred": 1810,
+      "precision": 0.9701657458563536,
+      "recall": 0.9266490765171504,
+      "f1": 0.9479082321187585
+    },
+    "high": {
+      "matched": 710,
+      "fp": 18,
+      "fn": 54,
+      "gt": 764,
+      "pred": 728,
+      "precision": 0.9752747252747253,
+      "recall": 0.9293193717277487,
+      "f1": 0.9517426273458446
+    }
+  },
+  "fn_velocity": {
+    "soft": 149,
+    "medium": 59,
+    "loud": 25
+  },
+  "cluster_misses": {
+    "matched_single_or_double": 1861,
+    "matched_dense_3plus": 836,
+    "fn_single_or_double": 79,
+    "fn_dense_3plus": 154,
+    "recall_single_or_double": 0.959278350515464,
+    "recall_dense_3plus": 0.8444444444444444
+  },
+  "fp_categories": {
+    "isolated_spurious": 6,
+    "wrong_pitch_near_chord": 71,
+    "same_pitch_nearby_timing_or_duplicate": 2
+  },
+  "worst_pieces": [
+    {
+      "title": "Etude \"Pour les accords\"",
+      "density": 21.3,
+      "precision": 0.9309090909090909,
+      "recall": 0.8012519561815337,
+      "f1": 0.8612279226240538
+    },
+    {
+      "title": "Estampes (Complete)",
+      "density": 6.1,
+      "precision": 0.8953488372093024,
+      "recall": 0.8415300546448088,
+      "f1": 0.867605633802817
+    },
+    {
+      "title": "Pagodas from Estampes No. 1",
+      "density": 5.7,
+      "precision": 0.9493670886075949,
+      "recall": 0.8771929824561403,
+      "f1": 0.911854103343465
+    },
+    {
+      "title": "Etude Op. 42, Nos. 4 & 5",
+      "density": 5.766666666666667,
+      "precision": 0.9939393939393939,
+      "recall": 0.9479768786127167,
+      "f1": 0.9704142011834319
+    },
+    {
+      "title": "Sonata No. 9",
+      "density": 4.1,
+      "precision": 0.9754098360655737,
+      "recall": 0.967479674796748,
+      "f1": 0.9714285714285714
+    }
+  ],
+  "best_pieces": [
+    {
+      "title": "Pour le piano (Complete)",
+      "density": 11.8,
+      "precision": 0.9971509971509972,
+      "recall": 0.9887005649717514,
+      "f1": 0.9929078014184398
+    },
+    {
+      "title": "Sonata No. 9",
+      "density": 4.4,
+      "precision": 0.9923076923076923,
+      "recall": 0.9772727272727273,
+      "f1": 0.9847328244274809
+    },
+    {
+      "title": "Jardins sous la pluie from Estampes",
+      "density": 13.5,
+      "precision": 0.9949494949494949,
+      "recall": 0.9728395061728395,
+      "f1": 0.9837702871410736
+    },
+    {
+      "title": "Entragete, Op.63",
+      "density": 3.6333333333333333,
+      "precision": 1.0,
+      "recall": 0.963302752293578,
+      "f1": 0.9813084112149533
+    },
+    {
+      "title": "Sonata No. 9, Op. 68",
+      "density": 4.1,
+      "precision": 0.9916666666666667,
+      "recall": 0.967479674796748,
+      "f1": 0.9794238683127573
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import os
 import warnings
+from copy import deepcopy
 
 warnings.filterwarnings('ignore', module='librosa.*')
 
@@ -4099,6 +4100,77 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
 
         return mean_err, phase_offset * beat_period
 
+    def build_candidate_beat_times(candidate_bpm, candidate_phase):
+        beat_int = 60.0 / candidate_bpm
+        start = candidate_phase % beat_int
+        return np.arange(start, duration + beat_int, beat_int)
+
+    def probe_notation_candidate(candidate_bpm, candidate_phase):
+        candidate_beat_times = build_candidate_beat_times(candidate_bpm, candidate_phase)
+        candidate_notes = deepcopy(notes)
+        candidate_chords = deepcopy(chords)
+        candidate_events = candidate_notes + candidate_chords
+        candidate_subdivision_info = detect_dominant_subdivisions(
+            candidate_events,
+            candidate_bpm,
+            debug=False,
+        )
+
+        def quantize_items(items):
+            if not items:
+                return []
+            items = tag_runs_pre_quantization(items, candidate_bpm, debug=False)
+            items = quantize_to_beat_grid(
+                items,
+                candidate_beat_times,
+                candidate_bpm,
+                candidate_subdivision_info,
+                debug=False,
+            )
+            items = cross_validate_with_acoustic_duration(items, candidate_bpm, debug=False)
+            items = post_process_rhythm_unified(items, candidate_bpm, debug=False)
+            items = apply_coherence_smoothing(items, candidate_bpm, debug=False)
+            return items
+
+        hand_labels = ('bass', 'treble')
+        quantized_notes = []
+        quantized_chords = []
+        for hand_label in hand_labels:
+            quantized_notes.extend(
+                quantize_items([n for n in candidate_notes if n.get('hand') == hand_label])
+            )
+            quantized_chords.extend(
+                quantize_items([c for c in candidate_chords if c.get('hand') == hand_label])
+            )
+
+        quantized_notes.extend(
+            quantize_items([
+                n for n in candidate_notes
+                if n.get('hand') not in hand_labels
+            ])
+        )
+        quantized_chords.extend(
+            quantize_items([
+                c for c in candidate_chords
+                if c.get('hand') not in hand_labels
+            ])
+        )
+
+        quantized_notes = sorted(quantized_notes, key=lambda item: item.get('time_seconds', 0))
+        quantized_chords = sorted(quantized_chords, key=lambda item: item.get('time_seconds', 0))
+        proximity = compute_notation_proximity_score(
+            quantized_notes,
+            quantized_chords,
+            candidate_bpm,
+            debug=False,
+        )
+        overall = proximity.get('overall') or {}
+        return {
+            'mean_drift_ms': float(overall.get('mean_drift_ms', float('inf'))),
+            'pct_within_16th': float(overall.get('pct_within_16th', 0.0)),
+            'pct_within_8th': float(overall.get('pct_within_8th', 0.0)),
+        }
+
     # Sweep BPM candidates
     lo = max(30, initial_bpm * (1 - sweep_pct))
     hi = min(300, initial_bpm * (1 + sweep_pct))
@@ -4116,14 +4188,29 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
             best_bpm = c_bpm
             best_phase = phase
 
-    # Also test common multiplier adjustments (half/double time)
-    for mult in [0.5, 2.0]:
-        c_bpm = initial_bpm * mult
-        if 30 <= c_bpm <= 300:
+    # Also test slower ratio adjustments against both the original tempo and the
+    # current best local candidate. Without this second base, a local sweep can
+    # climb to (for example) 244 BPM and never compare against the meaningful
+    # half-tempo alternative at 122 BPM.
+    ratio_bases = {float(initial_bpm), float(best_bpm)}
+    ratio_multipliers = [0.5, 2 / 3, 0.75]
+    tested_ratio_bpms = {
+        round(float(cand_bpm) * 1000)
+        for cand_bpm, _, _ in tested_candidates
+    }
+    for base_bpm in ratio_bases:
+        for mult in ratio_multipliers:
+            c_bpm = base_bpm * mult
+            c_bpm_key = round(float(c_bpm) * 1000)
+            if c_bpm_key in tested_ratio_bpms:
+                continue
+            tested_ratio_bpms.add(c_bpm_key)
+            if not (30 <= c_bpm <= 300):
+                continue
+
             err, phase = grid_alignment_error(c_bpm)
             tested_candidates.append((float(c_bpm), float(err), float(phase)))
-            # Require substantially better alignment for half/double switch
-            if err < best_error * 0.85:
+            if err < best_error - 0.001:
                 best_error = err
                 best_bpm = c_bpm
                 best_phase = phase
@@ -4148,6 +4235,68 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
             best_error = natural_error
             best_phase = natural_phase
 
+    # Raw onset-grid fit can still prefer doubled tempo even when the resulting
+    # quantized notation is much worse. Before finalizing a fast tempo, probe a
+    # few slower natural-range candidates through the actual quantization path
+    # and switch only when the downstream score quality improves materially.
+    if best_bpm >= 140 and len(onsets) >= 6:
+        probe_candidates = [(float(best_bpm), float(best_error), float(best_phase))]
+        seen_probe_bpms = {round(float(best_bpm) * 1000)}
+        slower_candidates = sorted(
+            [
+                (cand_bpm, cand_error, cand_phase)
+                for cand_bpm, cand_error, cand_phase in tested_candidates
+                if 60 <= cand_bpm < best_bpm
+                and cand_bpm <= best_bpm / 1.25
+            ],
+            key=lambda item: (item[1], -item[0]),
+        )
+        for cand_bpm, cand_error, cand_phase in slower_candidates:
+            cand_key = round(float(cand_bpm) * 1000)
+            if cand_key in seen_probe_bpms:
+                continue
+            probe_candidates.append((float(cand_bpm), float(cand_error), float(cand_phase)))
+            seen_probe_bpms.add(cand_key)
+            if len(probe_candidates) >= 4:
+                break
+
+        probe_results = []
+        for cand_bpm, cand_error, cand_phase in probe_candidates:
+            notation_score = probe_notation_candidate(cand_bpm, cand_phase)
+            probe_results.append({
+                'bpm': cand_bpm,
+                'grid_error': cand_error,
+                'phase': cand_phase,
+                **notation_score,
+            })
+
+        current_probe = probe_results[0]
+        best_probe = min(
+            probe_results,
+            key=lambda item: (
+                item['mean_drift_ms'],
+                -item['pct_within_16th'],
+                item['grid_error'],
+            ),
+        )
+        if (
+            best_probe['bpm'] != current_probe['bpm']
+            and (
+                best_probe['mean_drift_ms'] <= current_probe['mean_drift_ms'] - 40.0
+                or best_probe['pct_within_16th'] >= current_probe['pct_within_16th'] + 0.25
+            )
+        ):
+            best_bpm = best_probe['bpm']
+            best_error = best_probe['grid_error']
+            best_phase = best_probe['phase']
+            if debug:
+                print(
+                    f"[Tempo Notation Probe] Prefer {best_bpm:.1f} BPM over "
+                    f"{current_probe['bpm']:.1f} BPM "
+                    f"(mean drift {current_probe['mean_drift_ms']:.1f}ms "
+                    f"→ {best_probe['mean_drift_ms']:.1f}ms)"
+                )
+
     # Round to nearest 0.5 BPM
     best_bpm = round(best_bpm * 2) / 2
 
@@ -4161,9 +4310,7 @@ def refine_tempo_onset_grid(notes, chords, initial_bpm, beat_times=None,
 
     # Generate synthetic regular beat times from the refined BPM + phase
     beat_int = 60.0 / best_bpm
-    # Start from phase offset, align to cover all onsets
-    start = best_phase % beat_int
-    synthetic_beats = np.arange(start, duration, beat_int)
+    synthetic_beats = build_candidate_beat_times(best_bpm, best_phase)
 
     # Confidence based on alignment quality
     # Perfect alignment: error ~0; worst case: error = beat_int/4
@@ -7876,32 +8023,7 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             print(f"  ... and {len(note_events) - 20} more")
     
     # Convert note_events to our format
-    # Group simultaneous notes into chords
-    TIME_TOLERANCE = 0.03  # 30ms - notes within this window are considered simultaneous
-    
-    # Sort by onset time
-    note_events_sorted = sorted(note_events, key=lambda x: x['onset_time'])
-    
-    # Group into simultaneous events
-    event_groups = []
-    current_group = []
-    current_time = -1.0
-    
-    for event in note_events_sorted:
-        onset = event['onset_time']
-        
-        if current_time < 0 or abs(onset - current_time) <= TIME_TOLERANCE:
-            current_group.append(event)
-            if current_time < 0:
-                current_time = onset
-        else:
-            if current_group:
-                event_groups.append(current_group)
-            current_group = [event]
-            current_time = onset
-    
-    if current_group:
-        event_groups.append(current_group)
+    event_groups = _group_neural_note_events_by_onset(note_events)
     
     print(f"[Neural] Grouped into {len(event_groups)} onset events")
     t0 = time.perf_counter()
@@ -8298,30 +8420,62 @@ def _identify_chord_label(midi_notes):
     return f"{root_name}:chord"
 
 
-def _convert_neural_note_events_to_results(note_events, split_midi=60):
-    """Convert frame-level neural note events into the live note/chord payload shape."""
-    time_tolerance = 0.03
-    note_events_sorted = sorted(note_events or [], key=lambda x: x['onset_time'])
+_NEURAL_SIMULTANEOUS_BASE_TOLERANCE_SEC = 0.03
+_NEURAL_SIMULTANEOUS_MIN_TOLERANCE_SEC = 0.012
+_NEURAL_SIMULTANEOUS_GROUP_SHRINK_SEC = 0.004
+_NEURAL_SIMULTANEOUS_STEP_RATIO = 0.65
 
+
+def _adaptive_neural_group_tolerances(group_size):
+    extra_voices = max(0, int(group_size) - 2)
+    span_tolerance = max(
+        _NEURAL_SIMULTANEOUS_MIN_TOLERANCE_SEC,
+        _NEURAL_SIMULTANEOUS_BASE_TOLERANCE_SEC
+        - (extra_voices * _NEURAL_SIMULTANEOUS_GROUP_SHRINK_SEC),
+    )
+    step_tolerance = max(
+        _NEURAL_SIMULTANEOUS_MIN_TOLERANCE_SEC,
+        span_tolerance * _NEURAL_SIMULTANEOUS_STEP_RATIO,
+    )
+    return span_tolerance, step_tolerance
+
+
+def _group_neural_note_events_by_onset(note_events):
+    # Dense polyphonic clips tend to overmerge when every group gets the same
+    # fixed simultaneity window. Shrink the allowed span as a group grows.
+    note_events_sorted = sorted(note_events or [], key=lambda event: event['onset_time'])
     event_groups = []
     current_group = []
-    current_time = -1.0
 
     for event in note_events_sorted:
-        onset = event['onset_time']
-
-        if current_time < 0 or abs(onset - current_time) <= time_tolerance:
-            current_group.append(event)
-            if current_time < 0:
-                current_time = onset
-        else:
-            if current_group:
-                event_groups.append(current_group)
+        if not current_group:
             current_group = [event]
-            current_time = onset
+            continue
+
+        onset = float(event.get('onset_time', 0.0) or 0.0)
+        group_start = float(current_group[0].get('onset_time', 0.0) or 0.0)
+        previous_onset = float(current_group[-1].get('onset_time', group_start) or group_start)
+        span_tolerance, step_tolerance = _adaptive_neural_group_tolerances(len(current_group))
+
+        within_group_span = (onset - group_start) <= span_tolerance
+        near_previous_attack = (onset - previous_onset) <= step_tolerance
+
+        if within_group_span and near_previous_attack:
+            current_group.append(event)
+            continue
+
+        event_groups.append(current_group)
+        current_group = [event]
 
     if current_group:
         event_groups.append(current_group)
+
+    return event_groups
+
+
+def _convert_neural_note_events_to_results(note_events, split_midi=60):
+    """Convert frame-level neural note events into the live note/chord payload shape."""
+    event_groups = _group_neural_note_events_by_onset(note_events)
 
     notes = []
     chords = []
@@ -8379,6 +8533,8 @@ def _convert_neural_note_events_to_results(note_events, split_midi=60):
             'hand': hand,
             'label': _identify_chord_label(midi_notes),
         }
+        sorted_group = sorted(group, key=lambda event: int(event['midi_note']))
+        chord_dict['note_probabilities'] = [float(event.get('onset_prob', 0.5)) for event in sorted_group]
         nv_events = [event for event in group if 'note_value_name' in event]
         if nv_events:
             best_nv = max(nv_events, key=lambda event: event.get('note_value_confidence', 0))
@@ -8514,16 +8670,24 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 model_audio = audio_full_sr
             timings['neural_resample'] = (time.perf_counter() - t0) * 1000
 
+            # Base onset threshold. With the longer LIVE_CONTEXT_SEC window the
+            # model is well-calibrated, so a higher base (0.46) sharply improves
+            # precision / display cluster F1 at a negligible recall cost vs the old
+            # short-chunk value of 0.38. Tunable via LIVE_ONSET_BASE.
+            try:
+                _mel_base_thr = float(os.environ.get('LIVE_ONSET_BASE', '0.46'))
+            except (TypeError, ValueError):
+                _mel_base_thr = 0.46
             selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
                 model_audio,
-                0.38,
+                _mel_base_thr,
                 enabled=adaptive_onset_threshold,
             )
             onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
             onset_threshold_experiment = str(
                 threshold_debug.get('experiment') or onset_threshold_experiment
             )
-            timings['neural_onset_threshold_base'] = 0.38
+            timings['neural_onset_threshold_base'] = _mel_base_thr
             timings['neural_onset_threshold_selected'] = selected_onset_threshold
             timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
             timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)

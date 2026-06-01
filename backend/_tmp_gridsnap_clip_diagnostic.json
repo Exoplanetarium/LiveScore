@@ -1,0 +1,598 @@
+{
+  "clip_007": {
+    "raw_cluster_metrics": {
+      "precision": 0.5,
+      "recall": 0.6666666666666666,
+      "f1": 0.5714285714285715,
+      "exact_matches": 2,
+      "predicted": 4,
+      "ground_truth": 3,
+      "onset_aligned_matches": 3,
+      "onset_alignment_precision": 0.75,
+      "onset_alignment_recall": 1.0,
+      "avg_jaccard": 0.8888888888888888,
+      "overclustered_matches": 0,
+      "underclustered_matches": 1,
+      "pitch_conflict_matches": 0,
+      "unmatched_predicted": 1,
+      "unmatched_ground_truth": 0
+    },
+    "snapped_cluster_metrics": {
+      "precision": 0.2,
+      "recall": 0.3333333333333333,
+      "f1": 0.25,
+      "exact_matches": 1,
+      "predicted": 5,
+      "ground_truth": 3,
+      "onset_aligned_matches": 3,
+      "onset_alignment_precision": 0.6,
+      "onset_alignment_recall": 1.0,
+      "avg_jaccard": 0.6388888888888888,
+      "overclustered_matches": 0,
+      "underclustered_matches": 2,
+      "pitch_conflict_matches": 0,
+      "unmatched_predicted": 2,
+      "unmatched_ground_truth": 0
+    },
+    "moved_note_count_ge_25ms": 1,
+    "low_conf_moved_note_count_lt_0_8": 0,
+    "moved_note_examples": [
+      {
+        "midi_note": 56,
+        "raw_onset": 5.34512,
+        "snap_onset": 5.375,
+        "delta_ms": 29.88,
+        "start_grid_idx": 86,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.94024
+      }
+    ],
+    "low_conf_moved_examples": [],
+    "crowded_slots": {}
+  },
+  "clip_014": {
+    "raw_cluster_metrics": {
+      "precision": 0.2857142857142857,
+      "recall": 0.4444444444444444,
+      "f1": 0.34782608695652173,
+      "exact_matches": 4,
+      "predicted": 14,
+      "ground_truth": 9,
+      "onset_aligned_matches": 9,
+      "onset_alignment_precision": 0.6428571428571429,
+      "onset_alignment_recall": 1.0,
+      "avg_jaccard": 0.7037037037037037,
+      "overclustered_matches": 3,
+      "underclustered_matches": 1,
+      "pitch_conflict_matches": 1,
+      "unmatched_predicted": 5,
+      "unmatched_ground_truth": 0
+    },
+    "snapped_cluster_metrics": {
+      "precision": 0.3125,
+      "recall": 0.5555555555555556,
+      "f1": 0.39999999999999997,
+      "exact_matches": 5,
+      "predicted": 16,
+      "ground_truth": 9,
+      "onset_aligned_matches": 9,
+      "onset_alignment_precision": 0.5625,
+      "onset_alignment_recall": 1.0,
+      "avg_jaccard": 0.7592592592592592,
+      "overclustered_matches": 2,
+      "underclustered_matches": 2,
+      "pitch_conflict_matches": 0,
+      "unmatched_predicted": 7,
+      "unmatched_ground_truth": 0
+    },
+    "moved_note_count_ge_25ms": 1,
+    "low_conf_moved_note_count_lt_0_8": 0,
+    "moved_note_examples": [
+      {
+        "midi_note": 65,
+        "raw_onset": 3.67212,
+        "snap_onset": 3.6429,
+        "delta_ms": -29.22,
+        "start_grid_idx": 68,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.93172
+      }
+    ],
+    "low_conf_moved_examples": [],
+    "crowded_slots": {}
+  },
+  "clip_023": {
+    "raw_cluster_metrics": {
+      "precision": 0.7368421052631579,
+      "recall": 0.7272727272727273,
+      "f1": 0.7320261437908497,
+      "exact_matches": 56,
+      "predicted": 76,
+      "ground_truth": 77,
+      "onset_aligned_matches": 75,
+      "onset_alignment_precision": 0.9868421052631579,
+      "onset_alignment_recall": 0.974025974025974,
+      "avg_jaccard": 0.8677777777777778,
+      "overclustered_matches": 10,
+      "underclustered_matches": 6,
+      "pitch_conflict_matches": 3,
+      "unmatched_predicted": 1,
+      "unmatched_ground_truth": 2
+    },
+    "snapped_cluster_metrics": {
+      "precision": 0.5866666666666667,
+      "recall": 0.5714285714285714,
+      "f1": 0.5789473684210527,
+      "exact_matches": 44,
+      "predicted": 75,
+      "ground_truth": 77,
+      "onset_aligned_matches": 73,
+      "onset_alignment_precision": 0.9733333333333334,
+      "onset_alignment_recall": 0.948051948051948,
+      "avg_jaccard": 0.797945205479452,
+      "overclustered_matches": 14,
+      "underclustered_matches": 7,
+      "pitch_conflict_matches": 8,
+      "unmatched_predicted": 2,
+      "unmatched_ground_truth": 4
+    },
+    "moved_note_count_ge_25ms": 3,
+    "low_conf_moved_note_count_lt_0_8": 2,
+    "moved_note_examples": [
+      {
+        "midi_note": 83,
+        "raw_onset": 0.50712,
+        "snap_onset": 0.5816,
+        "delta_ms": 74.48,
+        "start_grid_idx": 5,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.742175
+      },
+      {
+        "midi_note": 71,
+        "raw_onset": 0.62812,
+        "snap_onset": 0.6539,
+        "delta_ms": 25.78,
+        "start_grid_idx": 7,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.910835
+      },
+      {
+        "midi_note": 83,
+        "raw_onset": 1.79512,
+        "snap_onset": 1.7394,
+        "delta_ms": -55.72,
+        "start_grid_idx": 39,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.797057
+      }
+    ],
+    "low_conf_moved_examples": [
+      {
+        "midi_note": 83,
+        "raw_onset": 0.50712,
+        "snap_onset": 0.5816,
+        "delta_ms": 74.48,
+        "start_grid_idx": 5,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.742175
+      },
+      {
+        "midi_note": 83,
+        "raw_onset": 1.79512,
+        "snap_onset": 1.7394,
+        "delta_ms": -55.72,
+        "start_grid_idx": 39,
+        "grid_subdivision": 8,
+        "quantization_confidence": 0.797057
+      }
+    ],
+    "crowded_slots": {
+      "-7": {
+        "count": 2,
+        "midi_notes": [
+          68,
+          80
+        ],
+        "delta_ms": [
+          -7.0,
+          -7.0
+        ],
+        "quantization_confidence": [
+          0.933333,
+          0.933333
+        ]
+      },
+      "-6": {
+        "count": 2,
+        "midi_notes": [
+          69,
+          79
+        ],
+        "delta_ms": [
+          -20.4,
+          -20.4
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "-4": {
+        "count": 2,
+        "midi_notes": [
+          68,
+          78
+        ],
+        "delta_ms": [
+          1.7,
+          1.7
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "-2": {
+        "count": 2,
+        "midi_notes": [
+          67,
+          85
+        ],
+        "delta_ms": [
+          -13.1,
+          -13.1
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "1": {
+        "count": 2,
+        "midi_notes": [
+          84,
+          69
+        ],
+        "delta_ms": [
+          7.1,
+          -21.4
+        ],
+        "quantization_confidence": [
+          0.97534,
+          0.933333
+        ]
+      },
+      "9": {
+        "count": 3,
+        "midi_notes": [
+          72,
+          73,
+          79
+        ],
+        "delta_ms": [
+          20.98,
+          -1.42,
+          -1.42
+        ],
+        "quantization_confidence": [
+          0.927255,
+          0.639667,
+          0.639667
+        ]
+      },
+      "11": {
+        "count": 2,
+        "midi_notes": [
+          74,
+          78
+        ],
+        "delta_ms": [
+          -12.22,
+          -12.22
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "14": {
+        "count": 3,
+        "midi_notes": [
+          67,
+          85,
+          86
+        ],
+        "delta_ms": [
+          2.08,
+          2.08,
+          2.08
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5,
+          0.5
+        ]
+      },
+      "27": {
+        "count": 3,
+        "midi_notes": [
+          72,
+          73,
+          79
+        ],
+        "delta_ms": [
+          -13.52,
+          -17.72,
+          -17.72
+        ],
+        "quantization_confidence": [
+          0.950707,
+          0.811947,
+          0.811947
+        ]
+      },
+      "30": {
+        "count": 2,
+        "midi_notes": [
+          74,
+          78
+        ],
+        "delta_ms": [
+          15.68,
+          15.68
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "34": {
+        "count": 2,
+        "midi_notes": [
+          54,
+          68
+        ],
+        "delta_ms": [
+          2.18,
+          2.18
+        ],
+        "quantization_confidence": [
+          0.8236,
+          0.8236
+        ]
+      },
+      "45": {
+        "count": 2,
+        "midi_notes": [
+          62,
+          82
+        ],
+        "delta_ms": [
+          10.18,
+          10.18
+        ],
+        "quantization_confidence": [
+          0.54304,
+          0.54304
+        ]
+      },
+      "47": {
+        "count": 2,
+        "midi_notes": [
+          69,
+          81
+        ],
+        "delta_ms": [
+          6.78,
+          6.78
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "55": {
+        "count": 3,
+        "midi_notes": [
+          54,
+          66,
+          68
+        ],
+        "delta_ms": [
+          -1.62,
+          -1.62,
+          -1.62
+        ],
+        "quantization_confidence": [
+          0.989841,
+          0.989841,
+          0.989841
+        ]
+      },
+      "59": {
+        "count": 2,
+        "midi_notes": [
+          69,
+          85
+        ],
+        "delta_ms": [
+          0.38,
+          -0.62
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.997498
+        ]
+      },
+      "66": {
+        "count": 2,
+        "midi_notes": [
+          62,
+          82
+        ],
+        "delta_ms": [
+          2.58,
+          2.58
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "78": {
+        "count": 3,
+        "midi_notes": [
+          86,
+          69,
+          85
+        ],
+        "delta_ms": [
+          21.48,
+          -10.72,
+          -10.72
+        ],
+        "quantization_confidence": [
+          0.916932,
+          0.760128,
+          0.760128
+        ]
+      },
+      "86": {
+        "count": 2,
+        "midi_notes": [
+          72,
+          82
+        ],
+        "delta_ms": [
+          -15.42,
+          -15.42
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "94": {
+        "count": 2,
+        "midi_notes": [
+          75,
+          79
+        ],
+        "delta_ms": [
+          -0.42,
+          -0.42
+        ],
+        "quantization_confidence": [
+          0.787524,
+          0.787524
+        ]
+      },
+      "98": {
+        "count": 2,
+        "midi_notes": [
+          68,
+          75
+        ],
+        "delta_ms": [
+          -9.02,
+          -9.02
+        ],
+        "quantization_confidence": [
+          0.964845,
+          0.998058
+        ]
+      },
+      "121": {
+        "count": 2,
+        "midi_notes": [
+          73,
+          92
+        ],
+        "delta_ms": [
+          -13.32,
+          -13.32
+        ],
+        "quantization_confidence": [
+          0.524247,
+          0.524247
+        ]
+      },
+      "124": {
+        "count": 2,
+        "midi_notes": [
+          72,
+          91
+        ],
+        "delta_ms": [
+          -11.92,
+          -11.92
+        ],
+        "quantization_confidence": [
+          0.5,
+          0.5
+        ]
+      },
+      "133": {
+        "count": 2,
+        "midi_notes": [
+          77,
+          79
+        ],
+        "delta_ms": [
+          14.18,
+          14.18
+        ],
+        "quantization_confidence": [
+          0.817825,
+          0.817825
+        ]
+      },
+      "143": {
+        "count": 2,
+        "midi_notes": [
+          55,
+          75
+        ],
+        "delta_ms": [
+          -8.72,
+          -8.72
+        ],
+        "quantization_confidence": [
+          0.996252,
+          0.996252
+        ]
+      },
+      "146": {
+        "count": 2,
+        "midi_notes": [
+          54,
+          74
+        ],
+        "delta_ms": [
+          13.58,
+          13.58
+        ],
+        "quantization_confidence": [
+          0.985765,
+          0.985765
+        ]
+      },
+      "163": {
+        "count": 2,
+        "midi_notes": [
+          54,
+          73
+        ],
+        "delta_ms": [
+          0.48,
+          0.48
+        ],
+        "quantization_confidence": [
+          0.992124,
+          0.992124
+        ]
+      }
+    }
+  }
+}

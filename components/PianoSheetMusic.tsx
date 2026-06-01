@@ -1882,8 +1882,17 @@ function generateMeasureXmls(
         const startPos = Math.max(ev.beatPos, currentBeatEnd);
 
         if (startPos >= BEATS_PER_MEASURE - 0.001) {
-          // No room left - skip remaining events
-          break;
+          // No room left in this measure. Don't drop the note — carry the
+          // whole event into the next measure as an overflow tie so it still
+          // appears in the score (matching what the MIDI export contains).
+          if (ev.midiNotes.length > 0) {
+            overflows.push({
+              midiNotes: ev.midiNotes,
+              remainingBeats: ev.beats,
+              staff: ev.staff,
+            });
+          }
+          continue;
         }
 
         // Calculate how much room is left from this start position
@@ -1897,8 +1906,16 @@ function generateMeasureXmls(
           // Event needs to be truncated - use the remaining space
           const truncatedBeats = remaining;
           if (truncatedBeats < 0.125) {
-            // Less than a 32nd note - skip
-            break;
+            // Less than a 32nd note of room — too little to notate here.
+            // Carry the whole event to the next measure instead of dropping it.
+            if (ev.midiNotes.length > 0) {
+              overflows.push({
+                midiNotes: ev.midiNotes,
+                remainingBeats: ev.beats,
+                staff: ev.staff,
+              });
+            }
+            continue;
           }
           const segments = splitBeatsIntoNoteTypes(truncatedBeats);
           const xml: string[] = [];

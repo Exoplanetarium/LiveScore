@@ -96,6 +96,8 @@ image = image.add_local_file("main.py", "/root/main.py")
 image = image.add_local_file("detect_note.py", "/root/detect_note.py")
 image = image.add_local_file("gpu_ops.py", "/root/gpu_ops.py")
 image = image.add_local_file("live_rhythm.py", "/root/live_rhythm.py")
+image = image.add_local_file("display_chord_pairwise_model.py", "/root/display_chord_pairwise_model.py")
+image = image.add_local_file("display_chord_pairwise_model.json", "/root/display_chord_pairwise_model.json")
 # Add rhythm ML model (only essential files, not training data)
 image = image.add_local_file("rhythm_training/__init__.py", "/root/rhythm_training/__init__.py")
 image = image.add_local_file("rhythm_training/evaluate_rhythm.py", "/root/rhythm_training/evaluate_rhythm.py")
@@ -108,6 +110,7 @@ image = image.add_local_file("rhythm_training/train_ensemble.py", "/root/rhythm_
 # Add mel baseline model (trained multi-resolution model)
 image = image.add_local_file("rhythm_training/train_mel_baseline.py", "/root/rhythm_training/train_mel_baseline.py")
 image = image.add_local_file("rhythm_training/mel_baseline_transcription.pt", "/root/rhythm_training/mel_baseline_transcription.pt")
+image = image.add_local_file("train_display_chord_pairwise_model.py", "/root/train_display_chord_pairwise_model.py")
 
 @app.function(
     image=image,

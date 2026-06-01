@@ -1,0 +1,101 @@
+{
+  "clip_024": [],
+  "clip_031": [
+    {
+      "group_index": 1,
+      "group_time": 1.16712,
+      "input_chords": [
+        {
+          "time": 1.16712,
+          "slot": null,
+          "confidence": 0.412,
+          "pitches": [
+            56,
+            64,
+            71
+          ]
+        },
+        {
+          "time": 1.16712,
+          "slot": null,
+          "confidence": 0.413,
+          "pitches": [
+            56,
+            62,
+            65,
+            71
+          ]
+        }
+      ],
+      "pairwise_pitches": [
+        56,
+        62,
+        64,
+        65,
+        71
+      ],
+      "candidate_pitches": [
+        56,
+        62,
+        65,
+        71
+      ],
+      "gt_cluster_pitches": [
+        56,
+        62,
+        65,
+        71
+      ]
+    },
+    {
+      "group_index": 13,
+      "group_time": 2.93212,
+      "input_chords": [
+        {
+          "time": 2.93212,
+          "slot": null,
+          "confidence": 0.513,
+          "pitches": [
+            52,
+            71,
+            77,
+            80,
+            86
+          ]
+        },
+        {
+          "time": 2.93412,
+          "slot": null,
+          "confidence": 0.496,
+          "pitches": [
+            71,
+            74,
+            77,
+            80,
+            86
+          ]
+        }
+      ],
+      "pairwise_pitches": [
+        52,
+        71,
+        74,
+        77,
+        80,
+        86
+      ],
+      "candidate_pitches": [
+        71,
+        77,
+        80,
+        86
+      ],
+      "gt_cluster_pitches": [
+        71,
+        77,
+        80,
+        86
+      ]
+    }
+  ]
+}

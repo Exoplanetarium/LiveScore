@@ -1,0 +1,1487 @@
+{
+  "clip": {
+    "label": "clip_014",
+    "clip_id": "clip_014",
+    "title": "Sonata No. 9",
+    "audio_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2006\\MIDI-Unprocessed_01_R1_2006_01-09_ORIG_MID--AUDIO_01_R1_2006_04_Track04_wav.wav",
+    "midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2006\\MIDI-Unprocessed_01_R1_2006_01-09_ORIG_MID--AUDIO_01_R1_2006_04_Track04_wav.midi",
+    "start_sec": 6.0,
+    "end_sec": 12.0,
+    "duration_sec": 6.0
+  },
+  "config": {
+    "chunk_ms": 600.0,
+    "overlap_samples": 4096,
+    "overlap_ms": 92.87981859410431,
+    "onset_threshold": 0.55,
+    "frame_threshold": 0.5,
+    "onset_tolerance_sec": 0.05,
+    "chunk_end_guard_sec": 0.025,
+    "chunk_end_micro_event_max_duration_sec": 0.045,
+    "model_path": "mel_baseline_transcription.pt"
+  },
+  "counts": {
+    "ground_truth_notes": 18,
+    "full_notes": 19,
+    "chunked_notes": 18
+  },
+  "metrics": {
+    "chunked_vs_full": {
+      "precision": 1.0,
+      "recall": 0.9473684210526315,
+      "f1": 0.972972972972973,
+      "matched": 18,
+      "predicted": 18,
+      "reference": 19
+    },
+    "full_vs_gt": {
+      "precision": 0.9473684210526315,
+      "recall": 1.0,
+      "f1": 0.972972972972973,
+      "matched": 18,
+      "predicted": 19,
+      "ground_truth": 18,
+      "rhythm_matched": 12,
+      "rhythm_precision": 0.6666666666666666,
+      "matched_pairs": [
+        [
+          {
+            "onset_time": 0.852372540473938,
+            "offset_time": 1.5515469913482667,
+            "midi_note": 61,
+            "velocity": 33,
+            "note_value_class": 5,
+            "note_value_confidence": 0.33654990792274475,
+            "note_value_name": "dotted_quarter",
+            "event_id": "full_00000"
+          },
+          {
+            "onset_time": 0.8515625,
+            "offset_time": 3.7421875,
+            "duration": 2.890625,
+            "midi_note": 61,
+            "velocity": 39,
+            "event_id": "gt_00000"
+          }
+        ],
+        [
+          {
+            "onset_time": 0.8550856318473816,
+            "offset_time": 2.049416092634201,
+            "midi_note": 65,
+            "velocity": 36,
+            "note_value_class": 4,
+            "note_value_confidence": 0.21516692638397217,
+            "note_value_name": "quarter",
+            "event_id": "full_00001"
+          },
+          {
+            "onset_time": 0.852864583333333,
+            "offset_time": 3.7421875,
+            "duration": 2.889322916666667,
+            "midi_note": 65,
+            "velocity": 36,
+            "event_id": "gt_00001"
+          }
+        ],
+        [
+          {
+            "onset_time": 1.801735020160675,
+            "offset_time": 2.5201639499664306,
+            "midi_note": 70,
+            "velocity": 49,
+            "note_value_class": 0,
+            "note_value_confidence": 0.2621678113937378,
+            "note_value_name": "32nd",
+            "event_id": "full_00002"
+          },
+          {
+            "onset_time": 1.803385416666666,
+            "offset_time": 3.7421875,
+            "duration": 1.938802083333334,
+            "midi_note": 70,
+            "velocity": 51,
+            "event_id": "gt_00002"
+          }
+        ],
+        [
+          {
+            "onset_time": 1.8359940757751465,
+            "offset_time": 3.1587190794944764,
+            "midi_note": 61,
+            "velocity": 37,
+            "note_value_class": 4,
+            "note_value_confidence": 0.22411277890205383,
+            "note_value_name": "quarter",
+            "event_id": "full_00003"
+          },
+          {
+            "onset_time": 1.838541666666666,
+            "offset_time": 3.7421875,
+            "duration": 1.903645833333334,
+            "midi_note": 61,
+            "velocity": 35,
+            "event_id": "gt_00003"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.3575901055335997,
+            "offset_time": 2.9453315596580505,
+            "midi_note": 69,
+            "velocity": 56,
+            "note_value_class": 3,
+            "note_value_confidence": 0.20570020377635956,
+            "note_value_name": "dotted_eighth",
+            "event_id": "full_00004"
+          },
+          {
+            "onset_time": 2.36328125,
+            "offset_time": 3.7421875,
+            "duration": 1.37890625,
+            "midi_note": 69,
+            "velocity": 54,
+            "event_id": "gt_00004"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.3642967636585235,
+            "offset_time": 3.1751818070411684,
+            "midi_note": 65,
+            "velocity": 43,
+            "note_value_class": 4,
+            "note_value_confidence": 0.29184699058532715,
+            "note_value_name": "quarter",
+            "event_id": "full_00005"
+          },
+          {
+            "onset_time": 2.369791666666666,
+            "offset_time": 3.7421875,
+            "duration": 1.372395833333334,
+            "midi_note": 65,
+            "velocity": 42,
+            "event_id": "gt_00005"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.893024766921997,
+            "offset_time": 3.5972799739837646,
+            "midi_note": 68,
+            "velocity": 70,
+            "note_value_class": 0,
+            "note_value_confidence": 0.21670621633529663,
+            "note_value_name": "32nd",
+            "event_id": "full_00006"
+          },
+          {
+            "onset_time": 2.890625,
+            "offset_time": 3.7421875,
+            "duration": 0.8515625,
+            "midi_note": 68,
+            "velocity": 66,
+            "event_id": "gt_00006"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.9068160462379455,
+            "offset_time": 3.7396312198638917,
+            "midi_note": 59,
+            "velocity": 44,
+            "note_value_class": 6,
+            "note_value_confidence": 0.30449849367141724,
+            "note_value_name": "half",
+            "event_id": "full_00007"
+          },
+          {
+            "onset_time": 2.91015625,
+            "offset_time": 3.7421875,
+            "duration": 0.83203125,
+            "midi_note": 59,
+            "velocity": 38,
+            "event_id": "gt_00007"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.6285789058208464,
+            "offset_time": 5.784799489021301,
+            "midi_note": 71,
+            "velocity": 53,
+            "note_value_class": 4,
+            "note_value_confidence": 0.22271452844142914,
+            "note_value_name": "quarter",
+            "event_id": "full_00008"
+          },
+          {
+            "onset_time": 3.631510416666666,
+            "offset_time": 6.0,
+            "duration": 2.368489583333334,
+            "midi_note": 71,
+            "velocity": 58,
+            "event_id": "gt_00008"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.635976172208786,
+            "offset_time": 6.016,
+            "midi_note": 67,
+            "velocity": 44,
+            "note_value_class": 0,
+            "note_value_confidence": 0.2168949544429779,
+            "note_value_name": "32nd",
+            "event_id": "full_00009"
+          },
+          {
+            "onset_time": 3.641927083333332,
+            "offset_time": 6.0,
+            "duration": 2.358072916666668,
+            "midi_note": 67,
+            "velocity": 49,
+            "event_id": "gt_00009"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.672375994205475,
+            "offset_time": 4.334486589431763,
+            "midi_note": 65,
+            "velocity": 45,
+            "note_value_class": 4,
+            "note_value_confidence": 0.2727717459201813,
+            "note_value_name": "quarter",
+            "event_id": "full_00010"
+          },
+          {
+            "onset_time": 3.674479166666666,
+            "offset_time": 4.2734375,
+            "duration": 0.5989583333333339,
+            "midi_note": 65,
+            "velocity": 44,
+            "event_id": "gt_00010"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.697605625629425,
+            "offset_time": 4.819487612009048,
+            "midi_note": 61,
+            "velocity": 38,
+            "note_value_class": 4,
+            "note_value_confidence": 0.2340077906847,
+            "note_value_name": "quarter",
+            "event_id": "full_00011"
+          },
+          {
+            "onset_time": 3.697916666666666,
+            "offset_time": 4.860677083333332,
+            "duration": 1.162760416666666,
+            "midi_note": 61,
+            "velocity": 40,
+            "event_id": "gt_00011"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.230490181446076,
+            "offset_time": 4.931555695772171,
+            "midi_note": 64,
+            "velocity": 49,
+            "note_value_class": 4,
+            "note_value_confidence": 0.32192644476890564,
+            "note_value_name": "quarter",
+            "event_id": "full_00012"
+          },
+          {
+            "onset_time": 4.23828125,
+            "offset_time": 4.940104166666666,
+            "duration": 0.7018229166666661,
+            "midi_note": 64,
+            "velocity": 45,
+            "event_id": "gt_00012"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.26029133605957,
+            "offset_time": 5.041301614165306,
+            "midi_note": 55,
+            "velocity": 35,
+            "note_value_class": 4,
+            "note_value_confidence": 0.3377048075199127,
+            "note_value_name": "quarter",
+            "event_id": "full_00013"
+          },
+          {
+            "onset_time": 4.266927083333332,
+            "offset_time": 4.912760416666666,
+            "duration": 0.6458333333333339,
+            "midi_note": 55,
+            "velocity": 36,
+            "event_id": "gt_00013"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.82848910355568,
+            "offset_time": 5.535962844848633,
+            "midi_note": 63,
+            "velocity": 45,
+            "note_value_class": 4,
+            "note_value_confidence": 0.266619473695755,
+            "note_value_name": "quarter",
+            "event_id": "full_00014"
+          },
+          {
+            "onset_time": 4.829427083333332,
+            "offset_time": 5.524739583333332,
+            "duration": 0.6953125,
+            "midi_note": 63,
+            "velocity": 44,
+            "event_id": "gt_00014"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.841737613201142,
+            "offset_time": 5.710078242301941,
+            "midi_note": 59,
+            "velocity": 36,
+            "note_value_class": 3,
+            "note_value_confidence": 0.24524061381816864,
+            "note_value_name": "dotted_eighth",
+            "event_id": "full_00015"
+          },
+          {
+            "onset_time": 4.846354166666666,
+            "offset_time": 5.68359375,
+            "duration": 0.8372395833333339,
+            "midi_note": 59,
+            "velocity": 34,
+            "event_id": "gt_00015"
+          }
+        ],
+        [
+          {
+            "onset_time": 5.487254565954209,
+            "offset_time": 6.016,
+            "midi_note": 62,
+            "velocity": 34,
+            "note_value_class": 0,
+            "note_value_confidence": 0.1610407829284668,
+            "note_value_name": "32nd",
+            "event_id": "full_00016"
+          },
+          {
+            "onset_time": 5.4921875,
+            "offset_time": 6.0,
+            "duration": 0.5078125,
+            "midi_note": 62,
+            "velocity": 31,
+            "event_id": "gt_00016"
+          }
+        ],
+        [
+          {
+            "onset_time": 5.522876365184784,
+            "offset_time": 6.016,
+            "midi_note": 53,
+            "velocity": 38,
+            "note_value_class": 2,
+            "note_value_confidence": 0.24293926358222961,
+            "note_value_name": "eighth",
+            "event_id": "full_00017"
+          },
+          {
+            "onset_time": 5.528645833333332,
+            "offset_time": 6.0,
+            "duration": 0.47135416666666785,
+            "midi_note": 53,
+            "velocity": 27,
+            "event_id": "gt_00017"
+          }
+        ]
+      ]
+    },
+    "chunked_vs_gt": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "matched": 18,
+      "predicted": 18,
+      "ground_truth": 18,
+      "rhythm_matched": 3,
+      "rhythm_precision": 0.16666666666666666,
+      "matched_pairs": [
+        [
+          {
+            "onset_time": 0.8496712177637753,
+            "offset_time": 0.9880736552122769,
+            "midi_note": 61,
+            "velocity": 44,
+            "note_value_class": 2,
+            "note_value_confidence": 0.5045013427734375,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 1,
+            "chunk_local_onset_sec": 0.34255103635787965,
+            "event_id": "chunk_00000"
+          },
+          {
+            "onset_time": 0.8515625,
+            "offset_time": 3.7421875,
+            "duration": 2.890625,
+            "midi_note": 61,
+            "velocity": 39,
+            "event_id": "gt_00000"
+          }
+        ],
+        [
+          {
+            "onset_time": 0.853127877557629,
+            "offset_time": 1.017629887903088,
+            "midi_note": 65,
+            "velocity": 38,
+            "note_value_class": 2,
+            "note_value_confidence": 0.5397664308547974,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 1,
+            "chunk_local_onset_sec": 0.3460076961517334,
+            "event_id": "chunk_00001"
+          },
+          {
+            "onset_time": 0.852864583333333,
+            "offset_time": 3.7421875,
+            "duration": 2.889322916666667,
+            "midi_note": 65,
+            "velocity": 36,
+            "event_id": "gt_00001"
+          }
+        ],
+        [
+          {
+            "onset_time": 1.8038632969502149,
+            "offset_time": 2.4111201814058956,
+            "midi_note": 70,
+            "velocity": 53,
+            "note_value_class": 0,
+            "note_value_confidence": 0.3814683258533478,
+            "note_value_name": "32nd",
+            "source_chunk_idx": 3,
+            "chunk_local_onset_sec": 0.09674311554431915,
+            "event_id": "chunk_00002"
+          },
+          {
+            "onset_time": 1.803385416666666,
+            "offset_time": 3.7421875,
+            "duration": 1.938802083333334,
+            "midi_note": 70,
+            "velocity": 51,
+            "event_id": "gt_00002"
+          }
+        ],
+        [
+          {
+            "onset_time": 1.838451302850598,
+            "offset_time": 2.0880940936449703,
+            "midi_note": 61,
+            "velocity": 38,
+            "note_value_class": 3,
+            "note_value_confidence": 0.4078833758831024,
+            "note_value_name": "dotted_eighth",
+            "source_chunk_idx": 3,
+            "chunk_local_onset_sec": 0.13133112144470216,
+            "event_id": "chunk_00003"
+          },
+          {
+            "onset_time": 1.838541666666666,
+            "offset_time": 3.7421875,
+            "duration": 1.903645833333334,
+            "midi_note": 61,
+            "velocity": 35,
+            "event_id": "gt_00003"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.3534328273180662,
+            "offset_time": 2.4111201814058956,
+            "midi_note": 69,
+            "velocity": 57,
+            "note_value_class": 0,
+            "note_value_confidence": 0.20756447315216064,
+            "note_value_name": "32nd",
+            "source_chunk_idx": 3,
+            "chunk_local_onset_sec": 0.6463126459121704,
+            "event_id": "chunk_00004"
+          },
+          {
+            "onset_time": 2.36328125,
+            "offset_time": 3.7421875,
+            "duration": 1.37890625,
+            "midi_note": 69,
+            "velocity": 54,
+            "event_id": "gt_00004"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.3665934620741544,
+            "offset_time": 2.4111201814058956,
+            "midi_note": 65,
+            "velocity": 43,
+            "note_value_class": 0,
+            "note_value_confidence": 0.16647861897945404,
+            "note_value_name": "32nd",
+            "source_chunk_idx": 3,
+            "chunk_local_onset_sec": 0.6594732806682587,
+            "event_id": "chunk_00005"
+          },
+          {
+            "onset_time": 2.369791666666666,
+            "offset_time": 3.7421875,
+            "duration": 1.372395833333334,
+            "midi_note": 65,
+            "velocity": 42,
+            "event_id": "gt_00005"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.8930982139948545,
+            "offset_time": 3.0111201814058957,
+            "midi_note": 68,
+            "velocity": 71,
+            "note_value_class": 1,
+            "note_value_confidence": 0.337891548871994,
+            "note_value_name": "16th",
+            "source_chunk_idx": 4,
+            "chunk_local_onset_sec": 0.5859780325889588,
+            "event_id": "chunk_00006"
+          },
+          {
+            "onset_time": 2.890625,
+            "offset_time": 3.7421875,
+            "duration": 0.8515625,
+            "midi_note": 68,
+            "velocity": 66,
+            "event_id": "gt_00006"
+          }
+        ],
+        [
+          {
+            "onset_time": 2.9089340651873288,
+            "offset_time": 3.0111201814058957,
+            "midi_note": 59,
+            "velocity": 41,
+            "note_value_class": 5,
+            "note_value_confidence": 0.17183171212673187,
+            "note_value_name": "dotted_quarter",
+            "source_chunk_idx": 4,
+            "chunk_local_onset_sec": 0.6018138837814331,
+            "event_id": "chunk_00007"
+          },
+          {
+            "onset_time": 2.91015625,
+            "offset_time": 3.7421875,
+            "duration": 0.83203125,
+            "midi_note": 59,
+            "velocity": 38,
+            "event_id": "gt_00007"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.6279372099283873,
+            "offset_time": 4.072937949979657,
+            "midi_note": 71,
+            "velocity": 64,
+            "note_value_class": 2,
+            "note_value_confidence": 0.3042268455028534,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 6,
+            "chunk_local_onset_sec": 0.12081702852249146,
+            "event_id": "chunk_00008"
+          },
+          {
+            "onset_time": 3.631510416666666,
+            "offset_time": 6.0,
+            "duration": 2.368489583333334,
+            "midi_note": 71,
+            "velocity": 58,
+            "event_id": "gt_00008"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.637505101526135,
+            "offset_time": 3.9945073326471983,
+            "midi_note": 67,
+            "velocity": 49,
+            "note_value_class": 0,
+            "note_value_confidence": 0.2578572630882263,
+            "note_value_name": "32nd",
+            "source_chunk_idx": 6,
+            "chunk_local_onset_sec": 0.13038492012023925,
+            "event_id": "chunk_00009"
+          },
+          {
+            "onset_time": 3.641927083333332,
+            "offset_time": 6.0,
+            "duration": 2.358072916666668,
+            "midi_note": 67,
+            "velocity": 49,
+            "event_id": "gt_00009"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.672487772786969,
+            "offset_time": 4.211120181405896,
+            "midi_note": 65,
+            "velocity": 48,
+            "note_value_class": 2,
+            "note_value_confidence": 0.278916597366333,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 6,
+            "chunk_local_onset_sec": 0.16536759138107301,
+            "event_id": "chunk_00010"
+          },
+          {
+            "onset_time": 3.674479166666666,
+            "offset_time": 4.2734375,
+            "duration": 0.5989583333333339,
+            "midi_note": 65,
+            "velocity": 44,
+            "event_id": "gt_00010"
+          }
+        ],
+        [
+          {
+            "onset_time": 3.698048366272801,
+            "offset_time": 4.07118746789729,
+            "midi_note": 61,
+            "velocity": 44,
+            "note_value_class": 2,
+            "note_value_confidence": 0.2798740863800049,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 6,
+            "chunk_local_onset_sec": 0.19092818486690522,
+            "event_id": "chunk_00011"
+          },
+          {
+            "onset_time": 3.697916666666666,
+            "offset_time": 4.860677083333332,
+            "duration": 1.162760416666666,
+            "midi_note": 61,
+            "velocity": 40,
+            "event_id": "gt_00011"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.232139677608365,
+            "offset_time": 4.75347000488078,
+            "midi_note": 64,
+            "velocity": 47,
+            "note_value_class": 4,
+            "note_value_confidence": 0.25888046622276306,
+            "note_value_name": "quarter",
+            "source_chunk_idx": 7,
+            "chunk_local_onset_sec": 0.12501949620246888,
+            "event_id": "chunk_00012"
+          },
+          {
+            "onset_time": 4.23828125,
+            "offset_time": 4.940104166666666,
+            "duration": 0.7018229166666661,
+            "midi_note": 64,
+            "velocity": 45,
+            "event_id": "gt_00012"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.264154333913678,
+            "offset_time": 4.623547072255963,
+            "midi_note": 55,
+            "velocity": 35,
+            "note_value_class": 2,
+            "note_value_confidence": 0.337871789932251,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 7,
+            "chunk_local_onset_sec": 0.157034152507782,
+            "event_id": "chunk_00013"
+          },
+          {
+            "onset_time": 4.266927083333332,
+            "offset_time": 4.912760416666666,
+            "duration": 0.6458333333333339,
+            "midi_note": 55,
+            "velocity": 36,
+            "event_id": "gt_00013"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.827579558217876,
+            "offset_time": 5.1851245978716545,
+            "midi_note": 63,
+            "velocity": 51,
+            "note_value_class": 4,
+            "note_value_confidence": 0.350857138633728,
+            "note_value_name": "quarter",
+            "source_chunk_idx": 8,
+            "chunk_local_onset_sec": 0.1204593768119812,
+            "event_id": "chunk_00014"
+          },
+          {
+            "onset_time": 4.829427083333332,
+            "offset_time": 5.524739583333332,
+            "duration": 0.6953125,
+            "midi_note": 63,
+            "velocity": 44,
+            "event_id": "gt_00014"
+          }
+        ],
+        [
+          {
+            "onset_time": 4.841652942979687,
+            "offset_time": 5.162310576284283,
+            "midi_note": 59,
+            "velocity": 42,
+            "note_value_class": 3,
+            "note_value_confidence": 0.29302269220352173,
+            "note_value_name": "dotted_eighth",
+            "source_chunk_idx": 8,
+            "chunk_local_onset_sec": 0.13453276157379152,
+            "event_id": "chunk_00015"
+          },
+          {
+            "onset_time": 4.846354166666666,
+            "offset_time": 5.68359375,
+            "duration": 0.8372395833333339,
+            "midi_note": 59,
+            "velocity": 34,
+            "event_id": "gt_00015"
+          }
+        ],
+        [
+          {
+            "onset_time": 5.4865372949484525,
+            "offset_time": 6.011120181405896,
+            "midi_note": 62,
+            "velocity": 37,
+            "note_value_class": 2,
+            "note_value_confidence": 0.2635422646999359,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 9,
+            "chunk_local_onset_sec": 0.17941711354255677,
+            "event_id": "chunk_00016"
+          },
+          {
+            "onset_time": 5.4921875,
+            "offset_time": 6.0,
+            "duration": 0.5078125,
+            "midi_note": 62,
+            "velocity": 31,
+            "event_id": "gt_00016"
+          }
+        ],
+        [
+          {
+            "onset_time": 5.52098822387492,
+            "offset_time": 6.011120181405896,
+            "midi_note": 53,
+            "velocity": 40,
+            "note_value_class": 2,
+            "note_value_confidence": 0.2637401819229126,
+            "note_value_name": "eighth",
+            "source_chunk_idx": 9,
+            "chunk_local_onset_sec": 0.21386804246902466,
+            "event_id": "chunk_00017"
+          },
+          {
+            "onset_time": 5.528645833333332,
+            "offset_time": 6.0,
+            "duration": 0.47135416666666785,
+            "midi_note": 53,
+            "velocity": 27,
+            "event_id": "gt_00017"
+          }
+        ]
+      ]
+    }
+  },
+  "boundary_analysis": {
+    "full_only": {
+      "count": 1,
+      "median_ms": 14.795955777167968,
+      "within_50ms": 1,
+      "within_100ms": 1,
+      "within_200ms": 1
+    },
+    "chunk_only": {
+      "count": 0,
+      "median_ms": null,
+      "within_50ms": 0,
+      "within_100ms": 0,
+      "within_200ms": 0
+    }
+  },
+  "difference_summary": {
+    "matched_full_notes": 18,
+    "missed_by_chunking": 1,
+    "chunk_only_extras": 0,
+    "missed_by_chunking_gt_supported": 0,
+    "chunk_only_gt_supported": 0
+  },
+  "chunk_reports": [
+    {
+      "chunk_idx": 0,
+      "chunk_start_sec": 0.0,
+      "chunk_end_sec": 0.6,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6,
+      "overlap_sec": 0.0,
+      "raw_events": 1,
+      "dropped_boundary_micro": 1,
+      "dropped_overlap": 0,
+      "kept_events": 0
+    },
+    {
+      "chunk_idx": 1,
+      "chunk_start_sec": 0.6,
+      "chunk_end_sec": 1.2,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 2,
+      "dropped_boundary_micro": 0,
+      "dropped_overlap": 0,
+      "kept_events": 2
+    },
+    {
+      "chunk_idx": 2,
+      "chunk_start_sec": 1.2,
+      "chunk_end_sec": 1.8,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 1,
+      "dropped_boundary_micro": 1,
+      "dropped_overlap": 0,
+      "kept_events": 0
+    },
+    {
+      "chunk_idx": 3,
+      "chunk_start_sec": 1.8,
+      "chunk_end_sec": 2.4,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 4,
+      "dropped_boundary_micro": 0,
+      "dropped_overlap": 0,
+      "kept_events": 4
+    },
+    {
+      "chunk_idx": 4,
+      "chunk_start_sec": 2.4,
+      "chunk_end_sec": 3.0,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 4,
+      "dropped_boundary_micro": 0,
+      "dropped_overlap": 2,
+      "kept_events": 2
+    },
+    {
+      "chunk_idx": 5,
+      "chunk_start_sec": 3.0,
+      "chunk_end_sec": 3.6,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 1,
+      "dropped_boundary_micro": 1,
+      "dropped_overlap": 0,
+      "kept_events": 0
+    },
+    {
+      "chunk_idx": 6,
+      "chunk_start_sec": 3.6,
+      "chunk_end_sec": 4.2,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 5,
+      "dropped_boundary_micro": 1,
+      "dropped_overlap": 0,
+      "kept_events": 4
+    },
+    {
+      "chunk_idx": 7,
+      "chunk_start_sec": 4.2,
+      "chunk_end_sec": 4.8,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 5,
+      "dropped_boundary_micro": 3,
+      "dropped_overlap": 0,
+      "kept_events": 2
+    },
+    {
+      "chunk_idx": 8,
+      "chunk_start_sec": 4.8,
+      "chunk_end_sec": 5.4,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 5,
+      "dropped_boundary_micro": 3,
+      "dropped_overlap": 0,
+      "kept_events": 2
+    },
+    {
+      "chunk_idx": 9,
+      "chunk_start_sec": 5.4,
+      "chunk_end_sec": 6.0,
+      "chunk_duration_sec": 0.6,
+      "analysis_window_sec": 0.6929,
+      "overlap_sec": 0.0929,
+      "raw_events": 3,
+      "dropped_boundary_micro": 1,
+      "dropped_overlap": 0,
+      "kept_events": 2
+    }
+  ],
+  "missed_by_chunking": [
+    {
+      "event_id": "full_00018",
+      "onset_time": 5.9852,
+      "offset_time": 6.016,
+      "duration_ms": 30.8,
+      "midi_note": 43,
+      "note_name": "G2",
+      "velocity": 39,
+      "nearest_chunk_boundary_ms": 14.8,
+      "source_chunk_idx": null,
+      "chunk_local_onset_sec": null,
+      "matches_ground_truth": false
+    }
+  ],
+  "chunk_only_extras": [],
+  "top_matches": [
+    {
+      "pred_id": "chunk_00000",
+      "ref_id": "full_00000",
+      "pred": {
+        "onset_time": 0.8496712177637753,
+        "offset_time": 0.9880736552122769,
+        "midi_note": 61,
+        "velocity": 44,
+        "note_value_class": 2,
+        "note_value_confidence": 0.5045013427734375,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 1,
+        "chunk_local_onset_sec": 0.34255103635787965,
+        "event_id": "chunk_00000"
+      },
+      "ref": {
+        "onset_time": 0.852372540473938,
+        "offset_time": 1.5515469913482667,
+        "midi_note": 61,
+        "velocity": 33,
+        "note_value_class": 5,
+        "note_value_confidence": 0.33654990792274475,
+        "note_value_name": "dotted_quarter",
+        "event_id": "full_00000"
+      },
+      "onset_diff_sec": 0.002701322710162657,
+      "offset_diff_sec": 0.5634733361359898
+    },
+    {
+      "pred_id": "chunk_00001",
+      "ref_id": "full_00001",
+      "pred": {
+        "onset_time": 0.853127877557629,
+        "offset_time": 1.017629887903088,
+        "midi_note": 65,
+        "velocity": 38,
+        "note_value_class": 2,
+        "note_value_confidence": 0.5397664308547974,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 1,
+        "chunk_local_onset_sec": 0.3460076961517334,
+        "event_id": "chunk_00001"
+      },
+      "ref": {
+        "onset_time": 0.8550856318473816,
+        "offset_time": 2.049416092634201,
+        "midi_note": 65,
+        "velocity": 36,
+        "note_value_class": 4,
+        "note_value_confidence": 0.21516692638397217,
+        "note_value_name": "quarter",
+        "event_id": "full_00001"
+      },
+      "onset_diff_sec": 0.0019577542897526445,
+      "offset_diff_sec": 1.031786204731113
+    },
+    {
+      "pred_id": "chunk_00002",
+      "ref_id": "full_00002",
+      "pred": {
+        "onset_time": 1.8038632969502149,
+        "offset_time": 2.4111201814058956,
+        "midi_note": 70,
+        "velocity": 53,
+        "note_value_class": 0,
+        "note_value_confidence": 0.3814683258533478,
+        "note_value_name": "32nd",
+        "source_chunk_idx": 3,
+        "chunk_local_onset_sec": 0.09674311554431915,
+        "event_id": "chunk_00002"
+      },
+      "ref": {
+        "onset_time": 1.801735020160675,
+        "offset_time": 2.5201639499664306,
+        "midi_note": 70,
+        "velocity": 49,
+        "note_value_class": 0,
+        "note_value_confidence": 0.2621678113937378,
+        "note_value_name": "32nd",
+        "event_id": "full_00002"
+      },
+      "onset_diff_sec": 0.0021282767895398624,
+      "offset_diff_sec": 0.10904376856053499
+    },
+    {
+      "pred_id": "chunk_00003",
+      "ref_id": "full_00003",
+      "pred": {
+        "onset_time": 1.838451302850598,
+        "offset_time": 2.0880940936449703,
+        "midi_note": 61,
+        "velocity": 38,
+        "note_value_class": 3,
+        "note_value_confidence": 0.4078833758831024,
+        "note_value_name": "dotted_eighth",
+        "source_chunk_idx": 3,
+        "chunk_local_onset_sec": 0.13133112144470216,
+        "event_id": "chunk_00003"
+      },
+      "ref": {
+        "onset_time": 1.8359940757751465,
+        "offset_time": 3.1587190794944764,
+        "midi_note": 61,
+        "velocity": 37,
+        "note_value_class": 4,
+        "note_value_confidence": 0.22411277890205383,
+        "note_value_name": "quarter",
+        "event_id": "full_00003"
+      },
+      "onset_diff_sec": 0.0024572270754514847,
+      "offset_diff_sec": 1.070624985849506
+    },
+    {
+      "pred_id": "chunk_00004",
+      "ref_id": "full_00004",
+      "pred": {
+        "onset_time": 2.3534328273180662,
+        "offset_time": 2.4111201814058956,
+        "midi_note": 69,
+        "velocity": 57,
+        "note_value_class": 0,
+        "note_value_confidence": 0.20756447315216064,
+        "note_value_name": "32nd",
+        "source_chunk_idx": 3,
+        "chunk_local_onset_sec": 0.6463126459121704,
+        "event_id": "chunk_00004"
+      },
+      "ref": {
+        "onset_time": 2.3575901055335997,
+        "offset_time": 2.9453315596580505,
+        "midi_note": 69,
+        "velocity": 56,
+        "note_value_class": 3,
+        "note_value_confidence": 0.20570020377635956,
+        "note_value_name": "dotted_eighth",
+        "event_id": "full_00004"
+      },
+      "onset_diff_sec": 0.0041572782155334664,
+      "offset_diff_sec": 0.5342113782521549
+    },
+    {
+      "pred_id": "chunk_00005",
+      "ref_id": "full_00005",
+      "pred": {
+        "onset_time": 2.3665934620741544,
+        "offset_time": 2.4111201814058956,
+        "midi_note": 65,
+        "velocity": 43,
+        "note_value_class": 0,
+        "note_value_confidence": 0.16647861897945404,
+        "note_value_name": "32nd",
+        "source_chunk_idx": 3,
+        "chunk_local_onset_sec": 0.6594732806682587,
+        "event_id": "chunk_00005"
+      },
+      "ref": {
+        "onset_time": 2.3642967636585235,
+        "offset_time": 3.1751818070411684,
+        "midi_note": 65,
+        "velocity": 43,
+        "note_value_class": 4,
+        "note_value_confidence": 0.29184699058532715,
+        "note_value_name": "quarter",
+        "event_id": "full_00005"
+      },
+      "onset_diff_sec": 0.00229669841563096,
+      "offset_diff_sec": 0.7640616256352728
+    },
+    {
+      "pred_id": "chunk_00006",
+      "ref_id": "full_00006",
+      "pred": {
+        "onset_time": 2.8930982139948545,
+        "offset_time": 3.0111201814058957,
+        "midi_note": 68,
+        "velocity": 71,
+        "note_value_class": 1,
+        "note_value_confidence": 0.337891548871994,
+        "note_value_name": "16th",
+        "source_chunk_idx": 4,
+        "chunk_local_onset_sec": 0.5859780325889588,
+        "event_id": "chunk_00006"
+      },
+      "ref": {
+        "onset_time": 2.893024766921997,
+        "offset_time": 3.5972799739837646,
+        "midi_note": 68,
+        "velocity": 70,
+        "note_value_class": 0,
+        "note_value_confidence": 0.21670621633529663,
+        "note_value_name": "32nd",
+        "event_id": "full_00006"
+      },
+      "onset_diff_sec": 7.344707285739105e-05,
+      "offset_diff_sec": 0.586159792577869
+    },
+    {
+      "pred_id": "chunk_00007",
+      "ref_id": "full_00007",
+      "pred": {
+        "onset_time": 2.9089340651873288,
+        "offset_time": 3.0111201814058957,
+        "midi_note": 59,
+        "velocity": 41,
+        "note_value_class": 5,
+        "note_value_confidence": 0.17183171212673187,
+        "note_value_name": "dotted_quarter",
+        "source_chunk_idx": 4,
+        "chunk_local_onset_sec": 0.6018138837814331,
+        "event_id": "chunk_00007"
+      },
+      "ref": {
+        "onset_time": 2.9068160462379455,
+        "offset_time": 3.7396312198638917,
+        "midi_note": 59,
+        "velocity": 44,
+        "note_value_class": 6,
+        "note_value_confidence": 0.30449849367141724,
+        "note_value_name": "half",
+        "event_id": "full_00007"
+      },
+      "onset_diff_sec": 0.002118018949383238,
+      "offset_diff_sec": 0.728511038457996
+    },
+    {
+      "pred_id": "chunk_00008",
+      "ref_id": "full_00008",
+      "pred": {
+        "onset_time": 3.6279372099283873,
+        "offset_time": 4.072937949979657,
+        "midi_note": 71,
+        "velocity": 64,
+        "note_value_class": 2,
+        "note_value_confidence": 0.3042268455028534,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 6,
+        "chunk_local_onset_sec": 0.12081702852249146,
+        "event_id": "chunk_00008"
+      },
+      "ref": {
+        "onset_time": 3.6285789058208464,
+        "offset_time": 5.784799489021301,
+        "midi_note": 71,
+        "velocity": 53,
+        "note_value_class": 4,
+        "note_value_confidence": 0.22271452844142914,
+        "note_value_name": "quarter",
+        "event_id": "full_00008"
+      },
+      "onset_diff_sec": 0.0006416958924591043,
+      "offset_diff_sec": 1.711861539041644
+    },
+    {
+      "pred_id": "chunk_00009",
+      "ref_id": "full_00009",
+      "pred": {
+        "onset_time": 3.637505101526135,
+        "offset_time": 3.9945073326471983,
+        "midi_note": 67,
+        "velocity": 49,
+        "note_value_class": 0,
+        "note_value_confidence": 0.2578572630882263,
+        "note_value_name": "32nd",
+        "source_chunk_idx": 6,
+        "chunk_local_onset_sec": 0.13038492012023925,
+        "event_id": "chunk_00009"
+      },
+      "ref": {
+        "onset_time": 3.635976172208786,
+        "offset_time": 6.016,
+        "midi_note": 67,
+        "velocity": 44,
+        "note_value_class": 0,
+        "note_value_confidence": 0.2168949544429779,
+        "note_value_name": "32nd",
+        "event_id": "full_00009"
+      },
+      "onset_diff_sec": 0.001528929317348826,
+      "offset_diff_sec": 2.0214926673528018
+    },
+    {
+      "pred_id": "chunk_00010",
+      "ref_id": "full_00010",
+      "pred": {
+        "onset_time": 3.672487772786969,
+        "offset_time": 4.211120181405896,
+        "midi_note": 65,
+        "velocity": 48,
+        "note_value_class": 2,
+        "note_value_confidence": 0.278916597366333,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 6,
+        "chunk_local_onset_sec": 0.16536759138107301,
+        "event_id": "chunk_00010"
+      },
+      "ref": {
+        "onset_time": 3.672375994205475,
+        "offset_time": 4.334486589431763,
+        "midi_note": 65,
+        "velocity": 45,
+        "note_value_class": 4,
+        "note_value_confidence": 0.2727717459201813,
+        "note_value_name": "quarter",
+        "event_id": "full_00010"
+      },
+      "onset_diff_sec": 0.0001117785814939154,
+      "offset_diff_sec": 0.12336640802586718
+    },
+    {
+      "pred_id": "chunk_00011",
+      "ref_id": "full_00011",
+      "pred": {
+        "onset_time": 3.698048366272801,
+        "offset_time": 4.07118746789729,
+        "midi_note": 61,
+        "velocity": 44,
+        "note_value_class": 2,
+        "note_value_confidence": 0.2798740863800049,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 6,
+        "chunk_local_onset_sec": 0.19092818486690522,
+        "event_id": "chunk_00011"
+      },
+      "ref": {
+        "onset_time": 3.697605625629425,
+        "offset_time": 4.819487612009048,
+        "midi_note": 61,
+        "velocity": 38,
+        "note_value_class": 4,
+        "note_value_confidence": 0.2340077906847,
+        "note_value_name": "quarter",
+        "event_id": "full_00011"
+      },
+      "onset_diff_sec": 0.00044274064337601615,
+      "offset_diff_sec": 0.7483001441117585
+    },
+    {
+      "pred_id": "chunk_00012",
+      "ref_id": "full_00012",
+      "pred": {
+        "onset_time": 4.232139677608365,
+        "offset_time": 4.75347000488078,
+        "midi_note": 64,
+        "velocity": 47,
+        "note_value_class": 4,
+        "note_value_confidence": 0.25888046622276306,
+        "note_value_name": "quarter",
+        "source_chunk_idx": 7,
+        "chunk_local_onset_sec": 0.12501949620246888,
+        "event_id": "chunk_00012"
+      },
+      "ref": {
+        "onset_time": 4.230490181446076,
+        "offset_time": 4.931555695772171,
+        "midi_note": 64,
+        "velocity": 49,
+        "note_value_class": 4,
+        "note_value_confidence": 0.32192644476890564,
+        "note_value_name": "quarter",
+        "event_id": "full_00012"
+      },
+      "onset_diff_sec": 0.0016494961622894877,
+      "offset_diff_sec": 0.1780856908913906
+    },
+    {
+      "pred_id": "chunk_00013",
+      "ref_id": "full_00013",
+      "pred": {
+        "onset_time": 4.264154333913678,
+        "offset_time": 4.623547072255963,
+        "midi_note": 55,
+        "velocity": 35,
+        "note_value_class": 2,
+        "note_value_confidence": 0.337871789932251,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 7,
+        "chunk_local_onset_sec": 0.157034152507782,
+        "event_id": "chunk_00013"
+      },
+      "ref": {
+        "onset_time": 4.26029133605957,
+        "offset_time": 5.041301614165306,
+        "midi_note": 55,
+        "velocity": 35,
+        "note_value_class": 4,
+        "note_value_confidence": 0.3377048075199127,
+        "note_value_name": "quarter",
+        "event_id": "full_00013"
+      },
+      "onset_diff_sec": 0.003862997854107597,
+      "offset_diff_sec": 0.4177545419093427
+    },
+    {
+      "pred_id": "chunk_00014",
+      "ref_id": "full_00014",
+      "pred": {
+        "onset_time": 4.827579558217876,
+        "offset_time": 5.1851245978716545,
+        "midi_note": 63,
+        "velocity": 51,
+        "note_value_class": 4,
+        "note_value_confidence": 0.350857138633728,
+        "note_value_name": "quarter",
+        "source_chunk_idx": 8,
+        "chunk_local_onset_sec": 0.1204593768119812,
+        "event_id": "chunk_00014"
+      },
+      "ref": {
+        "onset_time": 4.82848910355568,
+        "offset_time": 5.535962844848633,
+        "midi_note": 63,
+        "velocity": 45,
+        "note_value_class": 4,
+        "note_value_confidence": 0.266619473695755,
+        "note_value_name": "quarter",
+        "event_id": "full_00014"
+      },
+      "onset_diff_sec": 0.000909545337803408,
+      "offset_diff_sec": 0.35083824697697885
+    },
+    {
+      "pred_id": "chunk_00015",
+      "ref_id": "full_00015",
+      "pred": {
+        "onset_time": 4.841652942979687,
+        "offset_time": 5.162310576284283,
+        "midi_note": 59,
+        "velocity": 42,
+        "note_value_class": 3,
+        "note_value_confidence": 0.29302269220352173,
+        "note_value_name": "dotted_eighth",
+        "source_chunk_idx": 8,
+        "chunk_local_onset_sec": 0.13453276157379152,
+        "event_id": "chunk_00015"
+      },
+      "ref": {
+        "onset_time": 4.841737613201142,
+        "offset_time": 5.710078242301941,
+        "midi_note": 59,
+        "velocity": 36,
+        "note_value_class": 3,
+        "note_value_confidence": 0.24524061381816864,
+        "note_value_name": "dotted_eighth",
+        "event_id": "full_00015"
+      },
+      "onset_diff_sec": 8.467022145453029e-05,
+      "offset_diff_sec": 0.5477676660176583
+    },
+    {
+      "pred_id": "chunk_00016",
+      "ref_id": "full_00016",
+      "pred": {
+        "onset_time": 5.4865372949484525,
+        "offset_time": 6.011120181405896,
+        "midi_note": 62,
+        "velocity": 37,
+        "note_value_class": 2,
+        "note_value_confidence": 0.2635422646999359,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 9,
+        "chunk_local_onset_sec": 0.17941711354255677,
+        "event_id": "chunk_00016"
+      },
+      "ref": {
+        "onset_time": 5.487254565954209,
+        "offset_time": 6.016,
+        "midi_note": 62,
+        "velocity": 34,
+        "note_value_class": 0,
+        "note_value_confidence": 0.1610407829284668,
+        "note_value_name": "32nd",
+        "event_id": "full_00016"
+      },
+      "onset_diff_sec": 0.0007172710057563592,
+      "offset_diff_sec": 0.004879818594104357
+    },
+    {
+      "pred_id": "chunk_00017",
+      "ref_id": "full_00017",
+      "pred": {
+        "onset_time": 5.52098822387492,
+        "offset_time": 6.011120181405896,
+        "midi_note": 53,
+        "velocity": 40,
+        "note_value_class": 2,
+        "note_value_confidence": 0.2637401819229126,
+        "note_value_name": "eighth",
+        "source_chunk_idx": 9,
+        "chunk_local_onset_sec": 0.21386804246902466,
+        "event_id": "chunk_00017"
+      },
+      "ref": {
+        "onset_time": 5.522876365184784,
+        "offset_time": 6.016,
+        "midi_note": 53,
+        "velocity": 38,
+        "note_value_class": 2,
+        "note_value_confidence": 0.24293926358222961,
+        "note_value_name": "eighth",
+        "event_id": "full_00017"
+      },
+      "onset_diff_sec": 0.001888141309863478,
+      "offset_diff_sec": 0.004879818594104357
+    }
+  ],
+  "full_gt_missing": [],
+  "chunk_gt_missing": []
+}

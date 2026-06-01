@@ -1,0 +1,480 @@
+{
+  "config": {
+    "split": "test",
+    "pieces": 2,
+    "scan_seconds": 45.0,
+    "clip_seconds": 6.0,
+    "chunk_seconds": 0.6,
+    "step_seconds": 1.0,
+    "min_notes": 8,
+    "categories": [
+      "quiet",
+      "loud",
+      "mixed"
+    ],
+    "clip_ids": [
+      "clip_010"
+    ],
+    "noise_profile": "balanced",
+    "run_retro_correction": true,
+    "retro_window_sec": 0.2,
+    "retro_band_sec": 0.1,
+    "retro_min_confidence": 0.35,
+    "retro_match_onset_tol": 0.05,
+    "retro_boundary_gate": true,
+    "retro_gate_post_confidence": 0.65,
+    "retro_gate_min_activity_ratio": 0.35,
+    "retro_threshold": null,
+    "eval_boundary_band_sec": 0.1,
+    "selection_mode": "manifest",
+    "benchmark_manifest": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2.json"
+  },
+  "clips": {
+    "clip_010": {
+      "clip": {
+        "title": "Etude \"Pour les accords\"",
+        "piece_id": "MIDI-Unprocessed_11_R1_2009_01-05_ORIG_MID--AUDIO_11_R1_2009_11_R1_2009_04_WAV",
+        "audio_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2009\\MIDI-Unprocessed_11_R1_2009_01-05_ORIG_MID--AUDIO_11_R1_2009_11_R1_2009_04_WAV.wav",
+        "midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2009\\MIDI-Unprocessed_11_R1_2009_01-05_ORIG_MID--AUDIO_11_R1_2009_11_R1_2009_04_WAV.midi",
+        "start_sec": 0.0,
+        "end_sec": 6.0,
+        "duration_sec": 6.0,
+        "gt_note_count": 108,
+        "reference_bpm": 120.0,
+        "rms": 0.08201075635066804,
+        "peak": 0.5181884765625,
+        "crest_factor": 6.318542830489076,
+        "rms_std": 0.03885804449240118,
+        "subwindow_count": 30,
+        "selection_features": {
+          "note_density": 18.0,
+          "onset_density": 3.3333333333333335,
+          "onset_event_count": 20,
+          "mean_notes_per_onset": 5.4,
+          "max_notes_per_onset": 8,
+          "ioi_cv": 0.23170884693636012,
+          "boundary_event_count": 6,
+          "boundary_event_rate": 0.3,
+          "long_sustain_rate": 0.0
+        },
+        "clip_id": "clip_010",
+        "selection_rank": 10
+      },
+      "ground_truth_notes": 108,
+      "reference_bpm": 120.0,
+      "control": {
+        "precision": 0.816,
+        "recall": 0.9444444444444444,
+        "f1": 0.8755364806866952,
+        "matched": 102,
+        "predicted": 125,
+        "ground_truth": 108,
+        "rhythm_precision": 1.0,
+        "offset_precision": 0.816,
+        "offset_recall": 0.9444444444444444,
+        "offset_f1": 0.8755364806866952,
+        "offset_matched": 102,
+        "note_value_accuracy": 0.9607843137254902,
+        "note_value_matched": 102,
+        "note_value_avg_beat_error": 0.014705882352941176,
+        "duplicates": 13,
+        "duplicates_per_100_notes": 10.4,
+        "boundary_gt_notes": 34,
+        "boundary_matched_notes": 33,
+        "boundary_missed_notes": 1,
+        "boundary_miss_rate": 0.029411764705882353,
+        "display_snapshot_count": 12,
+        "refinement_snapshot_count": 1,
+        "final_display_note_count": 2,
+        "matched_display_notes": 1,
+        "stabilized_display_notes": 1,
+        "time_to_first_correct_note_ms": 637.375,
+        "algorithmic_time_to_first_correct_note_ms": 628.125,
+        "time_to_visible_median_ms": 637.375,
+        "time_to_visible_p95_ms": 637.375,
+        "algorithmic_time_to_visible_median_ms": 628.125,
+        "algorithmic_time_to_visible_p95_ms": 628.125,
+        "stabilization_latency_median_ms": 3637.6749999999997,
+        "stabilization_latency_p95_ms": 3637.6749999999997,
+        "algorithmic_stabilization_latency_median_ms": 3628.125,
+        "algorithmic_stabilization_latency_p95_ms": 3628.125,
+        "avg_revision_count": 1.0,
+        "max_revision_count": 1.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.616,
+            "recall": 0.7129629629629629,
+            "f1": 0.6609442060085836,
+            "matched": 77,
+            "predicted": 125,
+            "ground_truth": 108,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.784,
+            "recall": 0.9074074074074074,
+            "f1": 0.8412017167381974,
+            "matched": 98,
+            "predicted": 125,
+            "ground_truth": 108,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.816,
+            "recall": 0.9444444444444444,
+            "f1": 0.8755364806866952,
+            "matched": 102,
+            "predicted": 125,
+            "ground_truth": 108,
+            "rhythm_precision": 1.0
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "fixed_baseline": 10
+        },
+        "profile_hit_rate": 0.0,
+        "avg_chunk_total_ms": 11.974,
+        "p95_chunk_total_ms": 16.729999999999997,
+        "avg_real_time_factor": 0.019899999999999998,
+        "selected_thresholds": [
+          0.38
+        ]
+      },
+      "treatment": {
+        "precision": 0.816,
+        "recall": 0.9444444444444444,
+        "f1": 0.8755364806866952,
+        "matched": 102,
+        "predicted": 125,
+        "ground_truth": 108,
+        "rhythm_precision": 1.0,
+        "offset_precision": 0.816,
+        "offset_recall": 0.9444444444444444,
+        "offset_f1": 0.8755364806866952,
+        "offset_matched": 102,
+        "note_value_accuracy": 0.9607843137254902,
+        "note_value_matched": 102,
+        "note_value_avg_beat_error": 0.014705882352941176,
+        "duplicates": 13,
+        "duplicates_per_100_notes": 10.4,
+        "boundary_gt_notes": 34,
+        "boundary_matched_notes": 33,
+        "boundary_missed_notes": 1,
+        "boundary_miss_rate": 0.029411764705882353,
+        "display_snapshot_count": 12,
+        "refinement_snapshot_count": 1,
+        "final_display_note_count": 2,
+        "matched_display_notes": 1,
+        "stabilized_display_notes": 1,
+        "time_to_first_correct_note_ms": 637.875,
+        "algorithmic_time_to_first_correct_note_ms": 628.125,
+        "time_to_visible_median_ms": 637.875,
+        "time_to_visible_p95_ms": 637.875,
+        "algorithmic_time_to_visible_median_ms": 628.125,
+        "algorithmic_time_to_visible_p95_ms": 628.125,
+        "stabilization_latency_median_ms": 3637.4449999999997,
+        "stabilization_latency_p95_ms": 3637.4449999999997,
+        "algorithmic_stabilization_latency_median_ms": 3628.125,
+        "algorithmic_stabilization_latency_p95_ms": 3628.125,
+        "avg_revision_count": 1.0,
+        "max_revision_count": 1.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.616,
+            "recall": 0.7129629629629629,
+            "f1": 0.6609442060085836,
+            "matched": 77,
+            "predicted": 125,
+            "ground_truth": 108,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.784,
+            "recall": 0.9074074074074074,
+            "f1": 0.8412017167381974,
+            "matched": 98,
+            "predicted": 125,
+            "ground_truth": 108,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.816,
+            "recall": 0.9444444444444444,
+            "f1": 0.8755364806866952,
+            "matched": 102,
+            "predicted": 125,
+            "ground_truth": 108,
+            "rhythm_precision": 1.0
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "baseline_nominal": 9,
+          "soft_sparse_recall": 1
+        },
+        "profile_hit_rate": 0.1,
+        "avg_chunk_total_ms": 9.778,
+        "p95_chunk_total_ms": 10.5945,
+        "avg_real_time_factor": 0.016300000000000002,
+        "selected_thresholds": [
+          0.34,
+          0.38
+        ]
+      },
+      "retro_correction": {
+        "precision": 0.8174603174603174,
+        "recall": 0.9537037037037037,
+        "f1": 0.8803418803418803,
+        "matched": 103,
+        "predicted": 126,
+        "ground_truth": 108,
+        "rhythm_precision": 0.9805825242718447,
+        "offset_precision": 0.8015873015873016,
+        "offset_recall": 0.9351851851851852,
+        "offset_f1": 0.8632478632478632,
+        "offset_matched": 101,
+        "note_value_accuracy": 0.883495145631068,
+        "note_value_matched": 103,
+        "note_value_avg_beat_error": 0.043689320388349516,
+        "duplicates": 13,
+        "duplicates_per_100_notes": 10.317460317460318,
+        "boundary_gt_notes": 34,
+        "boundary_matched_notes": 34,
+        "boundary_missed_notes": 0,
+        "boundary_miss_rate": 0.0,
+        "display_snapshot_count": 17,
+        "refinement_snapshot_count": 1,
+        "final_display_note_count": 36,
+        "matched_display_notes": 33,
+        "stabilized_display_notes": 33,
+        "time_to_first_correct_note_ms": 542.6240000000003,
+        "algorithmic_time_to_first_correct_note_ms": 521.0939999999999,
+        "time_to_visible_median_ms": 648.1020000000002,
+        "time_to_visible_p95_ms": 688.8475999999995,
+        "algorithmic_time_to_visible_median_ms": 628.6460000000003,
+        "algorithmic_time_to_visible_p95_ms": 670.5725999999995,
+        "stabilization_latency_median_ms": 655.9140000000001,
+        "stabilization_latency_p95_ms": 695.8789999999997,
+        "algorithmic_stabilization_latency_median_ms": 630.9900000000001,
+        "algorithmic_stabilization_latency_p95_ms": 677.6039999999997,
+        "avg_revision_count": 0.030303030303030304,
+        "max_revision_count": 1.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.6031746031746031,
+            "recall": 0.7037037037037037,
+            "f1": 0.6495726495726495,
+            "matched": 76,
+            "predicted": 126,
+            "ground_truth": 108,
+            "rhythm_precision": 0.9736842105263158
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.7857142857142857,
+            "recall": 0.9166666666666666,
+            "f1": 0.8461538461538461,
+            "matched": 99,
+            "predicted": 126,
+            "ground_truth": 108,
+            "rhythm_precision": 0.9797979797979798
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.8174603174603174,
+            "recall": 0.9537037037037037,
+            "f1": 0.8803418803418803,
+            "matched": 103,
+            "predicted": 126,
+            "ground_truth": 108,
+            "rhythm_precision": 0.9805825242718447
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "retro_correction_seam_v1": 10
+        },
+        "profile_hit_rate": 1.0,
+        "avg_chunk_total_ms": 19.389899999999997,
+        "p95_chunk_total_ms": 25.994699999999998,
+        "avg_real_time_factor": 0.032259833333333335,
+        "selected_thresholds": [
+          0.38
+        ],
+        "selection_stats": {
+          "strategy": "seam_boundary_reanalysis",
+          "baseline_threshold": 0.38,
+          "retro_threshold": 0.38,
+          "retro_window_sec": 0.2,
+          "retro_band_sec": 0.1,
+          "retro_min_confidence": 0.35,
+          "retro_match_onset_tol": 0.05,
+          "retro_boundary_gate": true,
+          "retro_gate_post_confidence": 0.65,
+          "retro_gate_min_activity_ratio": 0.35,
+          "boundaries_considered": 9,
+          "boundaries_scanned": 7,
+          "boundaries_skipped": 2,
+          "seam_errors": 0,
+          "seam_candidates": 34,
+          "spanning_boundary_candidates": 0,
+          "extras_added": 1,
+          "replaced_existing": 33,
+          "extended_existing": 0,
+          "updated_extra_notes": 0,
+          "rejected_existing": 0,
+          "rejected_confidence": 0,
+          "rejected_seam_band": 47,
+          "rejected_duplicate_extra": 0,
+          "skipped_no_boundary_activity": 2,
+          "skipped_covered_post_boundary": 0,
+          "scanned_missing_post_boundary": 4,
+          "scanned_weak_post_boundary": 3,
+          "retro_total_ms": 74.159
+        }
+      },
+      "boundary_failure_diagnostics": {
+        "boundary_gt_notes": 34,
+        "missed_by_arm": {
+          "control": 1,
+          "treatment": 1,
+          "retro": 0
+        },
+        "missed_note_count": 1,
+        "missed_notes": [
+          {
+            "midi_note": 71,
+            "gt_onset_time": 4.144531,
+            "boundary_sec": 4.2,
+            "distance_to_boundary_ms": -55.5,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": true,
+              "matched_note": {
+                "midi_note": 71,
+                "onset_time": 4.132,
+                "offset_time": 4.182,
+                "duration": 0.05,
+                "confidence": 0.592,
+                "selection_reason": "retro_seam_extra",
+                "note_value": "32nd",
+                "source_boundary_sec": 4.2
+              },
+              "nearby_final_candidate": {
+                "present": true,
+                "count": 1,
+                "best_delta_ms": -12.5,
+                "best_note": {
+                  "midi_note": 71,
+                  "onset_time": 4.132,
+                  "offset_time": 4.182,
+                  "duration": 0.05,
+                  "confidence": 0.592,
+                  "selection_reason": "retro_seam_extra",
+                  "note_value": "32nd",
+                  "source_boundary_sec": 4.2
+                }
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "missing_post_boundary",
+                "candidate_count": 1,
+                "candidate_decisions": [
+                  "extra"
+                ],
+                "best_candidate_delta_ms": -12.5,
+                "best_candidate": {
+                  "midi_note": 71,
+                  "onset_time": 4.132,
+                  "offset_time": 4.182,
+                  "confidence": 0.592
+                }
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_extra",
+              "retro_recovers_boundary_note"
+            ]
+          }
+        ],
+        "diagnosis_tag_counts": {
+          "control_boundary_miss": 1,
+          "no_control_coarse_candidate": 1,
+          "retro_extra": 1,
+          "retro_recovers_boundary_note": 1
+        }
+      },
+      "failure_buckets": [
+        "runtime_only_win",
+        "boundary_miss_failure",
+        "high_revision_slow_stabilization"
+      ]
+    }
+  },
+  "failure_buckets": {
+    "runtime_only_win": [
+      "clip_010"
+    ],
+    "boundary_miss_failure": [
+      "clip_010"
+    ],
+    "high_revision_slow_stabilization": [
+      "clip_010"
+    ]
+  },
+  "boundary_failure_tag_counts": {
+    "control_boundary_miss": 1,
+    "no_control_coarse_candidate": 1,
+    "retro_extra": 1,
+    "retro_recovers_boundary_note": 1
+  }
+}

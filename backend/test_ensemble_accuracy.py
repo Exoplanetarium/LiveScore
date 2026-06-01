@@ -18,6 +18,8 @@ from detect_note import (quantize_rhythm_from_ioi, quantize_rhythm_ml,
 # decode_note_events is always from train_ensemble (mel baseline also uses it)
 from rhythm_training.train_ensemble import decode_note_events
 
+DEFAULT_STRICT_ONSET_TOLS_MS = (10, 20, 30)
+
 
 def _load_model_module(model_type: str):
     """Return (MODEL_PATH, build_fn, extractor_cls, constants) for the chosen model."""
@@ -216,6 +218,20 @@ def compute_note_metrics(pred_notes, gt_notes, onset_tol=0.05, duration_tol=0.2)
         'rhythm_precision': rhythm_precision,
         'matched_pairs': matched_pairs,
     }
+
+
+def compute_onset_tolerance_sweep(pred_notes, gt_notes, onset_tolerances_ms=None):
+    """Evaluate onset-only note metrics at multiple strict timing tolerances."""
+    tolerances_ms = onset_tolerances_ms or DEFAULT_STRICT_ONSET_TOLS_MS
+    sweep = {}
+    for tol_ms in sorted({int(max(1, round(float(value)))) for value in tolerances_ms}):
+        label = f'{tol_ms}ms'
+        metrics = compute_note_metrics(pred_notes, gt_notes, onset_tol=tol_ms / 1000.0)
+        sweep[label] = {
+            'onset_tol_ms': tol_ms,
+            **metrics,
+        }
+    return sweep
 
 
 def normalize_note_value(note_type, dotted=False):
@@ -633,7 +649,7 @@ def apply_rhythm_quantization(notes, bpm, use_coherence=True, debug=False):
     return notes
 
 
-def test_on_sample(model_type: str = "ensemble"):
+def test_on_sample(model_type: str = "ensemble", strict_onset_tols_ms=None):
     """Test model on a sample from MAESTRO test set."""
     import librosa
 
@@ -777,11 +793,23 @@ def test_on_sample(model_type: str = "ensemble"):
         
         # Compute basic onset+pitch metrics
         metrics = compute_note_metrics(pred_notes, gt_notes, onset_tol=0.05)
+        strict_onset_metrics = compute_onset_tolerance_sweep(
+            pred_notes,
+            gt_notes,
+            onset_tolerances_ms=strict_onset_tols_ms,
+        )
         
         print(f"  Note Detection:")
         print(f"    Precision: {metrics['precision']:.3f}")
         print(f"    Recall:    {metrics['recall']:.3f}")
         print(f"    F1:        {metrics['f1']:.3f}")
+        print(
+            "  Strict Onset F1: "
+            + " ".join(
+                f"{label}={strict_metrics['f1']:.3f}"
+                for label, strict_metrics in strict_onset_metrics.items()
+            )
+        )
         
         # Detect BPM from onsets for rhythm quantization
         onset_times = [n['onset_time'] for n in pred_notes]
@@ -898,6 +926,7 @@ def test_on_sample(model_type: str = "ensemble"):
         metrics['neural_bpm'] = neural_bpm
         metrics['gt_bpm'] = gt_bpm
         metrics['model_head'] = model_head_metrics
+        metrics['strict_onset_metrics'] = strict_onset_metrics
         all_metrics.append(metrics)
     
     # Average metrics
@@ -912,6 +941,26 @@ def test_on_sample(model_type: str = "ensemble"):
         print(f"  Avg Precision: {avg_p:.3f}")
         print(f"  Avg Recall:    {avg_r:.3f}")
         print(f"  Avg F1:        {avg_f1:.3f}")
+        strict_labels = sorted(
+            {
+                label
+                for metrics in all_metrics
+                for label in (metrics.get('strict_onset_metrics') or {}).keys()
+            },
+            key=lambda label: int(label.rstrip('ms')),
+        )
+        if strict_labels:
+            strict_parts = []
+            for label in strict_labels:
+                values = [
+                    metrics['strict_onset_metrics'][label]['f1']
+                    for metrics in all_metrics
+                    if label in metrics.get('strict_onset_metrics', {})
+                ]
+                if values:
+                    strict_parts.append(f"{label}={np.mean(values):.3f}")
+            if strict_parts:
+                print(f"  Strict Onset F1: {' '.join(strict_parts)}")
         
         # Rhythm metrics
         avg_ioi_no_coh = np.mean([m['rhythm_no_coherence']['ioi_note_value_accuracy'] for m in all_metrics])
@@ -1028,5 +1077,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Test transcription model accuracy")
     parser.add_argument('--model', choices=['ensemble', 'mel'], default='ensemble',
                         help='Which model to test (default: ensemble)')
+    parser.add_argument('--strict-onset-tols-ms', nargs='*', type=int,
+                        default=list(DEFAULT_STRICT_ONSET_TOLS_MS),
+                        help='Strict onset tolerances in milliseconds for live-paper comparisons (default: 10 20 30)')
     args = parser.parse_args()
-    test_on_sample(model_type=args.model)
+    test_on_sample(model_type=args.model, strict_onset_tols_ms=args.strict_onset_tols_ms)

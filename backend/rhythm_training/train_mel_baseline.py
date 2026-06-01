@@ -28,6 +28,12 @@ Usage:
     # Resume training
     python train_mel_baseline.py --train --epochs 50 --batch-size 8 --resume
 
+    # Fine-tune from the production mel checkpoint without overwriting it
+    python train_mel_baseline.py --train --finetune --finetune-scope decoder
+
+    # Adapter fine-tune and save based on hard-case onset F1
+    python train_mel_baseline.py --train --adapter-finetune --adapter-bottleneck 16 --segment-manifest mel_hard_case_manifest_train.json --hard-val-segment-manifest mel_hard_case_manifest_validation.json
+
     # Benchmark
     python train_mel_baseline.py --benchmark
 """
@@ -94,6 +100,8 @@ MAESTRO_CSV = MAESTRO_DIR / "maestro-v3.0.0.csv"
 INDEX_DIR = Path(__file__).parent / "ensemble_index"
 FEATURES_DIR = Path(__file__).parent / "precomputed_features_mel"
 MODEL_PATH = Path(__file__).parent / "mel_baseline_transcription.pt"
+DEFAULT_FINETUNE_MODEL_PATH = Path(__file__).parent / "mel_baseline_transcription_finetuned.pt"
+DEFAULT_ADAPTER_MODEL_PATH = Path(__file__).parent / "mel_baseline_transcription_adapters.pt"
 
 
 # ─── Mel Feature Extractor ──────────────────────────────────────────────────
@@ -340,6 +348,29 @@ class SinusoidalPositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
+class ResidualAdapter(nn.Module):
+    """Small zero-init bottleneck adapter that preserves base behavior at init."""
+
+    def __init__(self, dim: int, bottleneck: int, dropout: float = 0.0):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.down = nn.Linear(dim, bottleneck)
+        self.activation = nn.GELU()
+        self.dropout = nn.Dropout(dropout)
+        self.up = nn.Linear(bottleneck, dim)
+
+        nn.init.zeros_(self.up.weight)
+        nn.init.zeros_(self.up.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = self.norm(x)
+        residual = self.down(residual)
+        residual = self.activation(residual)
+        residual = self.dropout(residual)
+        residual = self.up(residual)
+        return x + residual
+
+
 # ─── Mel Baseline Transcriber ───────────────────────────────────────────────
 
 class MelBaselineTranscriber(nn.Module):
@@ -365,10 +396,13 @@ class MelBaselineTranscriber(nn.Module):
                  conv_kernel: int = 31,
                  dropout: float = 0.1,
                  use_checkpoint: bool = False,
-                 n_note_value_classes: int = NOTE_VALUE_CLASSES):
+                 n_note_value_classes: int = NOTE_VALUE_CLASSES,
+                 adapter_bottleneck: int = 0,
+                 adapter_dropout: float = 0.0):
         super().__init__()
         self.n_keys = PIANO_KEYS
         self.n_nv = n_note_value_classes
+        self.adapter_bottleneck = adapter_bottleneck
 
         # 1. ConvStack: mel -> per-frame features
         self.conv_stack = ConvStack(n_mels, conv_out, dropout)
@@ -391,6 +425,10 @@ class MelBaselineTranscriber(nn.Module):
             )
             for _ in range(n_layers)
         ])
+        self.conformer_adapters = nn.ModuleList([
+            ResidualAdapter(d_model, adapter_bottleneck, adapter_dropout)
+            for _ in range(n_layers)
+        ]) if adapter_bottleneck > 0 else None
 
         # 5. Per-key projection: (B, T, d_model) -> (B, T, 88, key_dim)
         key_dim = d_model // 4
@@ -412,6 +450,10 @@ class MelBaselineTranscriber(nn.Module):
         # Zero-init last conv so residual starts as identity
         nn.init.zeros_(self.key_temporal[-2].weight)
         nn.init.zeros_(self.key_temporal[-2].bias)
+        self.key_adapter = (
+            ResidualAdapter(key_dim, adapter_bottleneck, adapter_dropout)
+            if adapter_bottleneck > 0 else None
+        )
 
         # 7. Raw output heads (per key, shared weights)
         self.onset_head_raw = nn.Sequential(
@@ -468,8 +510,10 @@ class MelBaselineTranscriber(nn.Module):
         h = self.pos_enc(h)
 
         # 3. Conformer
-        for block in self.conformer_blocks:
+        for block_idx, block in enumerate(self.conformer_blocks):
             h = block(h)  # (B, T, d_model)
+            if self.conformer_adapters is not None:
+                h = self.conformer_adapters[block_idx](h)
 
         # 4. Per-key projection
         key_h = self.key_proj(h)  # (B, T, 88 * key_dim)
@@ -480,6 +524,8 @@ class MelBaselineTranscriber(nn.Module):
         h_t = key_h.permute(0, 2, 3, 1).reshape(B * self.n_keys, self.key_dim, T)
         h_t = self.key_temporal(h_t)
         key_h = key_h + h_t.reshape(B, self.n_keys, self.key_dim, T).permute(0, 3, 1, 2)
+        if self.key_adapter is not None:
+            key_h = self.key_adapter(key_h)
 
         # 6. Raw onset and velocity predictions
         raw_onset_logits = self.onset_head_raw(key_h).squeeze(-1)  # (B, T, 88)
@@ -532,9 +578,27 @@ class EnsembleLoss(nn.Module):
     def forward(self, onset_logits, frame_logits, velocity_pred,
                 onset_gt, frame_gt, velocity_gt,
                 note_value_logits=None, note_value_gt=None,
-                raw_onset_logits=None) -> Dict[str, torch.Tensor]:
+                raw_onset_logits=None,
+                loss_mask=None) -> Dict[str, torch.Tensor]:
+        mask = None
+        if loss_mask is not None:
+            mask = loss_mask.to(onset_logits.device).float()
+            if mask.dim() == 2:
+                mask = mask.unsqueeze(-1)
+            if mask.size(1) != onset_logits.size(1):
+                mask = mask[:, :onset_logits.size(1), ...]
+
+        def masked_mean(values: torch.Tensor) -> torch.Tensor:
+            if mask is None:
+                return values.mean()
+            expanded = mask.expand_as(values)
+            denom = expanded.sum().clamp_min(1.0)
+            return (values * expanded).sum() / denom
+
         vel_weight = torch.ones_like(velocity_gt)
         active = frame_gt > 0.5
+        if mask is not None:
+            active = active & (mask.expand_as(frame_gt) > 0.5)
         if active.any():
             vel_weight[active] = 1.0 + self.alpha * (1.0 - velocity_gt[active])
 
@@ -544,14 +608,14 @@ class EnsembleLoss(nn.Module):
         onset_bce = F.binary_cross_entropy_with_logits(onset_logits, onset_gt, reduction='none')
         # Smooth weighting: scale pos_weight by onset_gt value (0=background, 1=peak)
         onset_sample_w = 1.0 + (self.pos_weight - 1.0) * onset_gt
-        onset_loss = (onset_bce * onset_sample_w).mean()
+        onset_loss = masked_mean(onset_bce * onset_sample_w)
 
         # Auxiliary raw onset loss (0.5x weight) — gives onset_head_raw direct
         # gradient signal so the BiGRU gets meaningful input from epoch 1
         if raw_onset_logits is not None:
             raw_onset_bce = F.binary_cross_entropy_with_logits(
                 raw_onset_logits, onset_gt, reduction='none')
-            raw_onset_loss = (raw_onset_bce * onset_sample_w).mean()
+            raw_onset_loss = masked_mean(raw_onset_bce * onset_sample_w)
         else:
             raw_onset_loss = torch.tensor(0.0, device=onset_logits.device)
 
@@ -562,7 +626,7 @@ class EnsembleLoss(nn.Module):
         frame_bce = F.binary_cross_entropy_with_logits(frame_logits, frame_gt, reduction='none')
         frame_sample_w = torch.where(
             frame_gt > 0.5, vel_weight * self.pos_weight, torch.ones_like(vel_weight))
-        frame_loss = (frame_focal_w * frame_bce * frame_sample_w).mean()
+        frame_loss = masked_mean(frame_focal_w * frame_bce * frame_sample_w)
 
         # Velocity MSE
         if active.any():
@@ -581,6 +645,8 @@ class EnsembleLoss(nn.Module):
         # Note-value loss (onset frames only — note value is a note-level property)
         if note_value_logits is not None and note_value_gt is not None:
             onset_mask = onset_gt > 0.5
+            if mask is not None:
+                onset_mask = onset_mask & (mask.expand_as(onset_gt) > 0.5)
             if onset_mask.any():
                 nv_logits_flat = note_value_logits[onset_mask]
                 nv_gt_flat = note_value_gt[onset_mask]
@@ -609,7 +675,8 @@ class MelTranscriptionDataset(Dataset):
     """
 
     def __init__(self, index_path: str, sr: int = SAMPLE_RATE,
-                 hop_length: int = HOP_LENGTH, augment: bool = False):
+                 hop_length: int = HOP_LENGTH, augment: bool = False,
+                 segment_ids: Optional[List[int]] = None):
         self.sr = sr
         self.hop_length = hop_length
         self.segment_frames = int(SEGMENT_SECONDS * sr / hop_length)
@@ -619,10 +686,27 @@ class MelTranscriptionDataset(Dataset):
         with open(index_path) as f:
             self.index = json.load(f)
 
-        self.segments = self.index['segments']
+        all_segments = self.index['segments']
+        if segment_ids is not None:
+            unique_ids = sorted(set(int(segment_id) for segment_id in segment_ids))
+            missing_ids = [segment_id for segment_id in unique_ids
+                           if segment_id < 0 or segment_id >= len(all_segments)]
+            if missing_ids:
+                preview = missing_ids[:10]
+                raise ValueError(
+                    f"Segment IDs out of range for {index_path}: {preview}"
+                )
+            self.segment_ids = unique_ids
+            self.segments = [all_segments[segment_id] for segment_id in unique_ids]
+        else:
+            self.segment_ids = list(range(len(all_segments)))
+            self.segments = all_segments
         self.pieces = self.index['pieces']
         aug_str = " (with augmentation)" if augment else ""
-        print(f"[MelDataset] {len(self.segments)} segments from {len(self.pieces)} pieces{aug_str}")
+        subset_str = ""
+        if segment_ids is not None:
+            subset_str = f" (filtered from {len(all_segments)} total)"
+        print(f"[MelDataset] {len(self.segments)} segments from {len(self.pieces)} pieces{aug_str}{subset_str}")
 
     def __len__(self):
         return len(self.segments)
@@ -767,19 +851,58 @@ class PrecomputedMelDataset(Dataset):
     """
 
     def __init__(self, split: str = 'train', augment: bool = False,
-                 mixup_alpha: float = 0.0):
+                 mixup_alpha: float = 0.0,
+                 segment_ids: Optional[List[int]] = None,
+                 train_window_sec: float = 0.0,
+                 emit_window_sec: float = 0.0,
+                 include_full_features: bool = False):
         self.split_dir = FEATURES_DIR / split
         self.augment = augment
         self.mixup_alpha = mixup_alpha
+        self.include_full_features = include_full_features
+        self.train_window_frames = (
+            int(round(float(train_window_sec) * SAMPLE_RATE / HOP_LENGTH))
+            if train_window_sec and train_window_sec > 0 else 0
+        )
+        self.emit_window_frames = (
+            int(round(float(emit_window_sec) * SAMPLE_RATE / HOP_LENGTH))
+            if emit_window_sec and emit_window_sec > 0 else self.train_window_frames
+        )
+        if self.train_window_frames > 0:
+            if self.emit_window_frames <= 0:
+                raise ValueError("--emit-window-sec must be positive when --train-window-sec is set")
+            if self.emit_window_frames > self.train_window_frames:
+                raise ValueError("--emit-window-sec cannot exceed --train-window-sec")
         if not self.split_dir.exists():
             raise RuntimeError(
                 f"Precomputed mel features not found at {self.split_dir}\n"
                 f"Run: python train_mel_baseline.py --precompute"
             )
-
-        self.files = sorted(self.split_dir.glob("*.pt"))
+        if segment_ids is None:
+            self.files = sorted(self.split_dir.glob("*.pt"))
+        else:
+            requested_ids = sorted(set(int(segment_id) for segment_id in segment_ids))
+            file_lookup = {
+                int(path.stem.split("_")[-1]): path
+                for path in self.split_dir.glob("*.pt")
+            }
+            missing_ids = [segment_id for segment_id in requested_ids if segment_id not in file_lookup]
+            if missing_ids:
+                preview = missing_ids[:10]
+                raise ValueError(
+                    f"Precomputed feature files missing for {split}: {preview}"
+                )
+            self.files = [file_lookup[segment_id] for segment_id in requested_ids]
         aug_str = " (with augmentation)" if augment else ""
-        print(f"[PrecomputedMelDataset] {len(self.files)} segments from {self.split_dir}{aug_str}")
+        subset_str = ""
+        if segment_ids is not None:
+            subset_str = f" (filtered subset)"
+        window_str = ""
+        if self.train_window_frames > 0:
+            window_sec = self.train_window_frames * HOP_LENGTH / SAMPLE_RATE
+            emit_sec = self.emit_window_frames * HOP_LENGTH / SAMPLE_RATE
+            window_str = f" (short-window {window_sec:.3f}s, emit {emit_sec:.3f}s)"
+        print(f"[PrecomputedMelDataset] {len(self.files)} segments from {self.split_dir}{aug_str}{subset_str}{window_str}")
 
     def __len__(self):
         return len(self.files)
@@ -801,6 +924,12 @@ class PrecomputedMelDataset(Dataset):
 
         if 'bpm' not in data:
             data['bpm'] = torch.tensor(120.0, dtype=torch.float32)
+
+        if self.include_full_features:
+            data['teacher_features'] = data['features'].detach().clone().contiguous()
+
+        if self.train_window_frames > 0:
+            data = self._crop_short_window(data)
 
         # SpecAugment
         if self.augment and 'features' in data:
@@ -842,7 +971,60 @@ class PrecomputedMelDataset(Dataset):
                     shifted_labels[:, :shift] = labels[:, -shift:]
                 data[key] = shifted_labels
 
-        return data
+        return self._normalize_tensors_for_collate(data)
+
+    @staticmethod
+    def _normalize_tensors_for_collate(data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        normalized = dict(data)
+        for key, value in normalized.items():
+            if torch.is_tensor(value):
+                normalized[key] = value.detach().clone().contiguous()
+        return normalized
+
+    def _crop_short_window(self, data: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        features = data['features']
+        total_frames = int(features.size(0))
+        window_frames = self.train_window_frames
+        crop_frames = min(window_frames, total_frames)
+        if total_frames > crop_frames:
+            if self.augment:
+                start = int(np.random.randint(0, total_frames - crop_frames + 1))
+            else:
+                start = int((total_frames - crop_frames) // 2)
+        else:
+            start = 0
+        end = start + crop_frames
+
+        cropped = dict(data)
+        for key in ['features', 'onset', 'frame', 'velocity', 'note_value']:
+            if key in cropped and torch.is_tensor(cropped[key]) and cropped[key].dim() >= 1:
+                cropped[key] = cropped[key][start:end].clone()
+
+        for key in ['features', 'onset', 'frame', 'velocity', 'note_value']:
+            if key in cropped and torch.is_tensor(cropped[key]) and cropped[key].dim() >= 1:
+                cropped[key] = self._pad_time_dim(cropped[key], window_frames)
+
+        loss_mask = torch.zeros(window_frames, dtype=torch.float32)
+        emit_frames = min(self.emit_window_frames, crop_frames)
+        if emit_frames > 0:
+            emit_start = max(crop_frames - emit_frames, 0)
+            loss_mask[emit_start:crop_frames] = 1.0
+        cropped['loss_mask'] = loss_mask
+        cropped['crop_start_frame'] = torch.tensor(start, dtype=torch.long)
+        return cropped
+
+    @staticmethod
+    def _pad_time_dim(value: torch.Tensor, target_frames: int) -> torch.Tensor:
+        current_frames = int(value.size(0))
+        if current_frames == target_frames:
+            return value
+        if current_frames > target_frames:
+            return value[:target_frames].clone()
+        padded_shape = (target_frames, *value.shape[1:])
+        padded = torch.zeros(padded_shape, dtype=value.dtype, device=value.device)
+        if current_frames > 0:
+            padded[:current_frames] = value
+        return padded
 
 
 # ─── Note Event Decoding ────────────────────────────────────────────────────
@@ -869,7 +1051,393 @@ def _build_model_from_config(config: dict) -> nn.Module:
         dropout=config.get('dropout', 0.1),
         use_checkpoint=config.get('use_checkpoint', False),
         n_note_value_classes=config.get('n_note_value_classes', NOTE_VALUE_CLASSES),
+        adapter_bottleneck=config.get('adapter_bottleneck', 0),
+        adapter_dropout=config.get('adapter_dropout', 0.0),
     )
+
+
+def _resolve_model_path(path_value: Optional[str], default: Path) -> Path:
+    return Path(path_value) if path_value else default
+
+
+def _load_segment_manifest(manifest_path: Optional[str], split: str) -> Optional[List[int]]:
+    if not manifest_path:
+        return None
+
+    manifest_file = Path(manifest_path)
+    with manifest_file.open('r', encoding='utf-8') as handle:
+        payload = json.load(handle)
+
+    if isinstance(payload, list):
+        segment_ids = payload
+    elif isinstance(payload, dict):
+        manifest_split = payload.get('split')
+        if manifest_split and manifest_split != split:
+            raise ValueError(
+                f"Segment manifest split mismatch: expected {split}, got {manifest_split}"
+            )
+        segment_ids = payload.get('segment_ids')
+        if segment_ids is None:
+            selection = payload.get('selection') or []
+            segment_ids = [item['segment_id'] for item in selection if 'segment_id' in item]
+    else:
+        raise ValueError(f"Unsupported segment manifest format: {manifest_file}")
+
+    if not segment_ids:
+        raise ValueError(f"No segment IDs found in manifest: {manifest_file}")
+
+    normalized = sorted(set(int(segment_id) for segment_id in segment_ids))
+    print(f"Loaded {len(normalized)} segment IDs from manifest: {manifest_file}")
+    return normalized
+
+
+def _resolve_training_paths(args) -> Tuple[Optional[Path], Path]:
+    if args.adapter_finetune:
+        default_save_path = DEFAULT_ADAPTER_MODEL_PATH
+    elif args.finetune:
+        default_save_path = DEFAULT_FINETUNE_MODEL_PATH
+    else:
+        default_save_path = MODEL_PATH
+    save_path = _resolve_model_path(args.model_path, default_save_path)
+
+    init_checkpoint_path = Path(args.init_from) if args.init_from else None
+    if args.resume and init_checkpoint_path is None:
+        init_checkpoint_path = save_path
+    elif (args.finetune or args.adapter_finetune) and init_checkpoint_path is None:
+        init_checkpoint_path = MODEL_PATH
+
+    return init_checkpoint_path, save_path
+
+
+def _validate_checkpoint_architecture(args, checkpoint_config: dict) -> None:
+    shape_fields = {
+        'n_mels': N_MELS,
+        'conv_out': args.conv_out,
+        'd_model': args.d_model,
+        'n_layers': args.n_layers,
+        'n_heads': args.n_heads,
+        'ff_expansion': args.ff_expansion,
+        'conv_kernel': args.conv_kernel,
+        'n_note_value_classes': NOTE_VALUE_CLASSES,
+    }
+    mismatches = []
+    for field_name, expected_value in shape_fields.items():
+        checkpoint_value = checkpoint_config.get(field_name)
+        if checkpoint_value is not None and checkpoint_value != expected_value:
+            mismatches.append(
+                f"{field_name}: checkpoint={checkpoint_value}, requested={expected_value}"
+            )
+
+    if mismatches:
+        mismatch_str = "\n  ".join(mismatches)
+        raise ValueError(
+            "Checkpoint architecture does not match the requested model config:\n"
+            f"  {mismatch_str}\n"
+            "Use the matching checkpoint or remove conflicting architecture overrides."
+        )
+
+
+def _build_optimizer_param_groups(model: nn.Module, args):
+    component_groups = {
+        'backbone': [
+            ('conv_stack', model.conv_stack),
+            ('proj', model.proj),
+            ('conformer_blocks', model.conformer_blocks),
+        ],
+        'decoder': [
+            ('key_proj', model.key_proj),
+            ('key_temporal', model.key_temporal),
+        ],
+        'heads': [
+            ('onset_head_raw', model.onset_head_raw),
+            ('velocity_head', model.velocity_head),
+            ('onset_refine_gru', model.onset_refine_gru),
+            ('onset_refine_fc', model.onset_refine_fc),
+            ('frame_head', model.frame_head),
+            ('note_value_head', model.note_value_head),
+        ],
+    }
+    adapter_modules = []
+    if getattr(model, 'conformer_adapters', None) is not None:
+        adapter_modules.append(('conformer_adapters', model.conformer_adapters))
+    if getattr(model, 'key_adapter', None) is not None:
+        adapter_modules.append(('key_adapter', model.key_adapter))
+
+    for param in model.parameters():
+        param.requires_grad = True
+
+    if args.adapter_finetune:
+        if not adapter_modules:
+            raise ValueError("Adapter fine-tuning requires --adapter-bottleneck > 0")
+
+        for param in model.parameters():
+            param.requires_grad = False
+
+        adapter_head_modules = [
+            ('onset_head_raw', model.onset_head_raw),
+            ('velocity_head', model.velocity_head),
+            ('onset_refine_gru', model.onset_refine_gru),
+            ('onset_refine_fc', model.onset_refine_fc),
+            ('frame_head', model.frame_head),
+        ]
+        if args.adapter_train_note_value_head:
+            adapter_head_modules.append(('note_value_head', model.note_value_head))
+
+        optimizer_groups = []
+        trainable_modules = []
+        enabled_names = set()
+
+        def _enable_group(group_name: str, modules, lr: float):
+            params = []
+            for module_name, module in modules:
+                module_params = list(module.parameters())
+                if not module_params:
+                    continue
+                for param in module_params:
+                    param.requires_grad = True
+                params.extend(module_params)
+                if module_name not in enabled_names:
+                    trainable_modules.append(module_name)
+                    enabled_names.add(module_name)
+            if params:
+                optimizer_groups.append({
+                    'params': params,
+                    'lr': lr,
+                    'name': group_name,
+                })
+
+        _enable_group('adapters', adapter_modules, args.lr * args.adapter_lr_scale)
+        _enable_group('adapter_heads', adapter_head_modules, args.lr * args.adapter_head_lr_scale)
+
+        all_named_modules = [name for groups in component_groups.values() for name, _ in groups]
+        all_named_modules.extend(name for name, _ in adapter_modules)
+        frozen_modules = [name for name in all_named_modules if name not in enabled_names]
+        trainable_count = sum(param.numel() for param in model.parameters() if param.requires_grad)
+        frozen_count = sum(param.numel() for param in model.parameters() if not param.requires_grad)
+        return optimizer_groups, trainable_modules, frozen_modules, trainable_count, frozen_count
+
+    if not args.finetune:
+        all_modules = [name for groups in component_groups.values() for name, _ in groups]
+        all_params = [param for param in model.parameters() if param.requires_grad]
+        trainable_count = sum(param.numel() for param in all_params)
+        return (
+            [{'params': all_params, 'lr': args.lr, 'name': 'full'}],
+            all_modules,
+            [],
+            trainable_count,
+            0,
+        )
+
+    trainable_categories = {
+        'heads': {'heads'},
+        'decoder': {'decoder', 'heads'},
+        'full': {'backbone', 'decoder', 'heads'},
+    }[args.finetune_scope]
+    lr_scales = {
+        'backbone': args.backbone_lr_scale,
+        'decoder': args.decoder_lr_scale,
+        'heads': args.head_lr_scale,
+    }
+
+    optimizer_groups = []
+    trainable_modules = []
+    frozen_modules = []
+
+    for category, modules in component_groups.items():
+        category_params = []
+        category_is_trainable = category in trainable_categories
+        for module_name, module in modules:
+            module_params = list(module.parameters())
+            if not module_params:
+                continue
+            for param in module_params:
+                param.requires_grad = category_is_trainable
+            if category_is_trainable:
+                trainable_modules.append(module_name)
+                category_params.extend(module_params)
+            else:
+                frozen_modules.append(module_name)
+
+        if category_is_trainable and category_params:
+            optimizer_groups.append({
+                'params': category_params,
+                'lr': args.lr * lr_scales[category],
+                'name': category,
+            })
+
+    trainable_count = sum(param.numel() for param in model.parameters() if param.requires_grad)
+    frozen_count = sum(param.numel() for param in model.parameters() if not param.requires_grad)
+    return optimizer_groups, trainable_modules, frozen_modules, trainable_count, frozen_count
+
+
+def _prepare_batch_tensors(batch, device: torch.device, extractor=None):
+    onset_gt = batch['onset'].to(device)
+    frame_gt = batch['frame'].to(device)
+    vel_gt = batch['velocity'].to(device)
+    nv_gt = batch['note_value'].to(device)
+    loss_mask = batch.get('loss_mask')
+    if loss_mask is not None:
+        loss_mask = loss_mask.to(device)
+
+    if 'features' in batch:
+        features = batch['features'].to(device)
+    else:
+        if extractor is None:
+            raise ValueError("Extractor required for on-the-fly dataset batches")
+        audio = batch['audio'].to(device)
+        with torch.no_grad():
+            features = extractor.extract(audio)
+
+    T = min(features.size(1), onset_gt.size(1))
+    return (
+        features[:, :T, :],
+        onset_gt[:, :T, :],
+        frame_gt[:, :T, :],
+        vel_gt[:, :T, :],
+        nv_gt[:, :T, :],
+        loss_mask[:, :T] if loss_mask is not None else None,
+    )
+
+
+def _slice_teacher_time_window(value: torch.Tensor, starts: torch.Tensor, target_frames: int) -> torch.Tensor:
+    windows = []
+    total_frames = int(value.size(1))
+    for batch_idx, start_value in enumerate(starts.detach().cpu().tolist()):
+        start = max(0, int(start_value))
+        end = min(start + target_frames, total_frames)
+        window = value[batch_idx, start:end]
+        current_frames = int(window.size(0))
+        if current_frames < target_frames:
+            padded_shape = (target_frames, *window.shape[1:])
+            padded = torch.zeros(padded_shape, dtype=value.dtype, device=value.device)
+            if current_frames > 0:
+                padded[:current_frames] = window
+            window = padded
+        windows.append(window)
+    return torch.stack(windows, dim=0)
+
+
+def _compute_distillation_loss(
+    student_out: Dict[str, torch.Tensor],
+    teacher_out: Dict[str, torch.Tensor],
+    crop_start_frame: torch.Tensor,
+    loss_mask: torch.Tensor,
+    temperature: float,
+    onset_weight: float,
+    frame_weight: float,
+    velocity_weight: float,
+) -> Dict[str, torch.Tensor]:
+    target_frames = int(student_out['onset_logits'].size(1))
+    starts = crop_start_frame.to(student_out['onset_logits'].device)
+    mask = loss_mask.to(student_out['onset_logits'].device).float()
+    metric_mask = mask.unsqueeze(-1).expand_as(student_out['onset_logits']) > 0.5
+    if not metric_mask.any():
+        zero = torch.tensor(0.0, device=student_out['onset_logits'].device)
+        return {'total': zero, 'onset': zero, 'frame': zero, 'velocity': zero}
+
+    temp = max(float(temperature), 1e-6)
+    teacher_onset = _slice_teacher_time_window(teacher_out['onset_logits'], starts, target_frames)
+    teacher_frame = _slice_teacher_time_window(teacher_out['frame_logits'], starts, target_frames)
+    teacher_velocity = _slice_teacher_time_window(teacher_out['velocity'], starts, target_frames)
+
+    onset_targets = torch.sigmoid(teacher_onset / temp)
+    frame_targets = torch.sigmoid(teacher_frame / temp)
+    onset_loss = F.binary_cross_entropy_with_logits(
+        student_out['onset_logits'][metric_mask] / temp,
+        onset_targets[metric_mask],
+    ) * (temp * temp)
+    frame_loss = F.binary_cross_entropy_with_logits(
+        student_out['frame_logits'][metric_mask] / temp,
+        frame_targets[metric_mask],
+    ) * (temp * temp)
+    velocity_loss = F.mse_loss(
+        student_out['velocity'][metric_mask],
+        teacher_velocity[metric_mask],
+    )
+    total = onset_weight * onset_loss + frame_weight * frame_loss + velocity_weight * velocity_loss
+    return {
+        'total': total,
+        'onset': onset_loss,
+        'frame': frame_loss,
+        'velocity': velocity_loss,
+    }
+
+
+def _evaluate_loader(model: nn.Module, loader: DataLoader, device: torch.device,
+                     criterion: nn.Module, use_amp: bool, extractor=None) -> Dict[str, float]:
+    model.eval()
+    val_losses = defaultdict(float)
+    n_val = 0
+    onset_tp, onset_fp, onset_fn = 0, 0, 0
+    frame_tp, frame_fp, frame_fn = 0, 0, 0
+    nv_correct, nv_total = 0, 0
+
+    with torch.no_grad():
+        for batch in loader:
+            features, onset_gt, frame_gt, vel_gt, nv_gt, loss_mask = _prepare_batch_tensors(
+                batch, device, extractor=extractor,
+            )
+
+            with torch.amp.autocast('cuda', enabled=use_amp):
+                out = model(features)
+                losses = criterion(
+                    out['onset_logits'], out['frame_logits'], out['velocity'],
+                    onset_gt, frame_gt, vel_gt,
+                    note_value_logits=out['note_value_logits'],
+                    note_value_gt=nv_gt,
+                    raw_onset_logits=out['raw_onset_logits'],
+                    loss_mask=loss_mask,
+                )
+            for key, value in losses.items():
+                val_losses[key] += value.item()
+            n_val += 1
+
+            onset_probs_val = torch.sigmoid(out['onset_logits'])
+            onset_pred = (onset_probs_val > 0.5).float()
+            frame_pred = (torch.sigmoid(out['frame_logits']) > 0.5).float()
+
+            onset_gt_bin = (onset_gt > 0.5).float()
+            metric_mask = torch.ones_like(onset_gt_bin, dtype=torch.bool)
+            if loss_mask is not None:
+                metric_mask = loss_mask.unsqueeze(-1).expand_as(onset_gt_bin) > 0.5
+            onset_tp += ((onset_pred == 1) & (onset_gt_bin == 1) & metric_mask).sum().item()
+            onset_fp += ((onset_pred == 1) & (onset_gt_bin == 0) & metric_mask).sum().item()
+            onset_fn += ((onset_pred == 0) & (onset_gt_bin == 1) & metric_mask).sum().item()
+
+            onset_mask_val = onset_gt > 0.5
+            if loss_mask is not None:
+                onset_mask_val = onset_mask_val & metric_mask
+            if onset_mask_val.any():
+                nv_pred_class = out['note_value_logits'][onset_mask_val].argmax(dim=-1)
+                nv_gt_class = nv_gt[onset_mask_val]
+                nv_correct += (nv_pred_class == nv_gt_class).sum().item()
+                nv_total += nv_gt_class.numel()
+
+            frame_tp += ((frame_pred == 1) & (frame_gt == 1) & metric_mask).sum().item()
+            frame_fp += ((frame_pred == 1) & (frame_gt == 0) & metric_mask).sum().item()
+            frame_fn += ((frame_pred == 0) & (frame_gt == 1) & metric_mask).sum().item()
+
+    onset_p = onset_tp / max(onset_tp + onset_fp, 1)
+    onset_r = onset_tp / max(onset_tp + onset_fn, 1)
+    onset_f1 = 2 * onset_p * onset_r / max(onset_p + onset_r, 1e-8)
+
+    frame_p = frame_tp / max(frame_tp + frame_fp, 1)
+    frame_r = frame_tp / max(frame_tp + frame_fn, 1)
+    frame_f1 = 2 * frame_p * frame_r / max(frame_p + frame_r, 1e-8)
+
+    return {
+        'losses': {key: value / max(n_val, 1) for key, value in val_losses.items()},
+        'onset_precision': onset_p,
+        'onset_recall': onset_r,
+        'onset_f1': onset_f1,
+        'frame_precision': frame_p,
+        'frame_recall': frame_r,
+        'frame_f1': frame_f1,
+        'note_value_acc': nv_correct / max(nv_total, 1),
+        'nv_correct': nv_correct,
+        'nv_total': nv_total,
+        'num_batches': n_val,
+    }
 
 
 # ─── Feature Precomputation ─────────────────────────────────────────────────
@@ -991,38 +1559,85 @@ def precompute_features(args):
 
 def train(args):
     """Main training loop."""
+    if args.resume and (args.finetune or args.adapter_finetune):
+        raise ValueError("--resume cannot be combined with --finetune or --adapter-finetune")
+    if args.finetune and args.adapter_finetune:
+        raise ValueError("--finetune and --adapter-finetune are mutually exclusive")
+
     device = torch.device(args.device)
     if args.device == 'cuda' and not torch.cuda.is_available():
         print("CUDA not available, using CPU")
         device = torch.device('cpu')
     print(f"Using device: {device}")
 
+    def _metric_or_default(value, default: float) -> float:
+        return default if value is None else float(value)
+
+    init_checkpoint_path, save_path = _resolve_training_paths(args)
+    if (args.finetune or args.adapter_finetune) and init_checkpoint_path is None:
+        raise ValueError("Fine-tuning requires an initialization checkpoint")
+    if (args.finetune or args.adapter_finetune) and init_checkpoint_path is not None:
+        if save_path.expanduser().resolve() == init_checkpoint_path.expanduser().resolve():
+            raise ValueError(
+                "Fine-tuning output would overwrite the source checkpoint. "
+                "Use --model-path to save to a separate file."
+            )
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    print(f"Training output checkpoint: {save_path}")
+
     # Check for precomputed features
     use_precomputed = (FEATURES_DIR / 'train').exists() and len(list((FEATURES_DIR / 'train').glob("*.pt"))) > 0
+    train_segment_ids = _load_segment_manifest(args.segment_manifest, 'train')
+    hard_val_segment_ids = _load_segment_manifest(args.hard_val_segment_manifest, 'validation')
+
+    train_index = INDEX_DIR / "train_index.json"
+    val_index = INDEX_DIR / "validation_index.json"
 
     if use_precomputed:
         print(f"Using precomputed mel features from {FEATURES_DIR}")
         train_dataset = PrecomputedMelDataset(
-            'train', augment=True, mixup_alpha=args.mixup_alpha)
-        val_dataset = PrecomputedMelDataset('validation', augment=False)
+            'train', augment=args.train_augment, mixup_alpha=args.mixup_alpha,
+            segment_ids=train_segment_ids,
+            train_window_sec=args.train_window_sec,
+            emit_window_sec=args.emit_window_sec,
+            include_full_features=args.distill_weight > 0.0)
+        val_dataset = PrecomputedMelDataset(
+            'validation', augment=False,
+            train_window_sec=args.train_window_sec,
+            emit_window_sec=args.emit_window_sec)
+        hard_val_dataset = (
+            PrecomputedMelDataset(
+                'validation', augment=False, segment_ids=hard_val_segment_ids,
+                train_window_sec=args.train_window_sec,
+                emit_window_sec=args.emit_window_sec)
+            if hard_val_segment_ids is not None else None
+        )
         extractor = None
     else:
+        if args.train_window_sec > 0:
+            raise ValueError(
+                "--train-window-sec currently requires precomputed mel features. "
+                "Run: python train_mel_baseline.py --precompute"
+            )
         extractor = MelFeatureExtractor(
             sr=SAMPLE_RATE, hop_length=HOP_LENGTH, device=device,
         )
         print(f"Feature extractor: {extractor.n_features} mel bins per frame")
 
-        train_index = INDEX_DIR / "train_index.json"
-        val_index = INDEX_DIR / "validation_index.json"
         if not train_index.exists():
             print(f"Index not found at {train_index}")
             print("Run: python train_ensemble.py --prepare")
             return
 
         train_dataset = MelTranscriptionDataset(
-            str(train_index), augment=True)
+            str(train_index), augment=args.train_augment,
+            segment_ids=train_segment_ids)
         val_dataset = MelTranscriptionDataset(
             str(val_index), augment=False)
+        hard_val_dataset = (
+            MelTranscriptionDataset(str(val_index), augment=False, segment_ids=hard_val_segment_ids)
+            if hard_val_segment_ids is not None else None
+        )
 
     train_loader = DataLoader(
         train_dataset, batch_size=args.batch_size, shuffle=True,
@@ -1031,6 +1646,13 @@ def train(args):
     val_loader = DataLoader(
         val_dataset, batch_size=args.batch_size, shuffle=False,
         num_workers=args.num_workers, pin_memory=True,
+    )
+    hard_val_loader = (
+        DataLoader(
+            hard_val_dataset, batch_size=args.batch_size, shuffle=False,
+            num_workers=args.num_workers, pin_memory=True,
+        )
+        if hard_val_dataset is not None else None
     )
 
     # Model
@@ -1044,19 +1666,80 @@ def train(args):
         conv_kernel=args.conv_kernel,
         dropout=args.dropout,
         use_checkpoint=args.use_checkpoint,
+        adapter_bottleneck=args.adapter_bottleneck,
+        adapter_dropout=args.adapter_dropout,
     ).to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model parameters: {n_params:,}")
 
+    checkpoint = None
+    if init_checkpoint_path is not None and init_checkpoint_path.exists():
+        checkpoint = torch.load(str(init_checkpoint_path), map_location=device, weights_only=False)
+        _validate_checkpoint_architecture(args, checkpoint.get('config', {}))
+        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        load_mode = 'Adapter fine-tuning from' if args.adapter_finetune else (
+            'Fine-tuning from' if args.finetune else 'Resuming from'
+        )
+        print(f"{load_mode} checkpoint: {init_checkpoint_path}")
+    elif args.finetune or args.adapter_finetune:
+        raise FileNotFoundError(f"Fine-tune checkpoint not found: {init_checkpoint_path}")
+    elif args.resume:
+        print(f"No checkpoint found at {init_checkpoint_path}, starting fresh")
+
+    optimizer_param_groups, trainable_modules, frozen_modules, trainable_count, frozen_count = (
+        _build_optimizer_param_groups(model, args)
+    )
+    if args.finetune or args.adapter_finetune:
+        if args.adapter_finetune:
+            print(f"Adapter fine-tune: bottleneck={args.adapter_bottleneck}, dropout={args.adapter_dropout:.2f}")
+        else:
+            print(f"Fine-tune scope: {args.finetune_scope}")
+        print(f"  Trainable modules: {', '.join(trainable_modules)}")
+        print(f"  Frozen modules: {', '.join(frozen_modules) if frozen_modules else '(none)'}")
+        print(f"  Trainable parameters: {trainable_count:,}")
+        print(f"  Frozen parameters: {frozen_count:,}")
+    if args.train_window_sec > 0:
+        print(
+            f"Short-window training: input_window={args.train_window_sec:.3f}s, "
+            f"emission_loss_window={args.emit_window_sec:.3f}s"
+        )
+
+    teacher_model = None
+    if args.distill_weight > 0.0:
+        if not use_precomputed:
+            raise ValueError("--distill-weight requires precomputed mel features")
+        teacher_path = _resolve_model_path(args.distill_from, MODEL_PATH)
+        if not teacher_path.exists():
+            raise FileNotFoundError(f"Distillation teacher checkpoint not found: {teacher_path}")
+        teacher_checkpoint = torch.load(str(teacher_path), map_location=device, weights_only=False)
+        teacher_model = _build_model_from_config(teacher_checkpoint.get('config', {})).to(device)
+        teacher_model.load_state_dict(teacher_checkpoint['model_state_dict'], strict=False)
+        teacher_model.eval()
+        for param in teacher_model.parameters():
+            param.requires_grad = False
+        print(
+            f"Distillation teacher: {teacher_path} "
+            f"(weight={args.distill_weight:.3f}, temp={args.distill_temperature:.2f})"
+        )
+
     # Loss, optimizer, scheduler
     criterion = EnsembleLoss(
         alpha=args.vel_alpha, pos_weight=args.pos_weight,
         note_value_weight=args.nv_weight,
+        onset_weight=args.onset_weight,
+        frame_weight=args.frame_weight,
+        velocity_weight=args.velocity_weight,
     )
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=0.01)
+    optimizer = optim.AdamW(optimizer_param_groups, lr=args.lr, weight_decay=0.01)
 
-    warmup_steps = args.warmup_steps
+    for param_group in optimizer.param_groups:
+        group_name = param_group.get('name', 'group')
+        group_params = sum(param.numel() for param in param_group['params'])
+        print(f"  Optimizer group {group_name}: lr={param_group['lr']:.2e}, params={group_params:,}")
+
+    fresh_finetune_mode = args.finetune or args.adapter_finetune
+    warmup_steps = args.finetune_warmup_steps if fresh_finetune_mode else args.warmup_steps
     d_model = args.d_model
 
     def noam_lambda(step):
@@ -1066,14 +1749,13 @@ def train(args):
     scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=noam_lambda)
 
     best_val_loss = float('inf')
-    best_onset_f1 = 0.0
+    best_onset_f1 = float('-inf') if fresh_finetune_mode else 0.0
+    best_hard_onset_f1 = float('-inf')
     start_epoch = 0
+    saved_any = False
 
     # Resume from checkpoint
-    if args.resume and MODEL_PATH.exists():
-        print(f"Resuming from checkpoint: {MODEL_PATH}")
-        checkpoint = torch.load(str(MODEL_PATH), map_location=device, weights_only=False)
-        model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+    if args.resume and checkpoint is not None:
         if 'optimizer_state_dict' in checkpoint:
             try:
                 optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -1086,15 +1768,61 @@ def train(args):
             except Exception as e:
                 print(f"  Could not load scheduler state: {e}")
         start_epoch = checkpoint.get('epoch', 0) + 1
-        best_onset_f1 = checkpoint.get('onset_f1', 0.0)
+        best_onset_f1 = _metric_or_default(checkpoint.get('onset_f1'), 0.0)
         if 'note_value_acc' not in checkpoint:
             print("  Old checkpoint without note_value metrics - resetting best_val_loss")
             best_val_loss = float('inf')
         else:
-            best_val_loss = checkpoint.get('val_loss', float('inf'))
+            best_val_loss = _metric_or_default(checkpoint.get('val_loss'), float('inf'))
         print(f"  Resuming from epoch {start_epoch}, best_onset_f1={best_onset_f1:.3f}")
-    elif args.resume:
-        print(f"No checkpoint found at {MODEL_PATH}, starting fresh")
+        best_hard_onset_f1 = _metric_or_default(
+            checkpoint.get('hard_onset_f1'), float('-inf')
+        )
+    elif fresh_finetune_mode and checkpoint is not None:
+        init_onset_f1 = checkpoint.get('onset_f1')
+        init_frame_f1 = checkpoint.get('frame_f1')
+        init_note_value_acc = checkpoint.get('note_value_acc')
+        best_onset_f1 = _metric_or_default(checkpoint.get('onset_f1'), best_onset_f1)
+        best_val_loss = _metric_or_default(checkpoint.get('val_loss'), best_val_loss)
+        best_hard_onset_f1 = _metric_or_default(
+            checkpoint.get('hard_onset_f1'), best_hard_onset_f1
+        )
+        print(
+            "  Fresh optimizer/scheduler for fine-tuning "
+            f"(init onset_f1={init_onset_f1 if init_onset_f1 is not None else 'n/a'}, "
+            f"frame_f1={init_frame_f1 if init_frame_f1 is not None else 'n/a'}, "
+            f"note_value_acc={init_note_value_acc if init_note_value_acc is not None else 'n/a'})"
+        )
+
+    selection_metric_name = args.save_best_on
+    if selection_metric_name == 'auto':
+        selection_metric_name = 'hard_onset_f1' if hard_val_loader is not None else 'onset_f1'
+    if selection_metric_name == 'hard_onset_f1' and hard_val_loader is None:
+        raise ValueError("--save-best-on hard_onset_f1 requires --hard-val-segment-manifest")
+
+    baseline_hard_metrics = None
+    if hard_val_loader is not None:
+        baseline_hard_metrics = _evaluate_loader(
+            model, hard_val_loader, device, criterion, use_amp=False, extractor=extractor,
+        )
+        if checkpoint is not None:
+            best_hard_onset_f1 = _metric_or_default(
+                checkpoint.get('hard_onset_f1'), baseline_hard_metrics['onset_f1']
+            )
+        else:
+            best_hard_onset_f1 = baseline_hard_metrics['onset_f1']
+        print(
+            "  Hard-case baseline: "
+            f"loss={baseline_hard_metrics['losses']['total']:.4f}, "
+            f"onset_f1={baseline_hard_metrics['onset_f1']:.3f}, "
+            f"frame_f1={baseline_hard_metrics['frame_f1']:.3f}"
+        )
+
+    best_primary_metric = best_hard_onset_f1 if selection_metric_name == 'hard_onset_f1' else best_onset_f1
+    if fresh_finetune_mode and args.save_finetune_candidate:
+        best_primary_metric = float('-inf')
+        print("Saving best fine-tune candidate even if it does not beat the initialization checkpoint")
+    print(f"Selecting best checkpoint by: {selection_metric_name}")
 
     # AMP
     use_amp = device.type == 'cuda'
@@ -1107,24 +1835,9 @@ def train(args):
         n_batches = 0
 
         for batch_idx, batch in enumerate(train_loader):
-            onset_gt = batch['onset'].to(device)
-            frame_gt = batch['frame'].to(device)
-            vel_gt = batch['velocity'].to(device)
-            nv_gt = batch['note_value'].to(device)
-
-            if use_precomputed:
-                features = batch['features'].to(device)
-            else:
-                audio = batch['audio'].to(device)
-                with torch.no_grad():
-                    features = extractor.extract(audio)
-
-            T = min(features.size(1), onset_gt.size(1))
-            features = features[:, :T, :]
-            onset_gt = onset_gt[:, :T, :]
-            frame_gt = frame_gt[:, :T, :]
-            vel_gt = vel_gt[:, :T, :]
-            nv_gt = nv_gt[:, :T, :]
+            features, onset_gt, frame_gt, vel_gt, nv_gt, loss_mask = _prepare_batch_tensors(
+                batch, device, extractor=extractor,
+            )
 
             optimizer.zero_grad()
 
@@ -1136,7 +1849,28 @@ def train(args):
                     note_value_logits=out['note_value_logits'],
                     note_value_gt=nv_gt,
                     raw_onset_logits=out['raw_onset_logits'],
+                    loss_mask=loss_mask,
                 )
+                if teacher_model is not None:
+                    teacher_features = batch['teacher_features'].to(device)
+                    crop_start_frame = batch['crop_start_frame'].to(device)
+                    with torch.no_grad():
+                        teacher_out = teacher_model(teacher_features)
+                    distill_losses = _compute_distillation_loss(
+                        out,
+                        teacher_out,
+                        crop_start_frame,
+                        loss_mask,
+                        args.distill_temperature,
+                        args.distill_onset_weight,
+                        args.distill_frame_weight,
+                        args.distill_velocity_weight,
+                    )
+                    losses['total'] = losses['total'] + args.distill_weight * distill_losses['total']
+                    losses['distill'] = distill_losses['total']
+                    losses['distill_onset'] = distill_losses['onset']
+                    losses['distill_frame'] = distill_losses['frame']
+                    losses['distill_velocity'] = distill_losses['velocity']
 
             scaler.scale(losses['total']).backward()
             scaler.unscale_(optimizer)
@@ -1154,80 +1888,24 @@ def train(args):
                 print(f"  Epoch {epoch+1} batch {batch_idx}/{len(train_loader)}: loss={avg:.4f}")
 
         # ── Validate ──
-        model.eval()
-        val_losses = defaultdict(float)
-        n_val = 0
-        onset_tp, onset_fp, onset_fn = 0, 0, 0
-        frame_tp, frame_fp, frame_fn = 0, 0, 0
-        nv_correct, nv_total = 0, 0
-
-        with torch.no_grad():
-            for batch in val_loader:
-                onset_gt = batch['onset'].to(device)
-                frame_gt = batch['frame'].to(device)
-                vel_gt = batch['velocity'].to(device)
-                nv_gt = batch['note_value'].to(device)
-
-                if use_precomputed:
-                    features = batch['features'].to(device)
-                else:
-                    audio = batch['audio'].to(device)
-                    features = extractor.extract(audio)
-
-                T = min(features.size(1), onset_gt.size(1))
-                features = features[:, :T, :]
-                onset_gt = onset_gt[:, :T, :]
-                frame_gt = frame_gt[:, :T, :]
-                vel_gt = vel_gt[:, :T, :]
-                nv_gt = nv_gt[:, :T, :]
-
-                with torch.amp.autocast('cuda', enabled=use_amp):
-                    out = model(features)
-                    losses = criterion(
-                        out['onset_logits'], out['frame_logits'], out['velocity'],
-                        onset_gt, frame_gt, vel_gt,
-                        note_value_logits=out['note_value_logits'],
-                        note_value_gt=nv_gt,
-                        raw_onset_logits=out['raw_onset_logits'],
-                    )
-                for k, v in losses.items():
-                    val_losses[k] += v.item()
-                n_val += 1
-
-                onset_probs_val = torch.sigmoid(out['onset_logits'])
-                onset_pred = (onset_probs_val > 0.5).float()
-                frame_pred = (torch.sigmoid(out['frame_logits']) > 0.5).float()
-
-                # Binarize regression onset GT at 0.5 for F1 computation
-                # (tent peak is 1.0, frames at ~half the tent are 0.5)
-                onset_gt_bin = (onset_gt > 0.5).float()
-                onset_tp += ((onset_pred == 1) & (onset_gt_bin == 1)).sum().item()
-                onset_fp += ((onset_pred == 1) & (onset_gt_bin == 0)).sum().item()
-                onset_fn += ((onset_pred == 0) & (onset_gt_bin == 1)).sum().item()
-
-                onset_mask_val = onset_gt > 0.5
-                if onset_mask_val.any():
-                    nv_pred_class = out['note_value_logits'][onset_mask_val].argmax(dim=-1)
-                    nv_gt_class = nv_gt[onset_mask_val]
-                    nv_correct += (nv_pred_class == nv_gt_class).sum().item()
-                    nv_total += nv_gt_class.numel()
-
-                frame_tp += ((frame_pred == 1) & (frame_gt == 1)).sum().item()
-                frame_fp += ((frame_pred == 1) & (frame_gt == 0)).sum().item()
-                frame_fn += ((frame_pred == 0) & (frame_gt == 1)).sum().item()
-
-        onset_p = onset_tp / max(onset_tp + onset_fp, 1)
-        onset_r = onset_tp / max(onset_tp + onset_fn, 1)
-        onset_f1 = 2 * onset_p * onset_r / max(onset_p + onset_r, 1e-8)
-
-        frame_p = frame_tp / max(frame_tp + frame_fp, 1)
-        frame_r = frame_tp / max(frame_tp + frame_fn, 1)
-        frame_f1 = 2 * frame_p * frame_r / max(frame_p + frame_r, 1e-8)
-
-        nv_acc = nv_correct / max(nv_total, 1)
-
         avg_train = {k: v / max(n_batches, 1) for k, v in train_losses.items()}
-        avg_val = {k: v / max(n_val, 1) for k, v in val_losses.items()}
+        val_metrics = _evaluate_loader(
+            model, val_loader, device, criterion, use_amp=use_amp, extractor=extractor,
+        )
+        avg_val = val_metrics['losses']
+        onset_p = val_metrics['onset_precision']
+        onset_r = val_metrics['onset_recall']
+        onset_f1 = val_metrics['onset_f1']
+        frame_p = val_metrics['frame_precision']
+        frame_r = val_metrics['frame_recall']
+        frame_f1 = val_metrics['frame_f1']
+        nv_acc = val_metrics['note_value_acc']
+
+        hard_metrics = None
+        if hard_val_loader is not None:
+            hard_metrics = _evaluate_loader(
+                model, hard_val_loader, device, criterion, use_amp=use_amp, extractor=extractor,
+            )
 
         print(f"\nEpoch {epoch+1}/{args.epochs} (lr={optimizer.param_groups[0]['lr']:.2e})")
         nv_train_str = f", nv={avg_train.get('note_value', 0):.4f}" if 'note_value' in avg_train else ''
@@ -1237,12 +1915,29 @@ def train(args):
         print(f"  Val loss:   {avg_val['total']:.4f}")
         print(f"  Onset  P={onset_p:.3f} R={onset_r:.3f} F1={onset_f1:.3f}")
         print(f"  Frame  P={frame_p:.3f} R={frame_r:.3f} F1={frame_f1:.3f}")
-        print(f"  NoteVal acc={nv_acc:.3f} ({nv_correct}/{nv_total})")
+        print(f"  NoteVal acc={nv_acc:.3f} ({val_metrics['nv_correct']}/{val_metrics['nv_total']})")
+        if hard_metrics is not None:
+            print(
+                f"  Hard Val loss={hard_metrics['losses']['total']:.4f} "
+                f"Onset F1={hard_metrics['onset_f1']:.3f} "
+                f"Frame F1={hard_metrics['frame_f1']:.3f}"
+            )
 
-        # Save best model (by onset F1)
-        if onset_f1 > best_onset_f1:
+        current_primary_metric = hard_metrics['onset_f1'] if selection_metric_name == 'hard_onset_f1' else onset_f1
+        save_improved = current_primary_metric > (best_primary_metric + 1e-8)
+        if (not save_improved and selection_metric_name == 'hard_onset_f1'
+                and hard_metrics is not None
+                and abs(current_primary_metric - best_primary_metric) <= 1e-8
+                and onset_f1 > (best_onset_f1 + 1e-8)):
+            save_improved = True
+
+        if save_improved:
+            best_primary_metric = current_primary_metric
             best_onset_f1 = onset_f1
+            if hard_metrics is not None:
+                best_hard_onset_f1 = hard_metrics['onset_f1']
             best_val_loss = avg_val['total']
+            saved_any = True
             torch.save({
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -1258,6 +1953,8 @@ def train(args):
                     'conv_kernel': args.conv_kernel,
                     'dropout': args.dropout,
                     'use_checkpoint': args.use_checkpoint,
+                    'adapter_bottleneck': args.adapter_bottleneck,
+                    'adapter_dropout': args.adapter_dropout,
                     'n_keys': PIANO_KEYS,
                     'n_note_value_classes': NOTE_VALUE_CLASSES,
                     'sample_rate': SAMPLE_RATE,
@@ -1268,90 +1965,133 @@ def train(args):
                     'velocity_gated_onset': True,
                     'onset_tent_sec': ONSET_TENT_SEC,
                     'pos_weight': args.pos_weight,
+                    'finetune': args.finetune,
+                    'adapter_finetune': args.adapter_finetune,
+                    'finetune_scope': args.finetune_scope if args.finetune else None,
+                    'init_from': str(init_checkpoint_path) if init_checkpoint_path is not None else None,
+                    'save_path': str(save_path),
+                    'head_lr_scale': args.head_lr_scale if args.finetune else 1.0,
+                    'decoder_lr_scale': args.decoder_lr_scale if args.finetune else 1.0,
+                    'backbone_lr_scale': args.backbone_lr_scale if args.finetune else 1.0,
+                    'adapter_lr_scale': args.adapter_lr_scale if args.adapter_finetune else 1.0,
+                    'adapter_head_lr_scale': args.adapter_head_lr_scale if args.adapter_finetune else 1.0,
+                    'adapter_train_note_value_head': args.adapter_train_note_value_head,
+                    'segment_manifest': args.segment_manifest,
+                    'hard_val_segment_manifest': args.hard_val_segment_manifest,
+                    'save_best_on': selection_metric_name,
+                    'train_window_sec': args.train_window_sec,
+                    'emit_window_sec': args.emit_window_sec,
+                    'distill_from': args.distill_from,
+                    'distill_weight': args.distill_weight,
+                    'distill_temperature': args.distill_temperature,
+                    'distill_onset_weight': args.distill_onset_weight,
+                    'distill_frame_weight': args.distill_frame_weight,
+                    'distill_velocity_weight': args.distill_velocity_weight,
+                    'onset_weight': args.onset_weight,
+                    'frame_weight': args.frame_weight,
+                    'velocity_weight': args.velocity_weight,
                 },
+                'trainable_modules': trainable_modules,
+                'frozen_modules': frozen_modules,
                 'epoch': epoch,
                 'val_loss': best_val_loss,
                 'onset_f1': onset_f1,
                 'frame_f1': frame_f1,
                 'note_value_acc': nv_acc,
-            }, str(MODEL_PATH))
-            print(f"  Saved best model! (onset_f1={best_onset_f1:.3f}, val_loss={best_val_loss:.4f})")
+                'hard_val_loss': hard_metrics['losses']['total'] if hard_metrics is not None else None,
+                'hard_onset_f1': hard_metrics['onset_f1'] if hard_metrics is not None else None,
+                'hard_frame_f1': hard_metrics['frame_f1'] if hard_metrics is not None else None,
+                'selection_metric_name': selection_metric_name,
+                'selection_metric_value': current_primary_metric,
+            }, str(save_path))
+            if hard_metrics is not None:
+                print(
+                    "  Saved best model! "
+                    f"({selection_metric_name}={current_primary_metric:.3f}, "
+                    f"onset_f1={best_onset_f1:.3f}, hard_onset_f1={hard_metrics['onset_f1']:.3f})"
+                )
+            else:
+                print(f"  Saved best model! ({selection_metric_name}={current_primary_metric:.3f}, val_loss={best_val_loss:.4f})")
 
     print(f"\nTraining complete!")
     print(f"  Best val loss: {best_val_loss:.4f}")
     print(f"  Best onset F1: {best_onset_f1:.3f}")
-    print(f"  Model saved to: {MODEL_PATH}")
+    if hard_val_loader is not None:
+        print(f"  Best hard-case onset F1: {best_hard_onset_f1:.3f}")
+    if saved_any:
+        print(f"  Model saved to: {save_path}")
+    else:
+        print(f"  No checkpoint beat the baseline {selection_metric_name}; no new model written")
 
     # ── Threshold sweep ──
-    print(f"\n{'='*60}")
-    print("Threshold sweep on validation set (using best saved model)...")
-    print(f"{'='*60}")
-    checkpoint = torch.load(str(MODEL_PATH), map_location=device, weights_only=False)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    model.eval()
+    if saved_any and save_path.exists():
+        print(f"\n{'='*60}")
+        print("Threshold sweep on validation set (using best saved model)...")
+        print(f"{'='*60}")
+        checkpoint = torch.load(str(save_path), map_location=device, weights_only=False)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.eval()
 
-    thresholds = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7]
-    onset_counts = {t: {'tp': 0, 'fp': 0, 'fn': 0} for t in thresholds}
-    frame_counts = {t: {'tp': 0, 'fp': 0, 'fn': 0} for t in thresholds}
+        thresholds = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7]
+        onset_counts = {t: {'tp': 0, 'fp': 0, 'fn': 0} for t in thresholds}
+        frame_counts = {t: {'tp': 0, 'fp': 0, 'fn': 0} for t in thresholds}
 
-    with torch.no_grad():
-        for batch in val_loader:
-            onset_gt = batch['onset'].to(device)
-            frame_gt = batch['frame'].to(device)
-            if use_precomputed:
-                features = batch['features'].to(device)
-            else:
-                audio = batch['audio'].to(device)
-                features = extractor.extract(audio)
-            T = min(features.size(1), onset_gt.size(1))
-            features, onset_gt = features[:, :T, :], onset_gt[:, :T, :]
-            frame_gt = frame_gt[:, :T, :]
+        with torch.no_grad():
+            for batch in val_loader:
+                features, onset_gt, frame_gt, _, _, loss_mask = _prepare_batch_tensors(
+                    batch, device, extractor=extractor,
+                )
 
-            with torch.amp.autocast('cuda', enabled=use_amp):
-                out = model(features)
+                with torch.amp.autocast('cuda', enabled=use_amp):
+                    out = model(features)
 
-            onset_probs = torch.sigmoid(out['onset_logits'])
-            frame_probs = torch.sigmoid(out['frame_logits'])
+                onset_probs = torch.sigmoid(out['onset_logits'])
+                frame_probs = torch.sigmoid(out['frame_logits'])
 
-            # Binarize regression onset GT for threshold sweep
-            onset_gt_bin = (onset_gt > 0.5).float()
+                # Binarize regression onset GT for threshold sweep
+                onset_gt_bin = (onset_gt > 0.5).float()
+                metric_mask = torch.ones_like(onset_gt_bin, dtype=torch.bool)
+                if loss_mask is not None:
+                    metric_mask = loss_mask.unsqueeze(-1).expand_as(onset_gt_bin) > 0.5
 
-            for t in thresholds:
-                o_pred = (onset_probs > t).float()
-                onset_counts[t]['tp'] += ((o_pred == 1) & (onset_gt_bin == 1)).sum().item()
-                onset_counts[t]['fp'] += ((o_pred == 1) & (onset_gt_bin == 0)).sum().item()
-                onset_counts[t]['fn'] += ((o_pred == 0) & (onset_gt_bin == 1)).sum().item()
+                for t in thresholds:
+                    o_pred = (onset_probs > t).float()
+                    onset_counts[t]['tp'] += ((o_pred == 1) & (onset_gt_bin == 1) & metric_mask).sum().item()
+                    onset_counts[t]['fp'] += ((o_pred == 1) & (onset_gt_bin == 0) & metric_mask).sum().item()
+                    onset_counts[t]['fn'] += ((o_pred == 0) & (onset_gt_bin == 1) & metric_mask).sum().item()
 
-                f_pred = (frame_probs > t).float()
-                frame_counts[t]['tp'] += ((f_pred == 1) & (frame_gt == 1)).sum().item()
-                frame_counts[t]['fp'] += ((f_pred == 1) & (frame_gt == 0)).sum().item()
-                frame_counts[t]['fn'] += ((f_pred == 0) & (frame_gt == 1)).sum().item()
+                    f_pred = (frame_probs > t).float()
+                    frame_counts[t]['tp'] += ((f_pred == 1) & (frame_gt == 1) & metric_mask).sum().item()
+                    frame_counts[t]['fp'] += ((f_pred == 1) & (frame_gt == 0) & metric_mask).sum().item()
+                    frame_counts[t]['fn'] += ((f_pred == 0) & (frame_gt == 1) & metric_mask).sum().item()
 
-    print(f"\n{'Thresh':>6}  {'Onset P':>8} {'Onset R':>8} {'Onset F1':>8}  |  {'Frame P':>8} {'Frame R':>8} {'Frame F1':>8}")
-    print("-" * 80)
-    best_onset_t, best_onset_f1_sweep = 0.5, 0.0
-    best_frame_t, best_frame_f1_sweep = 0.5, 0.0
-    for t in thresholds:
-        oc = onset_counts[t]
-        op = oc['tp'] / max(oc['tp'] + oc['fp'], 1)
-        orc = oc['tp'] / max(oc['tp'] + oc['fn'], 1)
-        of1 = 2 * op * orc / max(op + orc, 1e-8)
-        if of1 > best_onset_f1_sweep:
-            best_onset_f1_sweep = of1
-            best_onset_t = t
+        print(f"\n{'Thresh':>6}  {'Onset P':>8} {'Onset R':>8} {'Onset F1':>8}  |  {'Frame P':>8} {'Frame R':>8} {'Frame F1':>8}")
+        print("-" * 80)
+        best_onset_t, best_onset_f1_sweep = 0.5, 0.0
+        best_frame_t, best_frame_f1_sweep = 0.5, 0.0
+        for t in thresholds:
+            oc = onset_counts[t]
+            op = oc['tp'] / max(oc['tp'] + oc['fp'], 1)
+            orc = oc['tp'] / max(oc['tp'] + oc['fn'], 1)
+            of1 = 2 * op * orc / max(op + orc, 1e-8)
+            if of1 > best_onset_f1_sweep:
+                best_onset_f1_sweep = of1
+                best_onset_t = t
 
-        fc = frame_counts[t]
-        fp = fc['tp'] / max(fc['tp'] + fc['fp'], 1)
-        frc = fc['tp'] / max(fc['tp'] + fc['fn'], 1)
-        ff1 = 2 * fp * frc / max(fp + frc, 1e-8)
-        if ff1 > best_frame_f1_sweep:
-            best_frame_f1_sweep = ff1
-            best_frame_t = t
+            fc = frame_counts[t]
+            fp = fc['tp'] / max(fc['tp'] + fc['fp'], 1)
+            frc = fc['tp'] / max(fc['tp'] + fc['fn'], 1)
+            ff1 = 2 * fp * frc / max(fp + frc, 1e-8)
+            if ff1 > best_frame_f1_sweep:
+                best_frame_f1_sweep = ff1
+                best_frame_t = t
 
-        print(f"  {t:.2f}   {op:>8.3f} {orc:>8.3f} {of1:>8.3f}    |  {fp:>8.3f} {frc:>8.3f} {ff1:>8.3f}")
+            print(f"  {t:.2f}   {op:>8.3f} {orc:>8.3f} {of1:>8.3f}    |  {fp:>8.3f} {frc:>8.3f} {ff1:>8.3f}")
 
-    print(f"\n  Best onset threshold: {best_onset_t:.2f} -> F1={best_onset_f1_sweep:.3f}")
-    print(f"  Best frame threshold: {best_frame_t:.2f} -> F1={best_frame_f1_sweep:.3f}")
+        print(f"\n  Best onset threshold: {best_onset_t:.2f} -> F1={best_onset_f1_sweep:.3f}")
+        print(f"  Best frame threshold: {best_frame_t:.2f} -> F1={best_frame_f1_sweep:.3f}")
+    else:
+        print(f"\nNo newly saved model for this run; skipping threshold sweep")
 
 
 # ─── Benchmark ──────────────────────────────────────────────────────────────
@@ -1359,6 +2099,7 @@ def train(args):
 def benchmark(args):
     """Benchmark mel baseline inference speed."""
     device = torch.device(args.device)
+    checkpoint_path = _resolve_model_path(args.model_path, MODEL_PATH)
 
     test_audio = np.random.randn(SAMPLE_RATE * 10).astype(np.float32) * 0.1
     n_runs = 10
@@ -1367,8 +2108,8 @@ def benchmark(args):
     print("BENCHMARK: Mel Baseline transcription speed")
     print("=" * 60)
 
-    if MODEL_PATH.exists():
-        checkpoint = torch.load(str(MODEL_PATH), map_location=device, weights_only=False)
+    if checkpoint_path.exists():
+        checkpoint = torch.load(str(checkpoint_path), map_location=device, weights_only=False)
         config = checkpoint.get('config', {})
         extractor = MelFeatureExtractor(sr=SAMPLE_RATE, device=device)
         model = _build_model_from_config(config)
@@ -1398,7 +2139,7 @@ def benchmark(args):
         n_params = sum(p.numel() for p in model.parameters())
         print(f"Model params: {n_params:,}")
     else:
-        print(f"\nModel not found at {MODEL_PATH}, skipping")
+        print(f"\nModel not found at {checkpoint_path}, skipping")
 
 
 # ─── CLI ─────────────────────────────────────────────────────────────────────
@@ -1448,10 +2189,88 @@ def main():
     parser.add_argument('--num-workers', type=int, default=4)
     parser.add_argument('--resume', action='store_true',
                         help='Resume training from last checkpoint')
+    parser.add_argument('--train-augment', action='store_true', default=True,
+                        help='Enable training-time augmentation for the train split')
+    parser.add_argument('--no-train-augment', action='store_false', dest='train_augment',
+                        help='Disable training-time augmentation for the train split')
+    parser.add_argument('--finetune', action='store_true',
+                        help='Load a checkpoint and start a fresh fine-tuning run')
+    parser.add_argument('--adapter-finetune', action='store_true',
+                        help='Freeze the base model and train adapters plus onset-related heads')
+    parser.add_argument('--finetune-scope', type=str, default='decoder',
+                        choices=['heads', 'decoder', 'full'],
+                        help='Which model blocks to update during fine-tuning')
+    parser.add_argument('--init-from', type=str, default=None,
+                        help='Checkpoint path to initialize from during fine-tuning')
+    parser.add_argument('--model-path', type=str, default=None,
+                        help='Output checkpoint path for training, or input path for benchmarking')
+    parser.add_argument('--segment-manifest', type=str, default=None,
+                        help='JSON manifest of train segment IDs to use as a filtered subset')
+    parser.add_argument('--hard-val-segment-manifest', type=str, default=None,
+                        help='JSON manifest of validation segment IDs used to track hard-case metrics')
+    parser.add_argument('--save-best-on', type=str, default='auto',
+                        choices=['auto', 'onset_f1', 'hard_onset_f1'],
+                        help='Metric used to decide when to save checkpoints')
+    parser.add_argument('--save-finetune-candidate', action='store_true',
+                        help='For fresh fine-tunes, save the best candidate from this run even if it does not beat the source checkpoint metric')
+    parser.add_argument('--head-lr-scale', type=float, default=1.0,
+                        help='LR multiplier for output heads during fine-tuning')
+    parser.add_argument('--decoder-lr-scale', type=float, default=0.35,
+                        help='LR multiplier for key projection and temporal decoder blocks')
+    parser.add_argument('--backbone-lr-scale', type=float, default=0.1,
+                        help='LR multiplier for the ConvStack and Conformer backbone')
+    parser.add_argument('--adapter-bottleneck', type=int, default=0,
+                        help='Bottleneck size for residual adapters (0 disables adapters)')
+    parser.add_argument('--adapter-dropout', type=float, default=0.0,
+                        help='Dropout inside residual adapters')
+    parser.add_argument('--adapter-lr-scale', type=float, default=1.0,
+                        help='LR multiplier for adapter parameters during adapter fine-tuning')
+    parser.add_argument('--adapter-head-lr-scale', type=float, default=1.0,
+                        help='LR multiplier for onset-related heads during adapter fine-tuning')
+    parser.add_argument('--adapter-train-note-value-head', action='store_true',
+                        help='Also train the note_value head during adapter fine-tuning')
     parser.add_argument('--precompute-batch', type=int, default=16)
     parser.add_argument('--mixup-alpha', type=float, default=0.0)
+    parser.add_argument('--train-window-sec', type=float, default=0.0,
+                        help='Crop precomputed 10s examples to this many seconds for live-shaped training (0 disables)')
+    parser.add_argument('--emit-window-sec', type=float, default=0.0,
+                        help='When using --train-window-sec, compute loss only over the final N seconds')
+    parser.add_argument('--distill-from', type=str, default=None,
+                        help='Teacher checkpoint path for full-context teacher/student distillation')
+    parser.add_argument('--distill-weight', type=float, default=0.0,
+                        help='Weight for full-context teacher distillation loss (0 disables)')
+    parser.add_argument('--distill-temperature', type=float, default=1.0,
+                        help='Temperature for teacher onset/frame soft targets')
+    parser.add_argument('--distill-onset-weight', type=float, default=1.0,
+                        help='Relative onset component weight inside distillation loss')
+    parser.add_argument('--distill-frame-weight', type=float, default=0.5,
+                        help='Relative frame component weight inside distillation loss')
+    parser.add_argument('--distill-velocity-weight', type=float, default=0.1,
+                        help='Relative velocity component weight inside distillation loss')
+    parser.add_argument('--finetune-warmup-steps', type=int, default=1000,
+                        help='Warmup steps to use for fine-tuning runs')
+    parser.add_argument('--onset-weight', type=float, default=1.0,
+                        help='Loss weight for refined onset logits')
+    parser.add_argument('--frame-weight', type=float, default=1.0,
+                        help='Loss weight for frame logits')
+    parser.add_argument('--velocity-weight', type=float, default=0.5,
+                        help='Loss weight for velocity regression')
 
     args = parser.parse_args()
+    if args.train_window_sec < 0:
+        parser.error("--train-window-sec must be non-negative")
+    if args.emit_window_sec < 0:
+        parser.error("--emit-window-sec must be non-negative")
+    if args.train_window_sec > 0 and args.emit_window_sec <= 0:
+        parser.error("--emit-window-sec must be positive when --train-window-sec is set")
+    if args.train_window_sec > 0 and args.emit_window_sec > args.train_window_sec:
+        parser.error("--emit-window-sec cannot exceed --train-window-sec")
+    if args.distill_weight < 0:
+        parser.error("--distill-weight must be non-negative")
+    if args.distill_weight > 0 and args.train_window_sec <= 0:
+        parser.error("--distill-weight requires --train-window-sec")
+    if args.distill_temperature <= 0:
+        parser.error("--distill-temperature must be positive")
 
     if args.precompute:
         precompute_features(args)

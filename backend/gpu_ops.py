@@ -1640,11 +1640,15 @@ def get_gpu_mel_baseline_transcriber() -> Optional[GpuMelBaselineTranscriber]:
     if _gpu_mel_baseline_transcriber_loaded:
         return _gpu_mel_baseline_transcriber
 
-    model_paths = [
+    override_path = os.environ.get('LIVE_MEL_BASELINE_MODEL_PATH') or os.environ.get('MEL_BASELINE_MODEL_PATH')
+    model_paths = []
+    if override_path:
+        model_paths.append(override_path)
+    model_paths.extend([
         os.path.join(os.path.dirname(__file__), 'rhythm_training', 'mel_baseline_transcription.pt'),
         os.path.join(os.path.dirname(__file__), 'mel_baseline_transcription.pt'),
         '/root/rhythm_training/mel_baseline_transcription.pt',
-    ]
+    ])
 
     _gpu_mel_baseline_transcriber_status.update({
         'attempted': True,

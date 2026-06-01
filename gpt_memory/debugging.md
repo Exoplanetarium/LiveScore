@@ -1,1 +1,2 @@
 - On Windows PowerShell, local npm shims like npx can fail with PSSecurityException; use npx.cmd for lint/test commands instead.
+- backend/live_rhythm.py IncrementalTempoTracker can collapse to 120/240 if it scores aliased tempo peaks from raw note onsets and snaps too broadly to common BPMs; clustering near-simultaneous onsets, keeping direct IOI-derived candidates, penalizing overuse of 16th/32nd quantizations, and tightening snap tolerance avoids that bias.

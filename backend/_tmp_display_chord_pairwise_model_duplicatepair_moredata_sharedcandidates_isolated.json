@@ -1,0 +1,294 @@
+{
+  "version": 1,
+  "model_type": "pairwise_same_event_pitch_vote",
+  "pair_model": {
+    "feature_names": [
+      "time_delta_ms",
+      "duration_delta_ms",
+      "confidence_mean",
+      "confidence_gap",
+      "same_slot",
+      "both_slot_known",
+      "shared_pitch_count",
+      "union_pitch_count",
+      "jaccard_overlap",
+      "subset_relation",
+      "pitch_count_gap",
+      "lowest_pitch_gap"
+    ],
+    "intercept": 3.1350733124956545,
+    "coefficients": [
+      -1.4372474332317742,
+      0.36084508603523097,
+      -0.18464599074640922,
+      0.6870822150901126,
+      0.42356519251068525,
+      -0.33502682088437286,
+      0.0045453104448313075,
+      0.42717895909227,
+      -0.10212329681111217,
+      0.7515962381230519,
+      0.6439754745141014,
+      0.7544661213717503
+    ],
+    "standardize": {
+      "mean": [
+        4.41935483870966,
+        21.516129032258064,
+        0.549983870967742,
+        0.03506451612903226,
+        0.1935483870967742,
+        0.6774193548387096,
+        2.3548387096774195,
+        5.354838709677419,
+        0.46678187403993854,
+        0.4838709677419355,
+        1.6451612903225807,
+        4.967741935483871
+      ],
+      "scale": [
+        2.65999992176065,
+        47.23644776990364,
+        0.09442794521024227,
+        0.024155324643581937,
+        0.39507899077148023,
+        0.46746376600611095,
+        1.6174130498995714,
+        1.7697892547542193,
+        0.2544344398355145,
+        0.49973978660740875,
+        1.2584780131052358,
+        6.655019308606012
+      ]
+    },
+    "threshold": 0.5
+  },
+  "pitch_model": {
+    "feature_names": [
+      "component_size",
+      "component_confidence_sum",
+      "component_union_pitch_count",
+      "pitch_support_count",
+      "pitch_support_fraction",
+      "pitch_confidence_sum",
+      "pitch_confidence_fraction",
+      "pitch_confidence_max",
+      "pitch_confidence_mean",
+      "pitch_time_span_ms",
+      "pitch_mean_offset_ms",
+      "pitch_slot_known_fraction",
+      "pitch_slot_mode_fraction",
+      "pitch_is_lowest_fraction"
+    ],
+    "intercept": 0.20201701929214413,
+    "coefficients": [
+      0.04814902366379096,
+      0.2082695984971802,
+      -0.08820642710621747,
+      0.4444579179012749,
+      0.33248164190311014,
+      0.27090319080508407,
+      0.14522871857872918,
+      -0.0032224486375115723,
+      -0.016953508774812217,
+      0.2731322982444635,
+      0.12254781807814219,
+      0.046583996940904225,
+      0.010794542501450045,
+      -0.026662253403017682
+    ],
+    "standardize": {
+      "mean": [
+        1.0546318289786223,
+        0.5941150322361705,
+        3.6033254156769594,
+        1.0240922972514421,
+        0.9847302341364099,
+        0.5769871055310464,
+        0.9847374749869204,
+        0.5638605361384446,
+        0.5634497794367141,
+        0.08780454699694532,
+        0.1074787919918558,
+        0.6895147607736681,
+        0.6835765184933831,
+        0.333050559891415
+      ],
+      "scale": [
+        0.22726018622071517,
+        0.16115945058150113,
+        1.5479319929101274,
+        0.15333577033618845,
+        0.08603323301065575,
+        0.1278367446843295,
+        0.08608551627536638,
+        0.09128823472145167,
+        0.09133262641891518,
+        0.6717808268129888,
+        0.6901979787637614,
+        0.46269229024147557,
+        0.4618771922467062,
+        0.47049377908134915
+      ]
+    },
+    "threshold": 0.2
+  },
+  "training_summary": {
+    "benchmark_manifest": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2.json",
+    "chunk_seconds": 1.2,
+    "noise_profile": "balanced",
+    "pair_c": 1.0,
+    "pitch_c": 1.0,
+    "clip_count": 48,
+    "dataset_groups": 967,
+    "pair_examples": 31,
+    "pitch_examples": 2947,
+    "pair_positive_rate": 0.967741935483871,
+    "pair_train_accuracy": 1.0,
+    "pair_train_roc_auc": 1.0,
+    "pitch_positive_rate": 0.8683406854428232,
+    "pitch_train_accuracy": 0.6518493383101459,
+    "pitch_train_roc_auc": 0.6251797778610363,
+    "pitch_threshold": 0.2,
+    "duplicate_pair_sharedcandidate_source": "_tmp_display_chord_pairwise_model_duplicatepair_moredata_sharedcandidates.json",
+    "duplicate_pair_examples": 945,
+    "duplicate_pair_groups": 282,
+    "duplicate_pair_train_roc_auc": 0.7495908346972175,
+    "duplicate_pair_mining_passes": [
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "clean"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "clean"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "clean"
+      }
+    ]
+  },
+  "duplicate_pair_model": {
+    "feature_names": [
+      "pair_probability",
+      "shared_pitch_count",
+      "union_pitch_count",
+      "jaccard_overlap",
+      "subset_relation",
+      "lowest_pitch_gap",
+      "candidate_pitch_count",
+      "candidate_unique_left_count",
+      "candidate_unique_right_count",
+      "candidate_excluded_unique_count",
+      "candidate_unique_prob_sum",
+      "candidate_excluded_unique_prob_sum",
+      "candidate_unique_prob_mean",
+      "candidate_excluded_unique_prob_mean",
+      "candidate_support_confidence_sum",
+      "candidate_support_confidence_mean",
+      "candidate_matches_left",
+      "candidate_matches_right",
+      "candidate_matches_union",
+      "candidate_matches_vote",
+      "candidate_uses_both_sides"
+    ],
+    "intercept": -0.2088624173014747,
+    "coefficients": [
+      0.009031874960072682,
+      0.40084878635577276,
+      -0.6632785486991741,
+      0.4402791013696318,
+      0.018400132896376858,
+      -0.0026189708709852396,
+      -0.20771972943138364,
+      -0.5553901333280887,
+      -0.5763150270367414,
+      -0.7454163521638224,
+      -0.4266758926524734,
+      1.181310291209397,
+      0.7390033606126207,
+      -1.5364043087657138,
+      1.3332647765729222,
+      -0.6945779575025989,
+      0.33124559774449625,
+      0.554560043185904,
+      -1.3730335877923998,
+      -0.3760567072512109,
+      -0.21881105822832495
+    ],
+    "standardize": {
+      "mean": [
+        0.92598824983261,
+        2.9015873015873015,
+        4.898412698412699,
+        0.5924489795918395,
+        0.5968253968253968,
+        4.914285714285715,
+        3.86984126984127,
+        0.5111111111111111,
+        0.45714285714285713,
+        1.0285714285714285,
+        0.16654958727106742,
+        0.1760756896559484,
+        0.12143682714294725,
+        0.12167631560535455,
+        0.5482730158730152,
+        0.3969370370370365,
+        0.2984126984126984,
+        0.2984126984126984,
+        0.2984126984126984,
+        0.2984126984126984,
+        0.1111111111111111
+      ],
+      "scale": [
+        0.19413796467455208,
+        1.0924694704959748,
+        1.3855824588652201,
+        0.1237657084846854,
+        0.4905352612499944,
+        6.985855485962234,
+        1.3797440435089332,
+        0.6635907878248918,
+        0.6176541092225155,
+        0.8484212362407677,
+        0.15753218623062656,
+        0.16141374373606482,
+        0.09816794140311998,
+        0.09774551523100516,
+        0.4715659038276731,
+        0.26776316367360414,
+        0.45756153666884175,
+        0.4575615366688418,
+        0.45756153666884175,
+        0.4575615366688418,
+        0.3142696805273539
+      ]
+    },
+    "threshold": 0.5
+  }
+}

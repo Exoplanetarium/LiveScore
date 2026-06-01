@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "model_type": "pairwise_same_event_pitch_vote",
+  "pair_model": {
+    "feature_names": [
+      "time_delta_ms",
+      "duration_delta_ms",
+      "confidence_mean",
+      "confidence_gap",
+      "same_slot",
+      "both_slot_known",
+      "shared_pitch_count",
+      "union_pitch_count",
+      "jaccard_overlap",
+      "subset_relation",
+      "pitch_count_gap",
+      "lowest_pitch_gap"
+    ],
+    "intercept": 4.8322905119193615,
+    "coefficients": [
+      -0.5468472604033351,
+      1.2752881055058898,
+      -0.7848704625213807,
+      -0.4384495289986589,
+      2.191610119465417,
+      -0.6952219117015965,
+      1.232731257435033,
+      0.29135422322400284,
+      1.8617403138783237,
+      1.3753835430646015,
+      0.8350039712814088,
+      0.6726228122307537
+    ],
+    "standardize": {
+      "mean": [
+        4.3948201438848615,
+        23.345323741007196,
+        0.5587661870503597,
+        0.03461151079136689,
+        0.1510791366906475,
+        0.7410071942446043,
+        2.3309352517985613,
+        4.9352517985611515,
+        0.503285942674431,
+        0.5251798561151079,
+        1.3525179856115108,
+        5.762589928057554
+      ],
+      "scale": [
+        2.9340759952784135,
+        49.054324933479286,
+        0.07966630725319644,
+        0.02701225695448391,
+        0.3581259989828373,
+        0.43808165029175095,
+        1.3485323181421576,
+        1.7921035150180142,
+        0.23396543545000625,
+        0.4993655723475765,
+        1.0447767263630527,
+        7.846167312370507
+      ]
+    },
+    "threshold": 0.5
+  },
+  "pitch_model": {
+    "feature_names": [
+      "component_size",
+      "component_confidence_sum",
+      "component_union_pitch_count",
+      "pitch_support_count",
+      "pitch_support_fraction",
+      "pitch_confidence_sum",
+      "pitch_confidence_fraction",
+      "pitch_confidence_max",
+      "pitch_confidence_mean",
+      "pitch_time_span_ms",
+      "pitch_mean_offset_ms",
+      "pitch_slot_known_fraction",
+      "pitch_slot_mode_fraction",
+      "pitch_is_lowest_fraction"
+    ],
+    "intercept": 0.1395355425892333,
+    "coefficients": [
+      -0.042495393238749235,
+      -0.27939564810634,
+      -0.03924802049831203,
+      0.5589325493673112,
+      0.6026167115603265,
+      0.3441830572523952,
+      -0.4247342406872815,
+      0.03881145756737045,
+      0.3321478776715977,
+      -0.13507976271816877,
+      0.1060012345654523,
+      -1.387242633739719,
+      1.3868669335647885,
+      -0.03177281665987152
+    ],
+    "standardize": {
+      "mean": [
+        1.0706463388447498,
+        0.6019923770667764,
+        3.6012454369765945,
+        1.0343568821129483,
+        0.9818552716340992,
+        0.581368584925913,
+        0.9819081752146263,
+        0.5624100279149638,
+        0.5618416362465054,
+        0.13406055400472358,
+        0.14197552072149414,
+        0.7211724286021044,
+        0.7109727292248228,
+        0.3347648700880395
+      ],
+      "scale": [
+        0.25623316267146085,
+        0.17791262861451024,
+        1.5569851869351612,
+        0.18214413733207924,
+        0.09350472188870577,
+        0.14141498182587733,
+        0.09331392917643858,
+        0.091810754458552,
+        0.09172034998751373,
+        0.8880419182427095,
+        0.8104975084012948,
+        0.44806323332374676,
+        0.4472902436505238,
+        0.470541144602338
+      ]
+    },
+    "threshold": 0.2
+  },
+  "training_summary": {
+    "benchmark_manifest": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2.json",
+    "chunk_seconds": 1.2,
+    "noise_profile": "balanced",
+    "augment_chunk_seconds": [
+      0.6,
+      0.9
+    ],
+    "augment_noise_profiles": [
+      "open",
+      "clean"
+    ],
+    "mining_passes": [
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 1.2,
+        "noise_profile": "clean"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 0.6,
+        "noise_profile": "clean"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "balanced"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "open"
+      },
+      {
+        "chunk_seconds": 0.9,
+        "noise_profile": "clean"
+      }
+    ],
+    "pair_c": 1.0,
+    "pitch_c": 1.0,
+    "duplicate_pair_c": 1.0,
+    "clip_count": 48,
+    "dataset_groups": 1012,
+    "pair_examples": 417,
+    "pitch_examples": 27942,
+    "duplicate_pair_groups": 282,
+    "duplicate_pair_examples": 945,
+    "pair_positive_rate": 0.9640287769784173,
+    "pair_train_accuracy": 0.8776978417266187,
+    "pair_train_roc_auc": 0.9582089552238806,
+    "pitch_positive_rate": 0.8351943311144514,
+    "pitch_train_accuracy": 0.6662014172213871,
+    "pitch_train_roc_auc": 0.6647024290319757,
+    "pitch_threshold": 0.2,
+    "duplicate_pair_positive_rate": 0.2984126984126984,
+    "duplicate_pair_train_accuracy": 0.6793650793650794,
+    "duplicate_pair_train_roc_auc": 0.7495908346972175
+  },
+  "duplicate_pair_model": {
+    "feature_names": [
+      "pair_probability",
+      "shared_pitch_count",
+      "union_pitch_count",
+      "jaccard_overlap",
+      "subset_relation",
+      "lowest_pitch_gap",
+      "candidate_pitch_count",
+      "candidate_unique_left_count",
+      "candidate_unique_right_count",
+      "candidate_excluded_unique_count",
+      "candidate_unique_prob_sum",
+      "candidate_excluded_unique_prob_sum",
+      "candidate_unique_prob_mean",
+      "candidate_excluded_unique_prob_mean",
+      "candidate_support_confidence_sum",
+      "candidate_support_confidence_mean",
+      "candidate_matches_left",
+      "candidate_matches_right",
+      "candidate_matches_union",
+      "candidate_matches_vote",
+      "candidate_uses_both_sides"
+    ],
+    "intercept": -0.2088624173014747,
+    "coefficients": [
+      0.009031874960072682,
+      0.40084878635577276,
+      -0.6632785486991741,
+      0.4402791013696318,
+      0.018400132896376858,
+      -0.0026189708709852396,
+      -0.20771972943138364,
+      -0.5553901333280887,
+      -0.5763150270367414,
+      -0.7454163521638224,
+      -0.4266758926524734,
+      1.181310291209397,
+      0.7390033606126207,
+      -1.5364043087657138,
+      1.3332647765729222,
+      -0.6945779575025989,
+      0.33124559774449625,
+      0.554560043185904,
+      -1.3730335877923998,
+      -0.3760567072512109,
+      -0.21881105822832495
+    ],
+    "standardize": {
+      "mean": [
+        0.92598824983261,
+        2.9015873015873015,
+        4.898412698412699,
+        0.5924489795918395,
+        0.5968253968253968,
+        4.914285714285715,
+        3.86984126984127,
+        0.5111111111111111,
+        0.45714285714285713,
+        1.0285714285714285,
+        0.16654958727106742,
+        0.1760756896559484,
+        0.12143682714294725,
+        0.12167631560535455,
+        0.5482730158730152,
+        0.3969370370370365,
+        0.2984126984126984,
+        0.2984126984126984,
+        0.2984126984126984,
+        0.2984126984126984,
+        0.1111111111111111
+      ],
+      "scale": [
+        0.19413796467455208,
+        1.0924694704959748,
+        1.3855824588652201,
+        0.1237657084846854,
+        0.4905352612499944,
+        6.985855485962234,
+        1.3797440435089332,
+        0.6635907878248918,
+        0.6176541092225155,
+        0.8484212362407677,
+        0.15753218623062656,
+        0.16141374373606482,
+        0.09816794140311998,
+        0.09774551523100516,
+        0.4715659038276731,
+        0.26776316367360414,
+        0.45756153666884175,
+        0.4575615366688418,
+        0.45756153666884175,
+        0.4575615366688418,
+        0.3142696805273539
+      ]
+    },
+    "threshold": 0.5
+  }
+}

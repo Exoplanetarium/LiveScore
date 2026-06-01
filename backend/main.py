@@ -4,7 +4,7 @@ import os
 import time
 from collections import defaultdict
 from io import BytesIO
-from typing import Dict, List
+from typing import Dict, List, Tuple
 
 
 # ─── Timing Instrumentation ───────────────────────────────────────────────────
@@ -63,6 +63,13 @@ class TimingTracker:
 # Global timing tracker
 TIMER = TimingTracker()
 
+
+def _get_timed_display_state(session) -> Tuple[Dict, float]:
+    TIMER.start("display_state")
+    display_state = session.get_display_state()
+    display_state_ms = TIMER.stop("display_state")
+    return display_state or {}, display_state_ms
+
 # consistency between local and server
 os.environ["OMP_NUM_THREADS"] = "1"
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
@@ -101,8 +108,26 @@ class AudioStreamRequest(BaseModel):
 class StreamReset(BaseModel):
     session_id: str
 
-OVERLAP_SAMPLES = 4096  # ~93ms @ 44.1kHz, > n_fft for continuity
+OVERLAP_SAMPLES = 4096  # ~93ms @ 44.1kHz, > n_fft for continuity. Used as the
+                        # boundary-recovery band (see _shift_overlap_events_with_recent_dedupe).
+# Inference left-context: the neural transcriber is markedly more accurate (both
+# precision and recall) when it sees more than the bare 0.6s chunk. We prepend a
+# longer history tail purely for model calibration, but still only emit/recover
+# notes in the newest chunk plus the small OVERLAP_SAMPLES recovery band; notes
+# deeper in the context were already emitted by earlier chunks and are dropped.
+# Tunable via LIVE_CONTEXT_SEC for benchmarking; 0 disables (legacy 93ms behavior).
+try:
+    LIVE_CONTEXT_SEC = float(os.environ.get("LIVE_CONTEXT_SEC", "2.4"))
+except (TypeError, ValueError):
+    LIVE_CONTEXT_SEC = 2.4
+CONTEXT_SAMPLES = max(OVERLAP_SAMPLES, int(LIVE_CONTEXT_SEC * 44100))
 MIN_STREAM_ANALYSIS_SAMPLES = 16385  # torch.stft(center=True, reflect) needs input > 16384 for CQT
+CHUNK_END_GUARD_SEC = 0.025
+CHUNK_END_MICRO_EVENT_MAX_DURATION_SEC = 0.045
+NOTE_EVENT_DEDUPE_TOLERANCE_SEC = 0.05
+OVERLAP_RECOVERY_NOTE_MATCH_SEC = 0.08
+CHORD_EVENT_DEDUPE_TOLERANCE_SEC = 0.06
+RECENT_EVENT_RETENTION_SEC = 0.25
 _stream_sessions: Dict[str, Dict] = {}
 
 # A/B test flag: set to True to use optimized pipeline (4x faster)
@@ -178,57 +203,14 @@ def _load_bytes_to_pcm(data: bytes, target_sr: int = 44100) -> np.ndarray:
     return y
 
 
-def _append_stream_audio_chunk(sess: Dict, x_chunk: np.ndarray) -> None:
-    history = sess.setdefault("full_audio_chunks", [])
-    history.append(x_chunk.astype(np.float32, copy=False))
-
-
-def _get_stream_session_audio(sess: Dict) -> np.ndarray | None:
-    chunks = sess.get("full_audio_chunks") or []
-    if not chunks:
-        return None
-
-    try:
-        return np.concatenate(chunks).astype(np.float32, copy=False)
-    except Exception:
-        return None
-
-
-def _run_classic_finalize_analysis(audio: np.ndarray, debug: bool = False) -> Dict:
-    temp_audio_path = None
-    try:
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
-            sf.write(tmp_file.name, audio, 44100)
-            temp_audio_path = tmp_file.name
-
-        return analyze_audio(
-            temp_audio_path,
-            debug,
-            True,
-            True,
-            True,
-            "cuda",
-        )
-    except Exception:
-        logger.warning(
-            "Classic finalize pass failed; falling back to optimized analysis",
-            exc_info=True,
-        )
-        return analyze_audio_optimized(audio, debug)
-    finally:
-        if temp_audio_path:
-            try:
-                os.unlink(temp_audio_path)
-            except OSError:
-                pass
-
 def _get_session(session_id: str) -> Dict:
     s = _stream_sessions.get(session_id)
     if s is None:
         s = {
             "tail": np.zeros(0, dtype=np.float32),
             "sample_cursor": 0,  # samples processed (without overlap)
-            "full_audio_chunks": [],
+            "recent_notes": [],
+            "recent_chords": [],
         }
         _stream_sessions[session_id] = s
     return s
@@ -261,6 +243,34 @@ def _event_duration(event: Dict) -> float:
             pass
 
     return 0.0
+
+
+def _drop_chunk_end_micro_events(
+    events: List[Dict],
+    analysis_window_sec: float,
+    guard_sec: float = CHUNK_END_GUARD_SEC,
+    max_duration_sec: float = CHUNK_END_MICRO_EVENT_MAX_DURATION_SEC,
+) -> Tuple[List[Dict], int]:
+    """Suppress short events emitted at the chunk tail where context is weakest.
+
+    The live chunk-gap diagnostic showed most chunk-only false positives were
+    ~16ms notes fired within ~5ms of the chunk end. Defer these edge events so
+    the next chunk or finalization pass can decide them with more future context.
+    """
+    if not events or analysis_window_sec <= 0:
+        return list(events or []), 0
+
+    keep: List[Dict] = []
+    dropped = 0
+    threshold = max(0.0, analysis_window_sec - guard_sec)
+    for event in events:
+        onset = _event_time(event)
+        duration = _event_duration(event)
+        if onset >= threshold and duration <= max_duration_sec:
+            dropped += 1
+            continue
+        keep.append(event)
+    return keep, dropped
 
 
 def _event_confidence(event: Dict) -> float:
@@ -394,6 +404,92 @@ def _dedupe_chord_events(
             deduped[duplicate_idx] = chord_copy
 
     return sorted(deduped, key=_event_time)
+
+
+def _note_events_match(
+    event_a: Dict,
+    event_b: Dict,
+    time_tolerance_sec: float = OVERLAP_RECOVERY_NOTE_MATCH_SEC,
+) -> bool:
+    try:
+        midi_a = int(event_a.get("midi_note"))
+        midi_b = int(event_b.get("midi_note"))
+    except (TypeError, ValueError):
+        return False
+
+    if midi_a != midi_b:
+        return False
+
+    onset_a = _event_time(event_a)
+    onset_b = _event_time(event_b)
+    if abs(onset_a - onset_b) <= time_tolerance_sec:
+        return True
+
+    offset_a = onset_a + _event_duration(event_a)
+    offset_b = onset_b + _event_duration(event_b)
+    return min(offset_a, offset_b) >= (max(onset_a, onset_b) - 0.02)
+
+
+def _chord_events_match(
+    event_a: Dict,
+    event_b: Dict,
+    time_tolerance_sec: float = CHORD_EVENT_DEDUPE_TOLERANCE_SEC,
+) -> bool:
+    return (
+        _chord_signature(event_a) == _chord_signature(event_b)
+        and abs(_event_time(event_a) - _event_time(event_b)) <= time_tolerance_sec
+    )
+
+
+def _trim_recent_events(
+    events: List[Dict],
+    current_time_sec: float,
+    retention_sec: float = RECENT_EVENT_RETENTION_SEC,
+) -> List[Dict]:
+    cutoff = current_time_sec - retention_sec
+    if cutoff <= 0.0:
+        return list(events)
+    return [dict(event) for event in events if _event_time(event) >= cutoff]
+
+
+def _shift_overlap_events_with_recent_dedupe(
+    events: List[Dict],
+    absolute_chunk_start_sec: float,
+    overlap_sec: float,
+    recent_events: List[Dict],
+    duplicate_matcher,
+    recovery_band_sec: float | None = None,
+) -> Tuple[List[Dict], int, int]:
+    emitted: List[Dict] = []
+    overlap_recovered = 0
+    overlap_duplicates_skipped = 0
+
+    # Notes in the prepended history older than the recovery band were already
+    # emitted by earlier chunks; that audio is present only as model context, so
+    # drop them here rather than re-recovering them as duplicates.
+    recovery_floor_sec = (
+        overlap_sec - recovery_band_sec
+        if recovery_band_sec is not None
+        else 0.0
+    )
+
+    for event in events or []:
+        time_seconds = _event_time(event)
+        absolute_time = absolute_chunk_start_sec + (time_seconds - overlap_sec)
+        shifted = dict(event)
+        shifted["time_seconds"] = round(absolute_time, 6)
+
+        if time_seconds < overlap_sec:
+            if time_seconds < recovery_floor_sec:
+                continue
+            if any(duplicate_matcher(shifted, existing) for existing in recent_events):
+                overlap_duplicates_skipped += 1
+                continue
+            overlap_recovered += 1
+
+        emitted.append(shifted)
+
+    return emitted, overlap_recovered, overlap_duplicates_skipped
 
 
 LIVE_NOISE_FILTER_PROFILES = {
@@ -577,7 +673,6 @@ async def _analyze_uploaded_stream_chunk(
     chunk_duration_ms = len(x_chunk) / 44100 * 1000
 
     sess = _get_session(session_id)
-    _append_stream_audio_chunk(sess, x_chunk)
     tail = sess["tail"]
     if tail.size > 0:
         x_full = np.concatenate([tail, x_chunk])
@@ -620,6 +715,7 @@ async def _analyze_uploaded_stream_chunk(
         }
 
     overlap_sec = float(tail.size) / 44100.0
+    absolute_chunk_start_sec = float(sess["sample_cursor"]) / 44100.0
 
     TIMER.start("chunk_inference")
     analysis_path = "optimized" if USE_OPTIMIZED_PIPELINE else "split_pipeline"
@@ -710,6 +806,22 @@ async def _analyze_uploaded_stream_chunk(
         results["chords"] = contention_result.get("chords") or []
         live_filter_stats = contention_result.get("stats")
 
+    analysis_window_sec = float(x_full.size) / 44100.0
+    boundary_micro_notes_filtered = 0
+    boundary_micro_chords_filtered = 0
+    results["notes"], boundary_micro_notes_filtered = _drop_chunk_end_micro_events(
+        results.get("notes") or [],
+        analysis_window_sec,
+    )
+    results["chords"], boundary_micro_chords_filtered = _drop_chunk_end_micro_events(
+        results.get("chords") or [],
+        analysis_window_sec,
+    )
+
+    # Only the most recent OVERLAP_SAMPLES of the prepended context acts as the
+    # boundary recovery band; older context audio is calibration-only.
+    recovery_band_sec = min(overlap_sec, float(OVERLAP_SAMPLES) / 44100.0)
+
     def _shift_and_filter_events(evts):
         out = []
         for event in evts or []:
@@ -717,16 +829,33 @@ async def _analyze_uploaded_stream_chunk(
             if time_seconds < overlap_sec:
                 continue
 
-            absolute_time = (sess["sample_cursor"] / 44100.0) + (time_seconds - overlap_sec)
+            absolute_time = absolute_chunk_start_sec + (time_seconds - overlap_sec)
             shifted = dict(event)
             shifted["time_seconds"] = round(absolute_time, 6)
             out.append(shifted)
         return out
 
+    shifted_notes, overlap_notes_recovered, overlap_note_duplicates_skipped = _shift_overlap_events_with_recent_dedupe(
+        results.get("notes") or [],
+        absolute_chunk_start_sec,
+        overlap_sec,
+        sess.get("recent_notes") or [],
+        _note_events_match,
+        recovery_band_sec=recovery_band_sec,
+    )
+    shifted_chords, overlap_chords_recovered, overlap_chord_duplicates_skipped = _shift_overlap_events_with_recent_dedupe(
+        results.get("chords") or [],
+        absolute_chunk_start_sec,
+        overlap_sec,
+        sess.get("recent_chords") or [],
+        _chord_events_match,
+        recovery_band_sec=recovery_band_sec,
+    )
+
     results_filtered = {
         "onsets": _shift_and_filter_events(results.get("onsets")),
-        "notes": _shift_and_filter_events(results.get("notes")),
-        "chords": _shift_and_filter_events(results.get("chords")),
+        "notes": shifted_notes,
+        "chords": shifted_chords,
         "analysis_summary": results.get("analysis_summary", {}),
     }
 
@@ -737,9 +866,19 @@ async def _analyze_uploaded_stream_chunk(
         "total_chords": len(results_filtered["chords"]),
     }
 
-    sess["sample_cursor"] += int(x_chunk.size)
+    next_sample_cursor = sess["sample_cursor"] + int(x_chunk.size)
+    next_cursor_sec = float(next_sample_cursor) / 44100.0
+    sess["recent_notes"] = _trim_recent_events(
+        _dedupe_note_events([*(sess.get("recent_notes") or []), *results_filtered["notes"]], NOTE_EVENT_DEDUPE_TOLERANCE_SEC),
+        next_cursor_sec,
+    )
+    sess["recent_chords"] = _trim_recent_events(
+        _dedupe_chord_events([*(sess.get("recent_chords") or []), *results_filtered["chords"]], CHORD_EVENT_DEDUPE_TOLERANCE_SEC),
+        next_cursor_sec,
+    )
+    sess["sample_cursor"] = next_sample_cursor
 
-    take = min(OVERLAP_SAMPLES, x_full.size)
+    take = min(CONTEXT_SAMPLES, x_full.size)
     sess["tail"] = x_full[-take:].astype(np.float32, copy=False)
 
     chunk_total_ms = TIMER.stop("chunk_total")
@@ -756,6 +895,25 @@ async def _analyze_uploaded_stream_chunk(
         results_filtered["stream_info"]["neural_error"] = neural_error
     if live_filter_stats is not None:
         results_filtered["stream_info"]["live_filter"] = live_filter_stats
+    if (
+        overlap_notes_recovered
+        or overlap_note_duplicates_skipped
+        or overlap_chords_recovered
+        or overlap_chord_duplicates_skipped
+    ):
+        results_filtered["stream_info"]["overlap_recovery"] = {
+            "notes_recovered": overlap_notes_recovered,
+            "note_duplicates_skipped": overlap_note_duplicates_skipped,
+            "chords_recovered": overlap_chords_recovered,
+            "chord_duplicates_skipped": overlap_chord_duplicates_skipped,
+        }
+    if boundary_micro_notes_filtered or boundary_micro_chords_filtered:
+        results_filtered["stream_info"]["boundary_micro_filter"] = {
+            "notes_filtered": boundary_micro_notes_filtered,
+            "chords_filtered": boundary_micro_chords_filtered,
+            "guard_sec": CHUNK_END_GUARD_SEC,
+            "max_duration_sec": CHUNK_END_MICRO_EVENT_MAX_DURATION_SEC,
+        }
 
     analyzer_timings = results.get("_timing_ms") or {}
     results_filtered["_timing_ms"] = {
@@ -1389,8 +1547,10 @@ async def live_process_audio_chunk(
         response["fallback_reason"] = response["neural_error"]
 
         if response["needs_refresh"]:
-            response["all_notes"] = session.get_all_notes()
-            response["all_chords"] = session.coarse_chords
+            display_state, display_state_ms = _get_timed_display_state(session)
+            response["all_notes"] = display_state.get("notes", [])
+            response["all_chords"] = display_state.get("chords", [])
+            response.setdefault("_timing_ms", {})["display_state"] = round(display_state_ms, 2)
 
         return JSONResponse(content=make_json_serializable(response))
     except Exception as e:
@@ -1421,8 +1581,10 @@ async def live_process_notes(req: LiveNotesInput):
     )
     result["next_refinement_poll_ms"] = session.get_next_refinement_delay_ms()
     if result.get("needs_refresh"):
-        result["all_notes"] = session.get_all_notes()
-        result["all_chords"] = session.coarse_chords
+        display_state, display_state_ms = _get_timed_display_state(session)
+        result["all_notes"] = display_state.get("notes", [])
+        result["all_chords"] = display_state.get("chords", [])
+        result.setdefault("_timing_ms", {})["display_state"] = round(display_state_ms, 2)
     
     return JSONResponse(content=make_json_serializable(result))
 
@@ -1458,8 +1620,10 @@ async def live_check_refinement(req: LiveSessionQuery):
         "next_refinement_poll_ms": session.get_next_refinement_delay_ms(current_time),
     }
     if payload["needs_refresh"]:
-        payload["all_notes"] = session.get_all_notes()
-        payload["all_chords"] = session.coarse_chords
+        display_state, display_state_ms = _get_timed_display_state(session)
+        payload["all_notes"] = display_state.get("notes", [])
+        payload["all_chords"] = display_state.get("chords", [])
+        payload.setdefault("_timing_ms", {})["display_state"] = round(display_state_ms, 2)
 
     return JSONResponse(content=make_json_serializable(payload))
 
@@ -1472,75 +1636,17 @@ async def live_get_all_notes(req: LiveSessionQuery):
     Use this when the frontend needs to refresh the full score.
     """
     session = get_live_session(req.session_id)
-    all_notes = session.get_all_notes()
+    display_state, display_state_ms = _get_timed_display_state(session)
     bpm, confidence = session.get_current_bpm()
     
     return JSONResponse(content=make_json_serializable({
-        "notes": all_notes,
-        "chords": session.coarse_chords,
+        "notes": display_state.get("notes", []),
+        "chords": display_state.get("chords", []),
         "bpm": bpm,
         "bpm_confidence": confidence,
         "beat_grid": session.grid_payload(),
         "refinement_version": session.refinement_state.get_refinement_version(),
-    }))
-
-
-@app.post("/live/finalize")
-async def live_finalize_session(req: LiveSessionQuery):
-    """
-    Finalize a live session (e.g., when recording stops).
-    
-    Forces refinement of all pending notes and returns final results.
-    Use this endpoint when the user stops recording.
-    """
-    session = get_live_session(req.session_id)
-
-    stream_session = _get_session(req.session_id)
-    full_audio = _get_stream_session_audio(stream_session)
-
-    if full_audio is not None and full_audio.size >= MIN_STREAM_ANALYSIS_SAMPLES:
-        final_results = await run_in_threadpool(
-            _run_classic_finalize_analysis,
-            full_audio,
-        )
-        analysis_summary = final_results.get("analysis_summary", {}) or {}
-        final_notes = final_results.get("notes") or []
-        final_chords = final_results.get("chords") or []
-        final_onsets = final_results.get("onsets") or []
-
-        return JSONResponse(content=make_json_serializable({
-            "status": "finalized",
-            "finalization_mode": "classic_full_pass",
-            "notes": final_notes,
-            "chords": final_chords,
-            "onsets": final_onsets,
-            "bpm": analysis_summary.get("detected_bpm"),
-            "bpm_confidence": analysis_summary.get("tempo_confidence"),
-            "analysis_summary": analysis_summary,
-            "beat_grid": session.grid_payload(),
-            "total_notes": len(final_notes),
-            "total_chords": len(final_chords),
-            "refinement_version": session.refinement_state.get_refinement_version(),
-        }))
-
-    # Force refinement of all pending notes when a classic full pass is unavailable.
-    await run_in_threadpool(session.force_refinement)
-
-    all_notes = session.get_all_notes()
-    bpm, confidence = session.get_current_bpm()
-
-    return JSONResponse(content=make_json_serializable({
-        "status": "finalized",
-        "finalization_mode": "live_refinement_only",
-        "notes": all_notes,
-        "chords": session.coarse_chords,
-        "onsets": [],
-        "bpm": bpm,
-        "bpm_confidence": confidence,
-        "beat_grid": session.grid_payload(),
-        "total_notes": len(all_notes),
-        "total_chords": len(session.coarse_chords),
-        "refinement_version": session.refinement_state.get_refinement_version(),
+        "_timing_ms": {"display_state": round(display_state_ms, 2)},
     }))
 
 

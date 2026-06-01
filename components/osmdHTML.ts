@@ -1314,7 +1314,13 @@ export const OSMD_HTML = `
       // Parse each measure
       const measures = doc.querySelectorAll('measure');
       let currentTime = 0; // in seconds
-      
+
+      // Tracks notes that have an open tie ("start"/"continue") so the tied
+      // continuation can extend the original note's duration instead of being
+      // re-articulated. Keyed by voice + midi; persists across measures since
+      // ties commonly span barlines. Value is a reference to the pushed note.
+      const tiedOpen = {};
+
       measures.forEach((measure, measureIndex) => {
         let voice1Time = currentTime;
         let voice2Time = currentTime;
@@ -1390,6 +1396,18 @@ export const OSMD_HTML = `
                   }
                 }
                 
+                // Detect tie state for this note. <tie> elements (not <tied>,
+                // which is purely visual) drive playback sustain.
+                let tieStart = false;
+                let tieStop = false;
+                const tieEls = el.querySelectorAll('tie');
+                for (let ti = 0; ti < tieEls.length; ti++) {
+                  const ty = tieEls[ti].getAttribute('type');
+                  if (ty === 'start') tieStart = true;
+                  else if (ty === 'stop') tieStop = true;
+                }
+                const tieKey = activeVoice + ':' + midi;
+
                 // Handle grace notes - play very quickly before the main note
                 if (isGrace) {
                   const graceNoteDuration = 0.08; // 80ms grace note
@@ -1404,14 +1422,32 @@ export const OSMD_HTML = `
                   // Expand ornament into multiple notes
                   const expandedNotes = expandOrnament(ornamentType, midi, noteStartTime, durationSeconds, playbackBPM);
                   notes.push(...expandedNotes);
+                } else if (tieStop && tiedOpen[tieKey]) {
+                  // Continuation of a tie: extend the original note's duration
+                  // rather than re-striking it. Use the full (un-shortened)
+                  // duration so the sustain has no gap.
+                  tiedOpen[tieKey].duration += durationSeconds;
+                  if (!tieStart) {
+                    // End of the tie chain — close it out.
+                    delete tiedOpen[tieKey];
+                  }
                 } else {
-                  // Regular note
-                  notes.push({
+                  // Regular note (or a tie-start). A tie-start sustains into the
+                  // next segment, so don't apply the separation shortening; a
+                  // standalone note gets the usual slight shortening.
+                  const noteObj = {
                     time: noteStartTime,
                     note: noteName,
-                    duration: Math.max(0.1, durationSeconds * 0.9), // slightly shorter for separation
+                    duration: tieStart
+                      ? durationSeconds
+                      : Math.max(0.1, durationSeconds * 0.9), // slightly shorter for separation
                     midi: midi
-                  });
+                  };
+                  notes.push(noteObj);
+                  if (tieStart) {
+                    // Open a tie so following continuations extend this note.
+                    tiedOpen[tieKey] = noteObj;
+                  }
                 }
                 
                 // Update last note time for this voice (for chord detection)

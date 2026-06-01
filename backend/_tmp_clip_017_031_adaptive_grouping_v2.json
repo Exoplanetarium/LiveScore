@@ -1,0 +1,1763 @@
+{
+  "config": {
+    "split": "test",
+    "pieces": 2,
+    "scan_seconds": 45.0,
+    "clip_seconds": 6.0,
+    "chunk_seconds": 0.6,
+    "step_seconds": 1.0,
+    "min_notes": 8,
+    "categories": [
+      "quiet",
+      "loud",
+      "mixed"
+    ],
+    "clip_ids": [
+      "clip_017",
+      "clip_031"
+    ],
+    "noise_profile": "balanced",
+    "run_retro_correction": true,
+    "retro_window_sec": 0.2,
+    "retro_band_sec": 0.1,
+    "retro_min_confidence": 0.35,
+    "retro_match_onset_tol": 0.05,
+    "retro_boundary_gate": true,
+    "retro_gate_post_confidence": 0.65,
+    "retro_gate_min_activity_ratio": 0.35,
+    "retro_threshold": null,
+    "eval_boundary_band_sec": 0.1,
+    "selection_mode": "manifest",
+    "benchmark_manifest": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2.json"
+  },
+  "clips": {
+    "clip_017": {
+      "clip": {
+        "title": "Pour le piano (Complete)",
+        "piece_id": "MIDI-Unprocessed_R2_D2-12-13-15_mid--AUDIO-from_mp3_12_R2_2015_wav--3",
+        "audio_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2015\\MIDI-Unprocessed_R2_D2-12-13-15_mid--AUDIO-from_mp3_12_R2_2015_wav--3.wav",
+        "midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2015\\MIDI-Unprocessed_R2_D2-12-13-15_mid--AUDIO-from_mp3_12_R2_2015_wav--3.midi",
+        "start_sec": 51.0,
+        "end_sec": 57.0,
+        "duration_sec": 6.0,
+        "gt_note_count": 197,
+        "reference_bpm": 120.0,
+        "rms": 0.08980021845822192,
+        "peak": 0.4395904541015625,
+        "crest_factor": 4.89520472944144,
+        "rms_std": 0.014187910267570021,
+        "subwindow_count": 30,
+        "selection_features": {
+          "note_density": 32.833333333333336,
+          "onset_density": 6.833333333333333,
+          "onset_event_count": 41,
+          "mean_notes_per_onset": 4.804878048780488,
+          "max_notes_per_onset": 8,
+          "ioi_cv": 0.5791243756022562,
+          "boundary_event_count": 12,
+          "boundary_event_rate": 0.2926829268292683,
+          "long_sustain_rate": 0.0
+        },
+        "clip_id": "clip_017",
+        "selection_rank": 17
+      },
+      "ground_truth_notes": 197,
+      "reference_bpm": 120.0,
+      "control": {
+        "precision": 0.7431192660550459,
+        "recall": 0.8223350253807107,
+        "f1": 0.7807228915662651,
+        "matched": 162,
+        "predicted": 218,
+        "ground_truth": 197,
+        "rhythm_precision": 0.9691358024691358,
+        "offset_precision": 0.7201834862385321,
+        "offset_recall": 0.7969543147208121,
+        "offset_f1": 0.7566265060240964,
+        "offset_matched": 157,
+        "note_value_accuracy": 0.5308641975308642,
+        "note_value_matched": 162,
+        "note_value_avg_beat_error": 0.07407407407407407,
+        "duplicates": 23,
+        "duplicates_per_100_notes": 10.55045871559633,
+        "display_final_note_event_count": 197,
+        "display_note_precision": 0.817258883248731,
+        "display_note_recall": 0.817258883248731,
+        "display_note_f1": 0.817258883248731,
+        "display_note_matched": 161,
+        "display_note_predicted": 197,
+        "display_note_ground_truth": 197,
+        "display_note_rhythm_precision": 0.9627329192546584,
+        "display_offset_precision": 0.7868020304568528,
+        "display_offset_recall": 0.7868020304568528,
+        "display_offset_f1": 0.7868020304568529,
+        "display_offset_matched": 155,
+        "display_note_value_accuracy": 0.2857142857142857,
+        "display_note_value_matched": 161,
+        "display_note_value_avg_beat_error": 0.2109213250517598,
+        "display_cluster_precision": 0.2926829268292683,
+        "display_cluster_recall": 0.2926829268292683,
+        "display_cluster_f1": 0.2926829268292683,
+        "display_cluster_exact_matches": 12,
+        "display_cluster_predicted": 41,
+        "display_cluster_ground_truth": 41,
+        "display_cluster_onset_aligned_matches": 35,
+        "display_cluster_onset_alignment_precision": 0.8536585365853658,
+        "display_cluster_onset_alignment_recall": 0.8536585365853658,
+        "display_cluster_avg_jaccard": 0.7856184291898578,
+        "display_cluster_overclustered_matches": 5,
+        "display_cluster_underclustered_matches": 11,
+        "display_cluster_pitch_conflict_matches": 7,
+        "display_cluster_unmatched_predicted": 6,
+        "display_cluster_unmatched_ground_truth": 6,
+        "display_strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.6751269035532995,
+            "recall": 0.6751269035532995,
+            "f1": 0.6751269035532995,
+            "matched": 133,
+            "predicted": 197,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9774436090225563
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.7918781725888325,
+            "recall": 0.7918781725888325,
+            "f1": 0.7918781725888325,
+            "matched": 156,
+            "predicted": 197,
+            "ground_truth": 197,
+            "rhythm_precision": 0.967948717948718
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.8071065989847716,
+            "recall": 0.8071065989847716,
+            "f1": 0.8071065989847716,
+            "matched": 159,
+            "predicted": 197,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9622641509433962
+          }
+        },
+        "boundary_gt_notes": 67,
+        "boundary_matched_notes": 58,
+        "boundary_missed_notes": 9,
+        "boundary_miss_rate": 0.13432835820895522,
+        "display_snapshot_count": 18,
+        "refinement_snapshot_count": 7,
+        "final_display_note_count": 38,
+        "matched_display_notes": 33,
+        "stabilized_display_notes": 33,
+        "time_to_first_correct_note_ms": 50.06299999999975,
+        "algorithmic_time_to_first_correct_note_ms": 39.58299999999993,
+        "time_to_visible_median_ms": 488.8070000000004,
+        "time_to_visible_p95_ms": 661.0649999999999,
+        "algorithmic_time_to_visible_median_ms": 472.9170000000007,
+        "algorithmic_time_to_visible_p95_ms": 650.625,
+        "stabilization_latency_median_ms": 1433.9279999999999,
+        "stabilization_latency_p95_ms": 2556.0884,
+        "algorithmic_stabilization_latency_median_ms": 1256.25,
+        "algorithmic_stabilization_latency_p95_ms": 2347.7084,
+        "avg_revision_count": 1.9090909090909092,
+        "max_revision_count": 4.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.6330275229357798,
+            "recall": 0.700507614213198,
+            "f1": 0.6650602409638554,
+            "matched": 138,
+            "predicted": 218,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9782608695652174
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.7247706422018348,
+            "recall": 0.8020304568527918,
+            "f1": 0.7614457831325302,
+            "matched": 158,
+            "predicted": 218,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9746835443037974
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.7339449541284404,
+            "recall": 0.8121827411167513,
+            "f1": 0.7710843373493976,
+            "matched": 160,
+            "predicted": 218,
+            "ground_truth": 197,
+            "rhythm_precision": 0.96875
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "fixed_baseline": 10
+        },
+        "profile_hit_rate": 0.0,
+        "avg_chunk_total_ms": 12.732,
+        "p95_chunk_total_ms": 16.1775,
+        "avg_real_time_factor": 0.0211,
+        "selected_thresholds": [
+          0.38
+        ]
+      },
+      "treatment": {
+        "precision": 0.7431192660550459,
+        "recall": 0.8223350253807107,
+        "f1": 0.7807228915662651,
+        "matched": 162,
+        "predicted": 218,
+        "ground_truth": 197,
+        "rhythm_precision": 0.9691358024691358,
+        "offset_precision": 0.7201834862385321,
+        "offset_recall": 0.7969543147208121,
+        "offset_f1": 0.7566265060240964,
+        "offset_matched": 157,
+        "note_value_accuracy": 0.5308641975308642,
+        "note_value_matched": 162,
+        "note_value_avg_beat_error": 0.07407407407407407,
+        "duplicates": 23,
+        "duplicates_per_100_notes": 10.55045871559633,
+        "display_final_note_event_count": 197,
+        "display_note_precision": 0.817258883248731,
+        "display_note_recall": 0.817258883248731,
+        "display_note_f1": 0.817258883248731,
+        "display_note_matched": 161,
+        "display_note_predicted": 197,
+        "display_note_ground_truth": 197,
+        "display_note_rhythm_precision": 0.9627329192546584,
+        "display_offset_precision": 0.7868020304568528,
+        "display_offset_recall": 0.7868020304568528,
+        "display_offset_f1": 0.7868020304568529,
+        "display_offset_matched": 155,
+        "display_note_value_accuracy": 0.2857142857142857,
+        "display_note_value_matched": 161,
+        "display_note_value_avg_beat_error": 0.2109213250517598,
+        "display_cluster_precision": 0.2926829268292683,
+        "display_cluster_recall": 0.2926829268292683,
+        "display_cluster_f1": 0.2926829268292683,
+        "display_cluster_exact_matches": 12,
+        "display_cluster_predicted": 41,
+        "display_cluster_ground_truth": 41,
+        "display_cluster_onset_aligned_matches": 35,
+        "display_cluster_onset_alignment_precision": 0.8536585365853658,
+        "display_cluster_onset_alignment_recall": 0.8536585365853658,
+        "display_cluster_avg_jaccard": 0.7856184291898578,
+        "display_cluster_overclustered_matches": 5,
+        "display_cluster_underclustered_matches": 11,
+        "display_cluster_pitch_conflict_matches": 7,
+        "display_cluster_unmatched_predicted": 6,
+        "display_cluster_unmatched_ground_truth": 6,
+        "display_strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.6751269035532995,
+            "recall": 0.6751269035532995,
+            "f1": 0.6751269035532995,
+            "matched": 133,
+            "predicted": 197,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9774436090225563
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.7918781725888325,
+            "recall": 0.7918781725888325,
+            "f1": 0.7918781725888325,
+            "matched": 156,
+            "predicted": 197,
+            "ground_truth": 197,
+            "rhythm_precision": 0.967948717948718
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.8071065989847716,
+            "recall": 0.8071065989847716,
+            "f1": 0.8071065989847716,
+            "matched": 159,
+            "predicted": 197,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9622641509433962
+          }
+        },
+        "boundary_gt_notes": 67,
+        "boundary_matched_notes": 58,
+        "boundary_missed_notes": 9,
+        "boundary_miss_rate": 0.13432835820895522,
+        "display_snapshot_count": 18,
+        "refinement_snapshot_count": 7,
+        "final_display_note_count": 38,
+        "matched_display_notes": 33,
+        "stabilized_display_notes": 33,
+        "time_to_first_correct_note_ms": 49.63300000000004,
+        "algorithmic_time_to_first_correct_note_ms": 39.58299999999993,
+        "time_to_visible_median_ms": 487.28700000000026,
+        "time_to_visible_p95_ms": 660.6750000000001,
+        "algorithmic_time_to_visible_median_ms": 472.9170000000007,
+        "algorithmic_time_to_visible_p95_ms": 650.625,
+        "stabilization_latency_median_ms": 1432.7680000000003,
+        "stabilization_latency_p95_ms": 2551.7584,
+        "algorithmic_stabilization_latency_median_ms": 1256.25,
+        "algorithmic_stabilization_latency_p95_ms": 2347.7084,
+        "avg_revision_count": 1.9090909090909092,
+        "max_revision_count": 4.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.6330275229357798,
+            "recall": 0.700507614213198,
+            "f1": 0.6650602409638554,
+            "matched": 138,
+            "predicted": 218,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9782608695652174
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.7247706422018348,
+            "recall": 0.8020304568527918,
+            "f1": 0.7614457831325302,
+            "matched": 158,
+            "predicted": 218,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9746835443037974
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.7339449541284404,
+            "recall": 0.8121827411167513,
+            "f1": 0.7710843373493976,
+            "matched": 160,
+            "predicted": 218,
+            "ground_truth": 197,
+            "rhythm_precision": 0.96875
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "baseline_nominal": 10
+        },
+        "profile_hit_rate": 0.0,
+        "avg_chunk_total_ms": 11.487,
+        "p95_chunk_total_ms": 14.6725,
+        "avg_real_time_factor": 0.0191,
+        "selected_thresholds": [
+          0.38
+        ]
+      },
+      "retro_correction": {
+        "precision": 0.7363636363636363,
+        "recall": 0.8223350253807107,
+        "f1": 0.7769784172661871,
+        "matched": 162,
+        "predicted": 220,
+        "ground_truth": 197,
+        "rhythm_precision": 0.9629629629629629,
+        "offset_precision": 0.7090909090909091,
+        "offset_recall": 0.7918781725888325,
+        "offset_f1": 0.7482014388489209,
+        "offset_matched": 156,
+        "note_value_accuracy": 0.5308641975308642,
+        "note_value_matched": 162,
+        "note_value_avg_beat_error": 0.07330246913580248,
+        "duplicates": 23,
+        "duplicates_per_100_notes": 10.454545454545455,
+        "display_final_note_event_count": 62,
+        "display_note_precision": 0.8870967741935484,
+        "display_note_recall": 0.27918781725888325,
+        "display_note_f1": 0.42471042471042475,
+        "display_note_matched": 55,
+        "display_note_predicted": 62,
+        "display_note_ground_truth": 197,
+        "display_note_rhythm_precision": 0.9454545454545454,
+        "display_offset_precision": 0.8387096774193549,
+        "display_offset_recall": 0.2639593908629442,
+        "display_offset_f1": 0.4015444015444016,
+        "display_offset_matched": 52,
+        "display_note_value_accuracy": 0.2909090909090909,
+        "display_note_value_matched": 55,
+        "display_note_value_avg_beat_error": 0.19356060606060607,
+        "display_cluster_precision": 0.2857142857142857,
+        "display_cluster_recall": 0.1951219512195122,
+        "display_cluster_f1": 0.2318840579710145,
+        "display_cluster_exact_matches": 8,
+        "display_cluster_predicted": 28,
+        "display_cluster_ground_truth": 41,
+        "display_cluster_onset_aligned_matches": 25,
+        "display_cluster_onset_alignment_precision": 0.8928571428571429,
+        "display_cluster_onset_alignment_recall": 0.6097560975609756,
+        "display_cluster_avg_jaccard": 0.5735714285714285,
+        "display_cluster_overclustered_matches": 1,
+        "display_cluster_underclustered_matches": 14,
+        "display_cluster_pitch_conflict_matches": 2,
+        "display_cluster_unmatched_predicted": 3,
+        "display_cluster_unmatched_ground_truth": 16,
+        "display_strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.8064516129032258,
+            "recall": 0.25380710659898476,
+            "f1": 0.3861003861003861,
+            "matched": 50,
+            "predicted": 62,
+            "ground_truth": 197,
+            "rhythm_precision": 0.94
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.8870967741935484,
+            "recall": 0.27918781725888325,
+            "f1": 0.42471042471042475,
+            "matched": 55,
+            "predicted": 62,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9454545454545454
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.8870967741935484,
+            "recall": 0.27918781725888325,
+            "f1": 0.42471042471042475,
+            "matched": 55,
+            "predicted": 62,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9454545454545454
+          }
+        },
+        "boundary_gt_notes": 67,
+        "boundary_matched_notes": 58,
+        "boundary_missed_notes": 9,
+        "boundary_miss_rate": 0.13432835820895522,
+        "display_snapshot_count": 24,
+        "refinement_snapshot_count": 7,
+        "final_display_note_count": 62,
+        "matched_display_notes": 55,
+        "stabilized_display_notes": 55,
+        "time_to_first_correct_note_ms": 50.06299999999975,
+        "algorithmic_time_to_first_correct_note_ms": 39.58299999999993,
+        "time_to_visible_median_ms": 610.992,
+        "time_to_visible_p95_ms": 702.2801000000003,
+        "algorithmic_time_to_visible_median_ms": 595.833,
+        "algorithmic_time_to_visible_p95_ms": 679.7919000000002,
+        "stabilization_latency_median_ms": 1145.647,
+        "stabilization_latency_p95_ms": 2392.604099999999,
+        "algorithmic_stabilization_latency_median_ms": 954.167,
+        "algorithmic_stabilization_latency_p95_ms": 2318.7501,
+        "avg_revision_count": 1.2,
+        "max_revision_count": 5.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.6272727272727273,
+            "recall": 0.700507614213198,
+            "f1": 0.6618705035971223,
+            "matched": 138,
+            "predicted": 220,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9710144927536232
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.7181818181818181,
+            "recall": 0.8020304568527918,
+            "f1": 0.7577937649880095,
+            "matched": 158,
+            "predicted": 220,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9683544303797469
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.7272727272727273,
+            "recall": 0.8121827411167513,
+            "f1": 0.7673860911270982,
+            "matched": 160,
+            "predicted": 220,
+            "ground_truth": 197,
+            "rhythm_precision": 0.9625
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "retro_correction_seam_v1": 10
+        },
+        "profile_hit_rate": 1.0,
+        "avg_chunk_total_ms": 18.659799999999997,
+        "p95_chunk_total_ms": 29.078949999999992,
+        "avg_real_time_factor": 0.030979666666666666,
+        "selected_thresholds": [
+          0.38
+        ],
+        "selection_stats": {
+          "strategy": "seam_boundary_reanalysis",
+          "baseline_threshold": 0.38,
+          "retro_threshold": 0.38,
+          "retro_window_sec": 0.2,
+          "retro_band_sec": 0.1,
+          "retro_min_confidence": 0.35,
+          "retro_match_onset_tol": 0.05,
+          "retro_boundary_gate": true,
+          "retro_gate_post_confidence": 0.65,
+          "retro_gate_min_activity_ratio": 0.35,
+          "boundaries_considered": 9,
+          "boundaries_scanned": 6,
+          "boundaries_skipped": 3,
+          "seam_errors": 0,
+          "seam_candidates": 33,
+          "spanning_boundary_candidates": 0,
+          "extras_added": 2,
+          "replaced_existing": 31,
+          "extended_existing": 0,
+          "updated_extra_notes": 0,
+          "rejected_existing": 0,
+          "rejected_confidence": 0,
+          "rejected_seam_band": 44,
+          "rejected_duplicate_extra": 0,
+          "skipped_no_boundary_activity": 0,
+          "skipped_covered_post_boundary": 3,
+          "scanned_missing_post_boundary": 3,
+          "scanned_weak_post_boundary": 3,
+          "retro_total_ms": 59.278
+        }
+      },
+      "boundary_failure_diagnostics": {
+        "boundary_gt_notes": 67,
+        "missed_by_arm": {
+          "control": 9,
+          "treatment": 9,
+          "retro": 9
+        },
+        "missed_note_count": 9,
+        "missed_notes": [
+          {
+            "midi_note": 70,
+            "gt_onset_time": 0.594792,
+            "boundary_sec": 0.6,
+            "distance_to_boundary_ms": -5.2,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "weak_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 77,
+            "gt_onset_time": 0.613542,
+            "boundary_sec": 0.6,
+            "distance_to_boundary_ms": 13.5,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "weak_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 67,
+            "gt_onset_time": 0.646875,
+            "boundary_sec": 0.6,
+            "distance_to_boundary_ms": 46.9,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "weak_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 73,
+            "gt_onset_time": 1.801042,
+            "boundary_sec": 1.8,
+            "distance_to_boundary_ms": 1.0,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "weak_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 53,
+            "gt_onset_time": 2.367708,
+            "boundary_sec": 2.4,
+            "distance_to_boundary_ms": -32.3,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "weak_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 84,
+            "gt_onset_time": 3.560417,
+            "boundary_sec": 3.6,
+            "distance_to_boundary_ms": -39.6,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "missing_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 79,
+            "gt_onset_time": 3.564583,
+            "boundary_sec": 3.6,
+            "distance_to_boundary_ms": -35.4,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "missing_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 79,
+            "gt_onset_time": 4.103125,
+            "boundary_sec": 4.2,
+            "distance_to_boundary_ms": -96.9,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "missing_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          },
+          {
+            "midi_note": 55,
+            "gt_onset_time": 4.114583,
+            "boundary_sec": 4.2,
+            "distance_to_boundary_ms": -85.4,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "missing_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          }
+        ],
+        "diagnosis_tag_counts": {
+          "control_boundary_miss": 9,
+          "no_control_coarse_candidate": 9,
+          "retro_boundary_miss": 9,
+          "retro_no_matching_candidate": 9
+        }
+      },
+      "failure_buckets": [
+        "boundary_miss_failure",
+        "high_revision_slow_stabilization"
+      ]
+    },
+    "clip_031": {
+      "clip": {
+        "title": "Hungarian Rhapsody No. 9",
+        "piece_id": "MIDI-Unprocessed_04_R1_2008_01-04_ORIG_MID--AUDIO_04_R1_2008_wav--4",
+        "audio_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2008\\MIDI-Unprocessed_04_R1_2008_01-04_ORIG_MID--AUDIO_04_R1_2008_wav--4.wav",
+        "midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\maestro_midi\\2008\\MIDI-Unprocessed_04_R1_2008_01-04_ORIG_MID--AUDIO_04_R1_2008_wav--4.midi",
+        "start_sec": 18.0,
+        "end_sec": 24.0,
+        "duration_sec": 6.0,
+        "gt_note_count": 99,
+        "reference_bpm": 120.0,
+        "rms": 0.031187910741241453,
+        "peak": 0.2985076904296875,
+        "crest_factor": 9.571262817388877,
+        "rms_std": 0.015954516627862615,
+        "subwindow_count": 30,
+        "selection_features": {
+          "note_density": 16.5,
+          "onset_density": 4.333333333333333,
+          "onset_event_count": 26,
+          "mean_notes_per_onset": 3.8076923076923075,
+          "max_notes_per_onset": 4,
+          "ioi_cv": 0.3302257769218802,
+          "boundary_event_count": 8,
+          "boundary_event_rate": 0.3076923076923077,
+          "long_sustain_rate": 0.0
+        },
+        "clip_id": "clip_031",
+        "selection_rank": 31
+      },
+      "ground_truth_notes": 99,
+      "reference_bpm": 120.0,
+      "control": {
+        "precision": 0.5723270440251572,
+        "recall": 0.9191919191919192,
+        "f1": 0.7054263565891473,
+        "matched": 91,
+        "predicted": 159,
+        "ground_truth": 99,
+        "rhythm_precision": 1.0,
+        "offset_precision": 0.5723270440251572,
+        "offset_recall": 0.9191919191919192,
+        "offset_f1": 0.7054263565891473,
+        "offset_matched": 91,
+        "note_value_accuracy": 0.9010989010989011,
+        "note_value_matched": 91,
+        "note_value_avg_beat_error": 0.028846153846153848,
+        "duplicates": 14,
+        "duplicates_per_100_notes": 8.80503144654088,
+        "display_final_note_event_count": 147,
+        "display_note_precision": 0.6190476190476191,
+        "display_note_recall": 0.9191919191919192,
+        "display_note_f1": 0.7398373983739839,
+        "display_note_matched": 91,
+        "display_note_predicted": 147,
+        "display_note_ground_truth": 99,
+        "display_note_rhythm_precision": 1.0,
+        "display_offset_precision": 0.6190476190476191,
+        "display_offset_recall": 0.9191919191919192,
+        "display_offset_f1": 0.7398373983739839,
+        "display_offset_matched": 91,
+        "display_note_value_accuracy": 0.945054945054945,
+        "display_note_value_matched": 91,
+        "display_note_value_avg_beat_error": 0.05357142857142857,
+        "display_cluster_precision": 0.0975609756097561,
+        "display_cluster_recall": 0.15384615384615385,
+        "display_cluster_f1": 0.11940298507462689,
+        "display_cluster_exact_matches": 4,
+        "display_cluster_predicted": 41,
+        "display_cluster_ground_truth": 26,
+        "display_cluster_onset_aligned_matches": 25,
+        "display_cluster_onset_alignment_precision": 0.6097560975609756,
+        "display_cluster_onset_alignment_recall": 0.9615384615384616,
+        "display_cluster_avg_jaccard": 0.7277142857142858,
+        "display_cluster_overclustered_matches": 15,
+        "display_cluster_underclustered_matches": 1,
+        "display_cluster_pitch_conflict_matches": 5,
+        "display_cluster_unmatched_predicted": 16,
+        "display_cluster_unmatched_ground_truth": 1,
+        "display_strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.5170068027210885,
+            "recall": 0.7676767676767676,
+            "f1": 0.6178861788617885,
+            "matched": 76,
+            "predicted": 147,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.6122448979591837,
+            "recall": 0.9090909090909091,
+            "f1": 0.7317073170731708,
+            "matched": 90,
+            "predicted": 147,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.6190476190476191,
+            "recall": 0.9191919191919192,
+            "f1": 0.7398373983739839,
+            "matched": 91,
+            "predicted": 147,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          }
+        },
+        "boundary_gt_notes": 32,
+        "boundary_matched_notes": 31,
+        "boundary_missed_notes": 1,
+        "boundary_miss_rate": 0.03125,
+        "display_snapshot_count": 18,
+        "refinement_snapshot_count": 7,
+        "final_display_note_count": 22,
+        "matched_display_notes": 5,
+        "stabilized_display_notes": 5,
+        "time_to_first_correct_note_ms": 148.1079999999997,
+        "algorithmic_time_to_first_correct_note_ms": 135.93799999999945,
+        "time_to_visible_median_ms": 365.852,
+        "time_to_visible_p95_ms": 383.1855999999999,
+        "algorithmic_time_to_visible_median_ms": 351.042,
+        "algorithmic_time_to_visible_p95_ms": 369.89539999999994,
+        "stabilization_latency_median_ms": 2607.1579999999994,
+        "stabilization_latency_p95_ms": 2814.346,
+        "algorithmic_stabilization_latency_median_ms": 2567.188,
+        "algorithmic_stabilization_latency_p95_ms": 2766.458,
+        "avg_revision_count": 3.2,
+        "max_revision_count": 4.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.4779874213836478,
+            "recall": 0.7676767676767676,
+            "f1": 0.5891472868217054,
+            "matched": 76,
+            "predicted": 159,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.5660377358490566,
+            "recall": 0.9090909090909091,
+            "f1": 0.6976744186046512,
+            "matched": 90,
+            "predicted": 159,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.5723270440251572,
+            "recall": 0.9191919191919192,
+            "f1": 0.7054263565891473,
+            "matched": 91,
+            "predicted": 159,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "fixed_baseline": 10
+        },
+        "profile_hit_rate": 0.0,
+        "avg_chunk_total_ms": 13.312999999999999,
+        "p95_chunk_total_ms": 17.132999999999996,
+        "avg_real_time_factor": 0.0222,
+        "selected_thresholds": [
+          0.38
+        ]
+      },
+      "treatment": {
+        "precision": 0.56875,
+        "recall": 0.9191919191919192,
+        "f1": 0.7027027027027026,
+        "matched": 91,
+        "predicted": 160,
+        "ground_truth": 99,
+        "rhythm_precision": 1.0,
+        "offset_precision": 0.56875,
+        "offset_recall": 0.9191919191919192,
+        "offset_f1": 0.7027027027027026,
+        "offset_matched": 91,
+        "note_value_accuracy": 0.9010989010989011,
+        "note_value_matched": 91,
+        "note_value_avg_beat_error": 0.028846153846153848,
+        "duplicates": 14,
+        "duplicates_per_100_notes": 8.75,
+        "display_final_note_event_count": 148,
+        "display_note_precision": 0.6148648648648649,
+        "display_note_recall": 0.9191919191919192,
+        "display_note_f1": 0.7368421052631581,
+        "display_note_matched": 91,
+        "display_note_predicted": 148,
+        "display_note_ground_truth": 99,
+        "display_note_rhythm_precision": 1.0,
+        "display_offset_precision": 0.6148648648648649,
+        "display_offset_recall": 0.9191919191919192,
+        "display_offset_f1": 0.7368421052631581,
+        "display_offset_matched": 91,
+        "display_note_value_accuracy": 0.945054945054945,
+        "display_note_value_matched": 91,
+        "display_note_value_avg_beat_error": 0.05357142857142857,
+        "display_cluster_precision": 0.09523809523809523,
+        "display_cluster_recall": 0.15384615384615385,
+        "display_cluster_f1": 0.11764705882352941,
+        "display_cluster_exact_matches": 4,
+        "display_cluster_predicted": 42,
+        "display_cluster_ground_truth": 26,
+        "display_cluster_onset_aligned_matches": 25,
+        "display_cluster_onset_alignment_precision": 0.5952380952380952,
+        "display_cluster_onset_alignment_recall": 0.9615384615384616,
+        "display_cluster_avg_jaccard": 0.7277142857142858,
+        "display_cluster_overclustered_matches": 15,
+        "display_cluster_underclustered_matches": 1,
+        "display_cluster_pitch_conflict_matches": 5,
+        "display_cluster_unmatched_predicted": 17,
+        "display_cluster_unmatched_ground_truth": 1,
+        "display_strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.5135135135135135,
+            "recall": 0.7676767676767676,
+            "f1": 0.6153846153846154,
+            "matched": 76,
+            "predicted": 148,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.6081081081081081,
+            "recall": 0.9090909090909091,
+            "f1": 0.728744939271255,
+            "matched": 90,
+            "predicted": 148,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.6148648648648649,
+            "recall": 0.9191919191919192,
+            "f1": 0.7368421052631581,
+            "matched": 91,
+            "predicted": 148,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          }
+        },
+        "boundary_gt_notes": 32,
+        "boundary_matched_notes": 31,
+        "boundary_missed_notes": 1,
+        "boundary_miss_rate": 0.03125,
+        "display_snapshot_count": 18,
+        "refinement_snapshot_count": 7,
+        "final_display_note_count": 23,
+        "matched_display_notes": 5,
+        "stabilized_display_notes": 5,
+        "time_to_first_correct_note_ms": 146.79799999999955,
+        "algorithmic_time_to_first_correct_note_ms": 135.93799999999945,
+        "time_to_visible_median_ms": 371.522,
+        "time_to_visible_p95_ms": 381.3934,
+        "algorithmic_time_to_visible_median_ms": 351.042,
+        "algorithmic_time_to_visible_p95_ms": 369.89539999999994,
+        "stabilization_latency_median_ms": 2604.008,
+        "stabilization_latency_p95_ms": 2810.3959999999997,
+        "algorithmic_stabilization_latency_median_ms": 2567.188,
+        "algorithmic_stabilization_latency_p95_ms": 2766.458,
+        "avg_revision_count": 3.2,
+        "max_revision_count": 4.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.475,
+            "recall": 0.7676767676767676,
+            "f1": 0.5868725868725868,
+            "matched": 76,
+            "predicted": 160,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.5625,
+            "recall": 0.9090909090909091,
+            "f1": 0.6949806949806949,
+            "matched": 90,
+            "predicted": 160,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.56875,
+            "recall": 0.9191919191919192,
+            "f1": 0.7027027027027026,
+            "matched": 91,
+            "predicted": 160,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "baseline_nominal": 7,
+          "soft_sparse_recall": 3
+        },
+        "profile_hit_rate": 0.3,
+        "avg_chunk_total_ms": 13.587,
+        "p95_chunk_total_ms": 20.03,
+        "avg_real_time_factor": 0.0225,
+        "selected_thresholds": [
+          0.34,
+          0.38
+        ]
+      },
+      "retro_correction": {
+        "precision": 0.5652173913043478,
+        "recall": 0.9191919191919192,
+        "f1": 0.7,
+        "matched": 91,
+        "predicted": 161,
+        "ground_truth": 99,
+        "rhythm_precision": 1.0,
+        "offset_precision": 0.5652173913043478,
+        "offset_recall": 0.9191919191919192,
+        "offset_f1": 0.7,
+        "offset_matched": 91,
+        "note_value_accuracy": 0.9010989010989011,
+        "note_value_matched": 91,
+        "note_value_avg_beat_error": 0.028846153846153848,
+        "duplicates": 14,
+        "duplicates_per_100_notes": 8.695652173913043,
+        "display_final_note_event_count": 63,
+        "display_note_precision": 0.5714285714285714,
+        "display_note_recall": 0.36363636363636365,
+        "display_note_f1": 0.4444444444444444,
+        "display_note_matched": 36,
+        "display_note_predicted": 63,
+        "display_note_ground_truth": 99,
+        "display_note_rhythm_precision": 1.0,
+        "display_offset_precision": 0.5714285714285714,
+        "display_offset_recall": 0.36363636363636365,
+        "display_offset_f1": 0.4444444444444444,
+        "display_offset_matched": 36,
+        "display_note_value_accuracy": 0.8611111111111112,
+        "display_note_value_matched": 36,
+        "display_note_value_avg_beat_error": 0.13541666666666666,
+        "display_cluster_precision": 0.03571428571428571,
+        "display_cluster_recall": 0.038461538461538464,
+        "display_cluster_f1": 0.03703703703703704,
+        "display_cluster_exact_matches": 1,
+        "display_cluster_predicted": 28,
+        "display_cluster_ground_truth": 26,
+        "display_cluster_onset_aligned_matches": 15,
+        "display_cluster_onset_alignment_precision": 0.5357142857142857,
+        "display_cluster_onset_alignment_recall": 0.5769230769230769,
+        "display_cluster_avg_jaccard": 0.48365079365079366,
+        "display_cluster_overclustered_matches": 7,
+        "display_cluster_underclustered_matches": 7,
+        "display_cluster_pitch_conflict_matches": 0,
+        "display_cluster_unmatched_predicted": 13,
+        "display_cluster_unmatched_ground_truth": 11,
+        "display_strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.4444444444444444,
+            "recall": 0.2828282828282828,
+            "f1": 0.34567901234567894,
+            "matched": 28,
+            "predicted": 63,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.5555555555555556,
+            "recall": 0.35353535353535354,
+            "f1": 0.4320987654320988,
+            "matched": 35,
+            "predicted": 63,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.5714285714285714,
+            "recall": 0.36363636363636365,
+            "f1": 0.4444444444444444,
+            "matched": 36,
+            "predicted": 63,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          }
+        },
+        "boundary_gt_notes": 32,
+        "boundary_matched_notes": 31,
+        "boundary_missed_notes": 1,
+        "boundary_miss_rate": 0.03125,
+        "display_snapshot_count": 25,
+        "refinement_snapshot_count": 7,
+        "final_display_note_count": 63,
+        "matched_display_notes": 36,
+        "stabilized_display_notes": 36,
+        "time_to_first_correct_note_ms": 148.1079999999997,
+        "algorithmic_time_to_first_correct_note_ms": 135.93799999999945,
+        "time_to_visible_median_ms": 606.539,
+        "time_to_visible_p95_ms": 712.9669999999999,
+        "algorithmic_time_to_visible_median_ms": 586.3279999999997,
+        "algorithmic_time_to_visible_p95_ms": 687.6952500000001,
+        "stabilization_latency_median_ms": 631.4065,
+        "stabilization_latency_p95_ms": 2657.9389999999994,
+        "algorithmic_stabilization_latency_median_ms": 609.1144999999999,
+        "algorithmic_stabilization_latency_p95_ms": 2613.1515,
+        "avg_revision_count": 0.4444444444444444,
+        "max_revision_count": 4.0,
+        "reference_bpm": 120.0,
+        "strict_onset_metrics": {
+          "10ms": {
+            "onset_tol_ms": 10,
+            "precision": 0.4720496894409938,
+            "recall": 0.7676767676767676,
+            "f1": 0.5846153846153845,
+            "matched": 76,
+            "predicted": 161,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "20ms": {
+            "onset_tol_ms": 20,
+            "precision": 0.5590062111801242,
+            "recall": 0.9090909090909091,
+            "f1": 0.6923076923076922,
+            "matched": 90,
+            "predicted": 161,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          },
+          "30ms": {
+            "onset_tol_ms": 30,
+            "precision": 0.5652173913043478,
+            "recall": 0.9191919191919192,
+            "f1": 0.7,
+            "matched": 91,
+            "predicted": 161,
+            "ground_truth": 99,
+            "rhythm_precision": 1.0
+          }
+        },
+        "chunk_count": 10,
+        "profile_counts": {
+          "retro_correction_seam_v1": 10
+        },
+        "profile_hit_rate": 1.0,
+        "avg_chunk_total_ms": 22.941200000000002,
+        "p95_chunk_total_ms": 28.744149999999998,
+        "avg_real_time_factor": 0.038246999999999996,
+        "selected_thresholds": [
+          0.38
+        ],
+        "selection_stats": {
+          "strategy": "seam_boundary_reanalysis",
+          "baseline_threshold": 0.38,
+          "retro_threshold": 0.38,
+          "retro_window_sec": 0.2,
+          "retro_band_sec": 0.1,
+          "retro_min_confidence": 0.35,
+          "retro_match_onset_tol": 0.05,
+          "retro_boundary_gate": true,
+          "retro_gate_post_confidence": 0.65,
+          "retro_gate_min_activity_ratio": 0.35,
+          "boundaries_considered": 9,
+          "boundaries_scanned": 9,
+          "boundaries_skipped": 0,
+          "seam_errors": 0,
+          "seam_candidates": 43,
+          "spanning_boundary_candidates": 0,
+          "extras_added": 2,
+          "replaced_existing": 41,
+          "extended_existing": 0,
+          "updated_extra_notes": 0,
+          "rejected_existing": 0,
+          "rejected_confidence": 0,
+          "rejected_seam_band": 44,
+          "rejected_duplicate_extra": 0,
+          "skipped_no_boundary_activity": 0,
+          "skipped_covered_post_boundary": 0,
+          "scanned_missing_post_boundary": 2,
+          "scanned_weak_post_boundary": 7,
+          "retro_total_ms": 96.282
+        }
+      },
+      "boundary_failure_diagnostics": {
+        "boundary_gt_notes": 32,
+        "missed_by_arm": {
+          "control": 1,
+          "treatment": 1,
+          "retro": 1
+        },
+        "missed_note_count": 1,
+        "missed_notes": [
+          {
+            "midi_note": 82,
+            "gt_onset_time": 4.101562,
+            "boundary_sec": 4.2,
+            "distance_to_boundary_ms": -98.4,
+            "control": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "treatment": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "coarse_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_chunk_index": null,
+                "best_chunk_end_sec": null,
+                "best_note": null
+              }
+            },
+            "retro": {
+              "matched": false,
+              "matched_note": null,
+              "nearby_final_candidate": {
+                "present": false,
+                "count": 0,
+                "best_delta_ms": null,
+                "best_note": null
+              },
+              "boundary_scan": {
+                "available": true,
+                "scanned": true,
+                "reason": "weak_post_boundary",
+                "candidate_count": 0,
+                "candidate_decisions": [],
+                "best_candidate_delta_ms": null,
+                "best_candidate": null
+              }
+            },
+            "diagnosis_tags": [
+              "control_boundary_miss",
+              "no_control_coarse_candidate",
+              "retro_boundary_miss",
+              "retro_no_matching_candidate"
+            ]
+          }
+        ],
+        "diagnosis_tag_counts": {
+          "control_boundary_miss": 1,
+          "no_control_coarse_candidate": 1,
+          "retro_boundary_miss": 1,
+          "retro_no_matching_candidate": 1
+        }
+      },
+      "failure_buckets": [
+        "boundary_miss_failure",
+        "high_revision_slow_stabilization"
+      ]
+    }
+  },
+  "failure_buckets": {
+    "boundary_miss_failure": [
+      "clip_017",
+      "clip_031"
+    ],
+    "high_revision_slow_stabilization": [
+      "clip_017",
+      "clip_031"
+    ]
+  },
+  "boundary_failure_tag_counts": {
+    "control_boundary_miss": 10,
+    "no_control_coarse_candidate": 10,
+    "retro_boundary_miss": 10,
+    "retro_no_matching_candidate": 10
+  }
+}
