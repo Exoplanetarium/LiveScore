@@ -56,4 +56,4 @@ precomputed_features_mel/
 nul
 
 # model checkpoints
-.pt
+*.pt
