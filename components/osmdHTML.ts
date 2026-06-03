@@ -140,6 +140,9 @@ export const OSMD_HTML = `
     const PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER = 1.08;
     const PORTRAIT_MEASURE_MIN_WIDTH = 110;
     const LANDSCAPE_MEASURE_MIN_WIDTH = 190;
+    const PORTRAIT_FIXED_MEASURE_WIDTH = 128;
+    const LANDSCAPE_FIXED_MEASURE_WIDTH = 205;
+    const STABLE_MEASURES_PER_SYSTEM = 3;
     const PORTRAIT_MIN_NOTE_DISTANCE = 3.1;
     const LANDSCAPE_MIN_NOTE_DISTANCE = 2.8;
     const PORTRAIT_VOICE_SPACING_ADDEND = 4.6;
@@ -290,14 +293,16 @@ export const OSMD_HTML = `
       osmd.EngravingRules.MeasureMinimumWidth = portraitWrapped
         ? PORTRAIT_MEASURE_MIN_WIDTH
         : LANDSCAPE_MEASURE_MIN_WIDTH;
-      osmd.EngravingRules.RenderXMeasuresPerLineAkaSystem = portraitWrapped ? 3 : 0;
-      osmd.EngravingRules.FixedMeasureWidth = false;
-      osmd.EngravingRules.FixedMeasureWidthFixedValue = 0;
-      osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = false;
+      osmd.EngravingRules.RenderXMeasuresPerLineAkaSystem = portraitWrapped ? STABLE_MEASURES_PER_SYSTEM : 0;
+      osmd.EngravingRules.FixedMeasureWidth = true;
+      osmd.EngravingRules.FixedMeasureWidthFixedValue = portraitWrapped
+        ? PORTRAIT_FIXED_MEASURE_WIDTH
+        : LANDSCAPE_FIXED_MEASURE_WIDTH;
+      osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = true;
       osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = false;
       osmd.EngravingRules.RenderMultipleRestMeasures = false;
-      osmd.EngravingRules.LastSystemMaxScalingFactor = 2.2;
-      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = false;
+      osmd.EngravingRules.LastSystemMaxScalingFactor = 1.0;
+      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
       osmd.EngravingRules.NewPageAtXMLNewPageAttribute = false;
       osmd.EngravingRules.AutoBeamNotes = true;
       osmd.EngravingRules.AutoBeamOptions = {
@@ -315,7 +320,7 @@ export const OSMD_HTML = `
       osmd.setOptions({
         renderSingleHorizontalStaffline: false,
         autoResize: fullscreenMode,
-        newSystemFromXML: false,
+        newSystemFromXML: true,
         newSystemFromNewPageInXML: false,
         newPageFromXML: false,
       });

@@ -1,10 +1,13 @@
+import asyncio
+import base64
 import logging
 import math
 import os
+import threading
 import time
 from collections import defaultdict
 from io import BytesIO
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 
 # ─── Timing Instrumentation ───────────────────────────────────────────────────
@@ -88,7 +91,8 @@ import uvicorn
 from detect_note import (analyze_audio, analyze_audio_live_neural,
                          analyze_audio_optimized, read_wav,
                          second_pass_gap_fill)
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import (FastAPI, File, Form, HTTPException, UploadFile,
+                     WebSocket, WebSocketDisconnect)
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -218,6 +222,448 @@ def _get_session(session_id: str) -> Dict:
 
 def _clear_stream_session(session_id: str) -> None:
     _stream_sessions.pop(session_id, None)
+
+
+def _decode_stream_packet_audio(message: Dict, target_sr: int = 44100) -> Tuple[np.ndarray, int]:
+    """Decode a websocket audio packet to mono float32 PCM at target_sr."""
+    source_sr = int(message.get("sample_rate") or target_sr)
+
+    if "samples" in message:
+        audio = np.asarray(message.get("samples") or [], dtype=np.float32)
+    else:
+        payload_b64 = (
+            message.get("pcm16_base64")
+            or message.get("audio_base64")
+            or message.get("audio_b64")
+            or ""
+        )
+        if not payload_b64:
+            return np.zeros(0, dtype=np.float32), target_sr
+        raw = base64.b64decode(str(payload_b64))
+        encoding = str(message.get("encoding") or "pcm16").lower()
+        if encoding in {"float32", "f32", "pcm_float32"}:
+            audio = np.frombuffer(raw, dtype="<f4").astype(np.float32, copy=False)
+        else:
+            audio = (np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0)
+
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+    audio = audio.astype(np.float32, copy=False)
+    if audio.size == 0:
+        return audio, target_sr
+
+    if source_sr != target_sr:
+        gcd = math.gcd(source_sr, target_sr)
+        up, down = target_sr // gcd, source_sr // gcd
+        audio = resample_poly(audio, up, down).astype(np.float32, copy=False)
+    return audio, target_sr
+
+
+def _note_payload_from_hypothesis(hypothesis: Dict) -> Dict:
+    onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
+    offset = float(hypothesis.get("offset_time", onset) or onset)
+    return {
+        "id": int(hypothesis.get("id", 0) or 0),
+        "state": str(hypothesis.get("state") or "candidate"),
+        "midi_note": int(hypothesis.get("midi_note", 0) or 0),
+        "onset_time": round(onset, 6),
+        "offset_time": round(offset, 6),
+        "duration": round(max(0.0, offset - onset), 6),
+        "confidence": round(float(hypothesis.get("confidence", 0.0) or 0.0), 4),
+        "observations": int(hypothesis.get("observations", 0) or 0),
+        "first_seen_time": round(float(hypothesis.get("first_seen_time", 0.0) or 0.0), 6),
+        "last_seen_time": round(float(hypothesis.get("last_seen_time", 0.0) or 0.0), 6),
+    }
+
+
+class ContinuousLiveStreamSession:
+    """Continuous packet-driven live transcription state.
+
+    Audio packets are transport units only. Neural inference runs on rolling
+    windows, then updates note hypotheses on absolute session time.
+    """
+
+    def __init__(
+        self,
+        session_id: str,
+        sample_rate: int = 44100,
+        context_sec: float = 2.4,
+        inference_interval_sec: float = 0.10,
+        trusted_delay_sec: float = 0.18,
+        commit_delay_sec: float = 0.50,
+        lock_delay_sec: float = 2.0,
+        max_buffer_sec: float = 12.0,
+    ):
+        self.session_id = session_id
+        self.sample_rate = int(sample_rate)
+        self.context_sec = float(context_sec)
+        self.inference_interval_sec = float(inference_interval_sec)
+        self.trusted_delay_sec = float(trusted_delay_sec)
+        self.commit_delay_sec = float(commit_delay_sec)
+        self.lock_delay_sec = float(lock_delay_sec)
+        self.max_buffer_sec = float(max_buffer_sec)
+
+        self.audio = np.zeros(0, dtype=np.float32)
+        self.absolute_start_sample = 0
+        self.sample_cursor = 0
+        self.last_inference_sample = 0
+        self.created_at = time.time()
+        self.last_update = self.created_at
+        self.first_audio_wall_time: Optional[float] = None
+        self.next_note_id = 1
+        self.hypotheses: List[Dict] = []
+        self.received_packet_count = 0
+        self.skipped_inference_count = 0
+        self.last_packet_sequence: Optional[int] = None
+        self.last_client_sent_at_ms: Optional[float] = None
+        self.last_server_received_at_ms: Optional[float] = None
+        self._lock = threading.RLock()
+        self._inference_lock = threading.Lock()
+
+    @property
+    def current_time_sec(self) -> float:
+        return float(self.sample_cursor) / float(self.sample_rate)
+
+    def append_audio(self, audio: np.ndarray, packet_metadata: Optional[Dict] = None) -> Dict:
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.ndim > 1:
+            audio = np.mean(audio, axis=1)
+        if audio.size == 0:
+            return self.status()
+        with self._lock:
+            if self.first_audio_wall_time is None:
+                self.first_audio_wall_time = time.time()
+            self.received_packet_count += 1
+            if packet_metadata:
+                sequence = packet_metadata.get("sequence_number")
+                if sequence is not None:
+                    try:
+                        self.last_packet_sequence = int(sequence)
+                    except (TypeError, ValueError):
+                        pass
+                client_sent_at_ms = packet_metadata.get("client_sent_at_ms")
+                if client_sent_at_ms is not None:
+                    try:
+                        self.last_client_sent_at_ms = float(client_sent_at_ms)
+                    except (TypeError, ValueError):
+                        pass
+                server_received_at_ms = packet_metadata.get("server_received_at_ms")
+                if server_received_at_ms is not None:
+                    try:
+                        self.last_server_received_at_ms = float(server_received_at_ms)
+                    except (TypeError, ValueError):
+                        pass
+            self.audio = np.concatenate([self.audio, audio.astype(np.float32, copy=False)])
+            self.sample_cursor += int(audio.size)
+            self.last_update = time.time()
+            self._trim_audio_buffer()
+        return self.status()
+
+    def status(self) -> Dict:
+        with self._lock:
+            buffered_samples = int(self.audio.size)
+            current_time_sec = self.current_time_sec
+            wall_anchor = self.first_audio_wall_time or self.created_at
+            wall_elapsed_sec = max(0.0, time.time() - wall_anchor)
+            stream_backlog_sec = max(0.0, wall_elapsed_sec - current_time_sec)
+            return {
+                "session_id": self.session_id,
+                "sample_rate": self.sample_rate,
+                "sample_cursor": int(self.sample_cursor),
+                "audio_time_sec": round(current_time_sec, 6),
+                "wall_elapsed_sec": round(wall_elapsed_sec, 6),
+                "stream_backlog_sec": round(stream_backlog_sec, 6),
+                "buffered_sec": round(buffered_samples / float(self.sample_rate), 6),
+                "context_sec": self.context_sec,
+                "inference_interval_sec": self.inference_interval_sec,
+                "trusted_delay_sec": self.trusted_delay_sec,
+                "commit_delay_sec": self.commit_delay_sec,
+                "lock_delay_sec": self.lock_delay_sec,
+                "received_packet_count": int(self.received_packet_count),
+                "last_packet_sequence": self.last_packet_sequence,
+                "last_client_sent_at_ms": self.last_client_sent_at_ms,
+                "last_server_received_at_ms": self.last_server_received_at_ms,
+                "transport_mode": "decoupled",
+            }
+
+    def maybe_run_inference(self, force: bool = False) -> Optional[Dict]:
+        with self._inference_lock:
+            with self._lock:
+                interval_samples = max(1, int(round(self.inference_interval_sec * self.sample_rate)))
+                if not force and (self.sample_cursor - self.last_inference_sample) < interval_samples:
+                    self.skipped_inference_count += 1
+                    return None
+                if self.audio.size < MIN_STREAM_ANALYSIS_SAMPLES:
+                    return self._build_update(inference_ran=False, reason="insufficient_audio")
+
+                context_samples = max(MIN_STREAM_ANALYSIS_SAMPLES, int(round(self.context_sec * self.sample_rate)))
+                window_end_sample = self.sample_cursor
+                window_start_sample = max(self.absolute_start_sample, window_end_sample - context_samples)
+                rel_start = max(0, int(window_start_sample - self.absolute_start_sample))
+                window_audio = self.audio[rel_start:].astype(np.float32, copy=True)
+                if window_audio.size < MIN_STREAM_ANALYSIS_SAMPLES:
+                    return self._build_update(inference_ran=False, reason="insufficient_window")
+                self.last_inference_sample = window_end_sample
+
+            inference_started = time.perf_counter()
+            result = analyze_audio_live_neural(
+                window_audio,
+                sr=self.sample_rate,
+                debug=False,
+                split_midi=60,
+                device="cuda",
+                adaptive_onset_threshold=True,
+            )
+            inference_ms = (time.perf_counter() - inference_started) * 1000.0
+            stream_backlog_sec = self.status().get("stream_backlog_sec", 0.0)
+
+            if result.get("error"):
+                return self._build_update(
+                    inference_ran=True,
+                    reason="inference_error",
+                    inference_ms=inference_ms,
+                    received_packet_count=self.received_packet_count,
+                    skipped_inference_count=self.skipped_inference_count,
+                    error=str(result.get("error")),
+                )
+
+            window_start_sec = float(window_start_sample) / float(self.sample_rate)
+            observations = self._observations_from_result(result, window_start_sec)
+            with self._lock:
+                trusted_cutoff_sec = max(0.0, self.current_time_sec - self.trusted_delay_sec)
+                self._update_hypotheses(observations, trusted_cutoff_sec)
+                self._age_hypotheses()
+
+            return self._build_update(
+                inference_ran=True,
+                reason="ok",
+                inference_ms=inference_ms,
+                observation_count=len(observations),
+                received_packet_count=self.received_packet_count,
+                skipped_inference_count=self.skipped_inference_count,
+                stream_backlog_sec=stream_backlog_sec,
+                neural_timing=result.get("_timing_ms") or {},
+                analysis_summary=result.get("analysis_summary") or {},
+            )
+
+    def warmup_live_path(self) -> Dict:
+        context_samples = max(
+            MIN_STREAM_ANALYSIS_SAMPLES,
+            int(round(self.context_sec * self.sample_rate)),
+        )
+        warmup_audio = np.zeros(context_samples, dtype=np.float32)
+        inference_started = time.perf_counter()
+        result = analyze_audio_live_neural(
+            warmup_audio,
+            sr=self.sample_rate,
+            debug=False,
+            split_midi=60,
+            device="cuda",
+            adaptive_onset_threshold=True,
+        )
+        inference_ms = (time.perf_counter() - inference_started) * 1000.0
+        return make_json_serializable({
+            "status": "warm",
+            "inference_ms": inference_ms,
+            "neural_timing": result.get("_timing_ms") or {},
+            "analysis_summary": result.get("analysis_summary") or {},
+            "error": result.get("error"),
+        })
+
+    def _observations_from_result(self, result: Dict, window_start_sec: float) -> List[Dict]:
+        observations: List[Dict] = []
+
+        for note in result.get("notes") or []:
+            onset = window_start_sec + float(note.get("time_seconds", 0.0) or 0.0)
+            duration = float(note.get("duration_seconds", 0.0) or 0.0)
+            offset = window_start_sec + float(note.get("offset_seconds", note.get("time_seconds", 0.0) + duration) or 0.0)
+            observations.append({
+                "midi_note": int(note.get("midi_note", 0) or 0),
+                "onset_time": onset,
+                "offset_time": max(offset, onset + max(duration, 0.04)),
+                "confidence": float(note.get("confidence", 0.0) or 0.0),
+                "source": "note",
+            })
+
+        for chord in result.get("chords") or []:
+            onset = window_start_sec + float(chord.get("time_seconds", 0.0) or 0.0)
+            duration = float(chord.get("duration_seconds", 0.0) or 0.0)
+            offset = window_start_sec + float(chord.get("offset_seconds", chord.get("time_seconds", 0.0) + duration) or 0.0)
+            confidence = float(chord.get("confidence", 0.0) or 0.0)
+            for midi_note in chord.get("midi_notes") or []:
+                observations.append({
+                    "midi_note": int(midi_note),
+                    "onset_time": onset,
+                    "offset_time": max(offset, onset + max(duration, 0.04)),
+                    "confidence": confidence,
+                    "source": "chord_member",
+                })
+
+        observations.sort(key=lambda item: (item["onset_time"], item["midi_note"]))
+        return observations
+
+    def _match_hypothesis(self, observation: Dict, tolerance_sec: float = 0.06) -> Optional[Dict]:
+        pitch = int(observation["midi_note"])
+        onset = float(observation["onset_time"])
+        best = None
+        best_error = None
+        for hypothesis in self.hypotheses:
+            if int(hypothesis.get("midi_note", -1)) != pitch:
+                continue
+            error = abs(float(hypothesis.get("onset_time", 0.0) or 0.0) - onset)
+            if error <= tolerance_sec and (best_error is None or error < best_error):
+                best = hypothesis
+                best_error = error
+        return best
+
+    def _update_hypotheses(self, observations: List[Dict], trusted_cutoff_sec: float) -> None:
+        now_sec = self.current_time_sec
+        for observation in observations:
+            onset = float(observation["onset_time"])
+            if onset < max(0.0, now_sec - self.context_sec - 0.25):
+                continue
+
+            hypothesis = self._match_hypothesis(observation)
+            if hypothesis is None:
+                hypothesis = {
+                    "id": self.next_note_id,
+                    "state": "candidate",
+                    "midi_note": int(observation["midi_note"]),
+                    "onset_time": onset,
+                    "offset_time": float(observation["offset_time"]),
+                    "confidence": float(observation["confidence"]),
+                    "observations": 0,
+                    "first_seen_time": now_sec,
+                    "last_seen_time": now_sec,
+                }
+                self.next_note_id += 1
+                self.hypotheses.append(hypothesis)
+
+            observations_count = int(hypothesis.get("observations", 0) or 0) + 1
+            old_conf = float(hypothesis.get("confidence", 0.0) or 0.0)
+            new_conf = float(observation.get("confidence", 0.0) or 0.0)
+            if str(hypothesis.get("state")) not in {"committed", "locked"}:
+                old_onset = float(hypothesis.get("onset_time", onset) or onset)
+                hypothesis["onset_time"] = (old_onset * 0.7) + (onset * 0.3)
+            hypothesis["offset_time"] = max(float(hypothesis.get("offset_time", onset) or onset), float(observation["offset_time"]))
+            hypothesis["confidence"] = max(old_conf, new_conf)
+            hypothesis["observations"] = observations_count
+            hypothesis["last_seen_time"] = now_sec
+
+            if onset <= trusted_cutoff_sec and str(hypothesis.get("state")) == "candidate":
+                hypothesis["state"] = "active"
+
+        for hypothesis in self.hypotheses:
+            state = str(hypothesis.get("state") or "candidate")
+            onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
+            if state in {"candidate", "active"} and onset <= now_sec - self.commit_delay_sec:
+                hypothesis["state"] = "committed"
+                hypothesis["committed_time"] = now_sec
+            if state == "committed" and onset <= now_sec - self.lock_delay_sec:
+                hypothesis["state"] = "locked"
+                hypothesis["locked_time"] = now_sec
+
+    def _age_hypotheses(self) -> None:
+        now_sec = self.current_time_sec
+        keep = []
+        for hypothesis in self.hypotheses:
+            state = str(hypothesis.get("state") or "candidate")
+            last_seen = float(hypothesis.get("last_seen_time", 0.0) or 0.0)
+            onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
+            if state == "candidate" and (now_sec - last_seen) > 1.0:
+                continue
+            if state in {"committed", "locked"} and onset < now_sec - 60.0:
+                continue
+            keep.append(hypothesis)
+        self.hypotheses = keep
+
+    def _trim_audio_buffer(self) -> None:
+        max_samples = max(MIN_STREAM_ANALYSIS_SAMPLES, int(round(self.max_buffer_sec * self.sample_rate)))
+        if self.audio.size <= max_samples:
+            return
+        drop = int(self.audio.size - max_samples)
+        self.audio = self.audio[drop:].astype(np.float32, copy=False)
+        self.absolute_start_sample += drop
+
+    def _build_update(self, inference_ran: bool, reason: str = "ok", **extra) -> Dict:
+        with self._lock:
+            candidates = []
+            active = []
+            committed = []
+            locked = []
+            heard = []
+            now_sec = self.current_time_sec
+
+            for hypothesis in sorted(self.hypotheses, key=lambda item: (item.get("onset_time", 0.0), item.get("midi_note", 0))):
+                payload = _note_payload_from_hypothesis(hypothesis)
+                state = payload["state"]
+                if now_sec - float(payload["last_seen_time"]) <= 0.75:
+                    heard.append(payload)
+                if state == "candidate":
+                    candidates.append(payload)
+                elif state == "active":
+                    active.append(payload)
+                elif state == "locked":
+                    locked.append(payload)
+                    committed.append(payload)
+                else:
+                    committed.append(payload)
+
+            update = {
+                "type": "live_stream_update",
+                "session": self.status(),
+                "inference": {
+                    "ran": bool(inference_ran),
+                    "reason": reason,
+                    **extra,
+                },
+                "heard_notes": heard[-64:],
+                "candidate_notes": candidates[-64:],
+                "active_notes": active[-64:],
+                "committed_notes": committed[-256:],
+                "locked_notes": locked[-256:],
+                "counts": {
+                    "heard": len(heard),
+                    "candidate": len(candidates),
+                    "active": len(active),
+                    "committed": len(committed),
+                    "locked": len(locked),
+                },
+            }
+        return make_json_serializable(update)
+
+
+_continuous_live_stream_sessions: Dict[str, ContinuousLiveStreamSession] = {}
+
+
+def _get_continuous_live_stream_session(
+    session_id: str,
+    sample_rate: int = 44100,
+    context_sec: Optional[float] = None,
+    inference_interval_ms: Optional[float] = None,
+    trusted_delay_ms: Optional[float] = None,
+    commit_delay_ms: Optional[float] = None,
+    lock_delay_ms: Optional[float] = None,
+) -> ContinuousLiveStreamSession:
+    session = _continuous_live_stream_sessions.get(session_id)
+    if session is not None:
+        return session
+
+    session = ContinuousLiveStreamSession(
+        session_id=session_id,
+        sample_rate=sample_rate,
+        context_sec=float(context_sec if context_sec is not None else LIVE_CONTEXT_SEC),
+        inference_interval_sec=float(inference_interval_ms if inference_interval_ms is not None else 100.0) / 1000.0,
+        trusted_delay_sec=float(trusted_delay_ms if trusted_delay_ms is not None else 180.0) / 1000.0,
+        commit_delay_sec=float(commit_delay_ms if commit_delay_ms is not None else 500.0) / 1000.0,
+        lock_delay_sec=float(lock_delay_ms if lock_delay_ms is not None else 2000.0) / 1000.0,
+    )
+    _continuous_live_stream_sessions[session_id] = session
+    return session
+
+
+def _clear_continuous_live_stream_session(session_id: str) -> None:
+    _continuous_live_stream_sessions.pop(session_id, None)
 
 
 def _event_time(event: Dict) -> float:
@@ -955,6 +1401,186 @@ async def _analyze_uploaded_stream_chunk(
 
     return results_filtered
 
+
+@app.websocket("/live/stream")
+async def live_stream_websocket(websocket: WebSocket):
+    """Continuous live audio stream endpoint.
+
+    Message protocol:
+      {"type": "start", "session_id": "...", "sample_rate": 44100,
+       "inference_interval_ms": 100, "trusted_delay_ms": 180}
+
+      {"type": "audio_packet", "pcm16_base64": "...", "sample_rate": 44100}
+      or
+      {"type": "audio_packet", "samples": [float, ...], "sample_rate": 44100}
+
+      {"type": "warmup"}
+      {"type": "flush"}
+      {"type": "stop"}
+    """
+    await websocket.accept()
+    session: Optional[ContinuousLiveStreamSession] = None
+    session_id: Optional[str] = None
+    send_lock = asyncio.Lock()
+    audio_event = asyncio.Event()
+    stop_event = asyncio.Event()
+    inference_task: Optional[asyncio.Task] = None
+
+    async def send_json(payload: Dict) -> None:
+        async with send_lock:
+            await websocket.send_json(payload)
+
+    async def inference_worker() -> None:
+        try:
+            while not stop_event.is_set():
+                await audio_event.wait()
+                audio_event.clear()
+                if stop_event.is_set():
+                    break
+
+                while not stop_event.is_set():
+                    current_session = session
+                    if current_session is None:
+                        break
+
+                    update = await run_in_threadpool(current_session.maybe_run_inference, False)
+                    if update is not None:
+                        await send_json(update)
+
+                    # If packets arrived during inference, process the newest
+                    # buffer immediately; otherwise wait for the next packet.
+                    if not audio_event.is_set():
+                        break
+                    audio_event.clear()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.error("live_stream inference_worker error: %s", exc, exc_info=True)
+
+    def ensure_inference_worker() -> None:
+        nonlocal inference_task
+        if inference_task is None or inference_task.done():
+            stop_event.clear()
+            inference_task = asyncio.create_task(inference_worker())
+
+    try:
+        while True:
+            message = await websocket.receive_json()
+            message_type = str(message.get("type") or "audio_packet")
+
+            if message_type == "start":
+                session_id = str(message.get("session_id") or f"continuous-{int(time.time() * 1000)}")
+                sample_rate = int(message.get("sample_rate") or 44100)
+                session = _get_continuous_live_stream_session(
+                    session_id,
+                    sample_rate=sample_rate,
+                    context_sec=message.get("context_sec"),
+                    inference_interval_ms=message.get("inference_interval_ms"),
+                    trusted_delay_ms=message.get("trusted_delay_ms"),
+                    commit_delay_ms=message.get("commit_delay_ms"),
+                    lock_delay_ms=message.get("lock_delay_ms"),
+                )
+                ensure_inference_worker()
+                await send_json({
+                    "type": "live_stream_started",
+                    "session": session.status(),
+                })
+                continue
+
+            if session is None:
+                session_id = str(message.get("session_id") or f"continuous-{int(time.time() * 1000)}")
+                session = _get_continuous_live_stream_session(
+                    session_id,
+                    sample_rate=int(message.get("sample_rate") or 44100),
+                )
+                ensure_inference_worker()
+
+            if message_type in {"warmup", "warm"}:
+                warmup_result = await run_in_threadpool(session.warmup_live_path)
+                await send_json({
+                    "type": "live_stream_warmed",
+                    "session": session.status(),
+                    "warmup": warmup_result,
+                })
+                continue
+
+            if message_type in {"stop", "close"}:
+                stop_event.set()
+                audio_event.set()
+                if inference_task is not None and not inference_task.done():
+                    try:
+                        await asyncio.wait_for(inference_task, timeout=2.0)
+                    except asyncio.TimeoutError:
+                        inference_task.cancel()
+                update = await run_in_threadpool(session.maybe_run_inference, True)
+                if update is not None:
+                    await send_json(update)
+                await send_json({
+                    "type": "live_stream_stopped",
+                    "session": session.status(),
+                })
+                break
+
+            if message_type == "flush":
+                update = await run_in_threadpool(session.maybe_run_inference, True)
+                if update is not None:
+                    await send_json(update)
+                else:
+                    await send_json({
+                        "type": "live_stream_update",
+                        "session": session.status(),
+                        "inference": {"ran": False, "reason": "flush_noop"},
+                    })
+                continue
+
+            if message_type not in {"audio_packet", "audio"}:
+                await send_json({
+                    "type": "live_stream_error",
+                    "error": f"Unsupported message type: {message_type}",
+                })
+                continue
+
+            server_received_at_ms = time.time() * 1000.0
+            audio, _ = _decode_stream_packet_audio(message, target_sr=session.sample_rate)
+            session.append_audio(
+                audio,
+                {
+                    "sequence_number": message.get("sequence_number"),
+                    "client_sent_at_ms": message.get("client_sent_at_ms"),
+                    "server_received_at_ms": server_received_at_ms,
+                },
+            )
+            ensure_inference_worker()
+            audio_event.set()
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as exc:
+        logger.error("live_stream_websocket error: %s", exc, exc_info=True)
+        try:
+            await send_json({
+                "type": "live_stream_error",
+                "error": str(exc),
+            })
+        except Exception:
+            pass
+    finally:
+        stop_event.set()
+        audio_event.set()
+        if inference_task is not None and not inference_task.done():
+            inference_task.cancel()
+            try:
+                await inference_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+        if session_id:
+            # Keep the session available for a short reconnect/debug window unless
+            # the client explicitly requested deletion through existing live APIs.
+            pass
+
+
 @app.get("/")
 async def root():
     """Health check endpoint"""
@@ -990,10 +1616,12 @@ async def warmup():
     This ensures the first recording request is fast.
     """
     try:
-        from gpu_ops import (get_gpu_mel_baseline_transcriber,
+        from gpu_ops import (get_gpu_enhanced_mel_transcriber,
+                             get_gpu_mel_baseline_transcriber,
                              get_gpu_rhythm_model, get_gpu_transcriber,
                              get_gpu_transformer_model)
 
+        enhanced = get_gpu_enhanced_mel_transcriber()
         ensemble = get_gpu_mel_baseline_transcriber()
         rhythm = get_gpu_rhythm_model()
         transformer = get_gpu_transformer_model()
@@ -1004,6 +1632,7 @@ async def warmup():
         
         return {
             "status": "warm",
+            "enhanced_mel_model": enhanced is not None and enhanced.initialized,
             "ensemble_model": ensemble is not None and ensemble.initialized,
             "rhythm_model": rhythm is not None,
             "transformer_model": transformer is not None and transformer.initialized,

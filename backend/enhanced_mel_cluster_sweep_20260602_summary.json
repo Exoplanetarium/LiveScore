@@ -1,0 +1,458 @@
+[
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_base020.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9146947052759348,
+      "display_note_f1": 0.9237211823681417,
+      "display_cluster_f1": 0.7096826992603079,
+      "display_offset_f1": 0.7492778743464114,
+      "offset_f1": 0.7445259616050394,
+      "duplicates_per_100_notes": 3.2720058755303327,
+      "boundary_miss_rate": 0.07513073512674796,
+      "p95_chunk_total_ms": 26.050354166666665
+    },
+    "treatment": {
+      "f1": 0.9120749747943689,
+      "display_note_f1": 0.9224743462734319,
+      "display_cluster_f1": 0.7061467106229679,
+      "display_offset_f1": 0.7469649864728144,
+      "offset_f1": 0.7431590293392006,
+      "duplicates_per_100_notes": 3.4335896945054993,
+      "boundary_miss_rate": 0.07534059471160755,
+      "p95_chunk_total_ms": 25.86008333333333
+    },
+    "name": "group_base020",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.020",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_base025.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9130826902014333,
+      "display_note_f1": 0.9232373086675296,
+      "display_cluster_f1": 0.701534230149997,
+      "display_offset_f1": 0.7459020846819674,
+      "offset_f1": 0.7399721147990199,
+      "duplicates_per_100_notes": 3.601229971517265,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 26.188645833333332
+    },
+    "treatment": {
+      "f1": 0.911260915107039,
+      "display_note_f1": 0.9207186115699074,
+      "display_cluster_f1": 0.7032474249552539,
+      "display_offset_f1": 0.7446370568416528,
+      "offset_f1": 0.7389451238431,
+      "duplicates_per_100_notes": 3.600015509753459,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 26.04717708333333
+    },
+    "name": "group_base025",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.025",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_base035.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9120309139329636,
+      "display_note_f1": 0.9252630105747781,
+      "display_cluster_f1": 0.7019050060523118,
+      "display_offset_f1": 0.7455999207145024,
+      "offset_f1": 0.739558255774305,
+      "duplicates_per_100_notes": 3.8118930516922407,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 34.62067708333333
+    },
+    "treatment": {
+      "f1": 0.9100347095436223,
+      "display_note_f1": 0.9224343960631604,
+      "display_cluster_f1": 0.7049771245102392,
+      "display_offset_f1": 0.7447840078607376,
+      "offset_f1": 0.7386974071143002,
+      "duplicates_per_100_notes": 3.7639658256775745,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 34.723187499999995
+    },
+    "name": "group_base035",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.035",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_base040.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9126786752947214,
+      "display_note_f1": 0.9254907279346101,
+      "display_cluster_f1": 0.703474149988818,
+      "display_offset_f1": 0.7458443379226938,
+      "offset_f1": 0.7397507430032344,
+      "duplicates_per_100_notes": 3.681228900179271,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 38.77280208333333
+    },
+    "treatment": {
+      "f1": 0.9106865578445117,
+      "display_note_f1": 0.9226641238689971,
+      "display_cluster_f1": 0.70476785451952,
+      "display_offset_f1": 0.7447218707793914,
+      "offset_f1": 0.7389096877462351,
+      "duplicates_per_100_notes": 3.631141745197175,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 38.770041666666664
+    },
+    "name": "group_base040",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.040",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_shrink002.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9130242086821911,
+      "display_note_f1": 0.9251001397035421,
+      "display_cluster_f1": 0.704000093522703,
+      "display_offset_f1": 0.746306349983322,
+      "offset_f1": 0.7388895984841659,
+      "duplicates_per_100_notes": 3.60661637792845,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 38.996281249999996
+    },
+    "treatment": {
+      "f1": 0.9111995777944759,
+      "display_note_f1": 0.9225550194265638,
+      "display_cluster_f1": 0.7068330188066547,
+      "display_offset_f1": 0.7453476223419304,
+      "offset_f1": 0.7378750405128108,
+      "duplicates_per_100_notes": 3.6058272617029177,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 38.82003125
+    },
+    "name": "group_shrink002",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.002",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_shrink006.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9130826902014333,
+      "display_note_f1": 0.9232373086675296,
+      "display_cluster_f1": 0.701534230149997,
+      "display_offset_f1": 0.7459020846819674,
+      "offset_f1": 0.7399721147990199,
+      "duplicates_per_100_notes": 3.601229971517265,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 37.14665625
+    },
+    "treatment": {
+      "f1": 0.911260915107039,
+      "display_note_f1": 0.9209279392001257,
+      "display_cluster_f1": 0.7035395003620082,
+      "display_offset_f1": 0.7448463844718712,
+      "offset_f1": 0.7389451238431,
+      "duplicates_per_100_notes": 3.600015509753459,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 37.41765625
+    },
+    "name": "group_shrink006",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.006",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9146947052759348,
+      "display_note_f1": 0.9237211823681417,
+      "display_cluster_f1": 0.7096826992603079,
+      "display_offset_f1": 0.7492778743464114,
+      "offset_f1": 0.7445259616050394,
+      "duplicates_per_100_notes": 3.2720058755303327,
+      "boundary_miss_rate": 0.07513073512674796,
+      "p95_chunk_total_ms": 38.73240625
+    },
+    "treatment": {
+      "f1": 0.9120749747943689,
+      "display_note_f1": 0.9227209020403211,
+      "display_cluster_f1": 0.707882821734079,
+      "display_offset_f1": 0.7472643756183226,
+      "offset_f1": 0.7431590293392006,
+      "duplicates_per_100_notes": 3.4335896945054993,
+      "boundary_miss_rate": 0.07534059471160755,
+      "p95_chunk_total_ms": 37.556677083333334
+    },
+    "name": "group_step050",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.50",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step080.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9130242086821911,
+      "display_note_f1": 0.9239163463994143,
+      "display_cluster_f1": 0.7024440235638553,
+      "display_offset_f1": 0.7451963533489194,
+      "offset_f1": 0.7388895984841659,
+      "duplicates_per_100_notes": 3.60661637792845,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 37.66294791666667
+    },
+    "treatment": {
+      "f1": 0.9111995777944759,
+      "display_note_f1": 0.9214337800435803,
+      "display_cluster_f1": 0.7057493994349364,
+      "display_offset_f1": 0.7443001796286721,
+      "offset_f1": 0.7378750405128108,
+      "duplicates_per_100_notes": 3.6058272617029177,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 37.273666666666664
+    },
+    "name": "group_step080",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.80",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_prune055_r055_min3.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9133527847108299,
+      "display_note_f1": 0.9238538380139054,
+      "display_cluster_f1": 0.7037759463590485,
+      "display_offset_f1": 0.7457296456840126,
+      "offset_f1": 0.7394849139589901,
+      "duplicates_per_100_notes": 3.5387800030630254,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 37.039229166666665
+    },
+    "treatment": {
+      "f1": 0.9115281538231146,
+      "display_note_f1": 0.921343431593939,
+      "display_cluster_f1": 0.7058125344104927,
+      "display_offset_f1": 0.7445399372277249,
+      "offset_f1": 0.7384714804119298,
+      "duplicates_per_100_notes": 3.5379908868374934,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 37.627656249999994
+    },
+    "name": "prune055_r055_min3",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "1",
+      "LIVE_NEURAL_GROUP_PRUNE_ABS_ONSET": "0.55",
+      "LIVE_NEURAL_GROUP_PRUNE_MEDIAN_RATIO": "0.55",
+      "LIVE_NEURAL_GROUP_PRUNE_MIN_SIZE": "3"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_prune060_r060_min3.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9133527847108299,
+      "display_note_f1": 0.9238538380139054,
+      "display_cluster_f1": 0.7037759463590485,
+      "display_offset_f1": 0.7457296456840126,
+      "offset_f1": 0.7394849139589901,
+      "duplicates_per_100_notes": 3.5387800030630254,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 38.550041666666665
+    },
+    "treatment": {
+      "f1": 0.9115281538231146,
+      "display_note_f1": 0.921343431593939,
+      "display_cluster_f1": 0.7058125344104927,
+      "display_offset_f1": 0.7445399372277249,
+      "offset_f1": 0.7384714804119298,
+      "duplicates_per_100_notes": 3.5379908868374934,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 37.86671875
+    },
+    "name": "prune060_r060_min3",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "1",
+      "LIVE_NEURAL_GROUP_PRUNE_ABS_ONSET": "0.60",
+      "LIVE_NEURAL_GROUP_PRUNE_MEDIAN_RATIO": "0.60",
+      "LIVE_NEURAL_GROUP_PRUNE_MIN_SIZE": "3"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_prune065_r070_min3.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9133527847108299,
+      "display_note_f1": 0.9238538380139054,
+      "display_cluster_f1": 0.7037759463590485,
+      "display_offset_f1": 0.7457296456840126,
+      "offset_f1": 0.7394849139589901,
+      "duplicates_per_100_notes": 3.5387800030630254,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 38.67394791666666
+    },
+    "treatment": {
+      "f1": 0.9115281538231146,
+      "display_note_f1": 0.921416818448476,
+      "display_cluster_f1": 0.7057223468203052,
+      "display_offset_f1": 0.7446133240822619,
+      "offset_f1": 0.7384714804119298,
+      "duplicates_per_100_notes": 3.5379908868374934,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 38.12852083333333
+    },
+    "name": "prune065_r070_min3",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "1",
+      "LIVE_NEURAL_GROUP_PRUNE_ABS_ONSET": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_MEDIAN_RATIO": "0.70",
+      "LIVE_NEURAL_GROUP_PRUNE_MIN_SIZE": "3"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_prune060_r060_min4.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9133527847108299,
+      "display_note_f1": 0.9238538380139054,
+      "display_cluster_f1": 0.7037759463590485,
+      "display_offset_f1": 0.7457296456840126,
+      "offset_f1": 0.7394849139589901,
+      "duplicates_per_100_notes": 3.5387800030630254,
+      "boundary_miss_rate": 0.07449942199543483,
+      "p95_chunk_total_ms": 37.13036458333333
+    },
+    "treatment": {
+      "f1": 0.9115281538231146,
+      "display_note_f1": 0.921416818448476,
+      "display_cluster_f1": 0.7057223468203052,
+      "display_offset_f1": 0.7446133240822619,
+      "offset_f1": 0.7384714804119298,
+      "duplicates_per_100_notes": 3.5379908868374934,
+      "boundary_miss_rate": 0.07470928158029441,
+      "p95_chunk_total_ms": 36.86991666666666
+    },
+    "name": "prune060_r060_min4",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.75",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_CONTEXT_SEC": "2.4",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC": "0.03",
+      "LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC": "0.012",
+      "LIVE_NEURAL_GROUP_SHRINK_SEC": "0.004",
+      "LIVE_NEURAL_GROUP_STEP_RATIO": "0.65",
+      "LIVE_NEURAL_GROUP_PRUNE_ENABLED": "1",
+      "LIVE_NEURAL_GROUP_PRUNE_ABS_ONSET": "0.60",
+      "LIVE_NEURAL_GROUP_PRUNE_MEDIAN_RATIO": "0.60",
+      "LIVE_NEURAL_GROUP_PRUNE_MIN_SIZE": "4"
+    }
+  }
+]

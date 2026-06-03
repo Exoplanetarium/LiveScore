@@ -44,6 +44,8 @@ if USE_GPU:
     try:
         from gpu_ops import USE_GPU as _GPU_OPS_READY
         from gpu_ops import (fused_noise_reduce,
+                             get_gpu_enhanced_mel_transcriber,
+                             get_gpu_enhanced_mel_transcriber_status,
                              get_gpu_mel_baseline_transcriber,
                              get_gpu_mel_baseline_transcriber_status,
                              get_gpu_rhythm_model, get_gpu_transcriber,
@@ -7882,15 +7884,60 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
     # ── Try ensemble multi-resolution model first (fastest, GPU-parallel) ──
     use_ensemble = False
     ensemble_sr = 16000
+    ensemble_label = 'Mel Baseline'
+    ensemble_onset_threshold = 0.4
+    ensemble_frame_threshold = 0.5
+    ensemble_offset_threshold = None
+    ensemble_duplicate_window_sec = 0.04
+    ensemble_merge_gap_sec = 0.0
+
+    def _float_env(name, default):
+        try:
+            return float(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _int_env(name, default):
+        try:
+            return int(os.environ.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
+    def _bool_env(name, default):
+        raw_value = os.environ.get(name)
+        if raw_value is None:
+            return default
+        normalized = str(raw_value).strip().lower()
+        if normalized in {'1', 'true', 'yes', 'y', 'on'}:
+            return True
+        if normalized in {'0', 'false', 'no', 'n', 'off'}:
+            return False
+        return default
+
     if USE_GPU:
-        ensemble_model = get_gpu_mel_baseline_transcriber()
+        ensemble_model = get_gpu_enhanced_mel_transcriber()
         if ensemble_model is not None and ensemble_model.initialized:
             use_ensemble = True
             ensemble_sr = ensemble_model.config.get('sample_rate', 16000)
+            ensemble_label = 'Enhanced Mel'
+            ensemble_onset_threshold = _float_env('ENHANCED_MEL_ONSET_THRESHOLD', 0.75)
+            ensemble_frame_threshold = _float_env('ENHANCED_MEL_FRAME_THRESHOLD', 0.50)
+            ensemble_offset_threshold = _float_env('ENHANCED_MEL_OFFSET_THRESHOLD', 0.35)
+            ensemble_min_velocity = _int_env('ENHANCED_MEL_MIN_VELOCITY', 8)
+            ensemble_filter_harmonics = _bool_env('ENHANCED_MEL_FILTER_HARMONICS', False)
+            ensemble_duplicate_window_sec = _float_env('ENHANCED_MEL_DUPLICATE_WINDOW_SEC', 0.04)
+            ensemble_merge_gap_sec = _float_env('ENHANCED_MEL_MERGE_GAP_SEC', 0.0)
+        else:
+            ensemble_model = get_gpu_mel_baseline_transcriber()
+            if ensemble_model is not None and ensemble_model.initialized:
+                use_ensemble = True
+                ensemble_sr = ensemble_model.config.get('sample_rate', 16000)
+                ensemble_min_velocity = 15
+                ensemble_filter_harmonics = True
 
     if use_ensemble:
         print(f"\n{'='*70}")
-        print("NEURAL TRANSCRIPTION (Mel Baseline)")
+        print(f"NEURAL TRANSCRIPTION ({ensemble_label})")
         print(f"   Device: {device}")
         print(f"{'='*70}\n")
 
@@ -7918,12 +7965,18 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
             print(f"[Neural] Audio duration: {duration_seconds:.2f}s")
 
             t0 = time.perf_counter()
-            print(f"[Neural] Running mel baseline inference...")
-            transcribed_dict = ensemble_model.transcribe(
-                audio,
-                onset_threshold=0.4,
-                frame_threshold=0.5,
-            )
+            print(f"[Neural] Running {ensemble_label.lower()} inference...")
+            transcribe_kwargs = {
+                'onset_threshold': ensemble_onset_threshold,
+                'frame_threshold': ensemble_frame_threshold,
+                'min_velocity': ensemble_min_velocity,
+                'filter_harmonics': ensemble_filter_harmonics,
+                'duplicate_window_sec': ensemble_duplicate_window_sec,
+                'merge_gap_sec': ensemble_merge_gap_sec,
+            }
+            if ensemble_offset_threshold is not None:
+                transcribe_kwargs['offset_threshold'] = ensemble_offset_threshold
+            transcribed_dict = ensemble_model.transcribe(audio, **transcribe_kwargs)
             neural_timings['transcribe_ms'] = (time.perf_counter() - t0) * 1000
             
             # Extract detailed inference timings if available
@@ -7932,12 +7985,12 @@ def analyze_audio_neural(wav_path, debug=False, split_midi=60, device='cpu', use
                 print(f"[Neural] Inference breakdown: {transcribed_dict['_inference_timing_ms']}")
 
             note_events = transcribed_dict.get('est_note_events', [])
-            print(f"[Neural] Mel baseline detected {len(note_events)} note events in {neural_timings['transcribe_ms']:.1f}ms")
+            print(f"[Neural] {ensemble_label} detected {len(note_events)} note events in {neural_timings['transcribe_ms']:.1f}ms")
 
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print(f"[Neural] Mel baseline failed: {e}, falling back to custom model")
+            print(f"[Neural] {ensemble_label} failed: {e}, falling back to custom model")
             use_ensemble = False
 
     # ── Try custom trained model second (velocity-weighted, better soft detect) ──
@@ -8420,10 +8473,33 @@ def _identify_chord_label(midi_notes):
     return f"{root_name}:chord"
 
 
-_NEURAL_SIMULTANEOUS_BASE_TOLERANCE_SEC = 0.03
-_NEURAL_SIMULTANEOUS_MIN_TOLERANCE_SEC = 0.012
-_NEURAL_SIMULTANEOUS_GROUP_SHRINK_SEC = 0.004
-_NEURAL_SIMULTANEOUS_STEP_RATIO = 0.65
+def _env_float(name, default):
+    try:
+        return float(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name, default=False):
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    normalized = str(raw_value).strip().lower()
+    if normalized in {'1', 'true', 'yes', 'y', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'n', 'off'}:
+        return False
+    return default
+
+
+_NEURAL_SIMULTANEOUS_BASE_TOLERANCE_SEC = _env_float('LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC', 0.03)
+_NEURAL_SIMULTANEOUS_MIN_TOLERANCE_SEC = _env_float('LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC', 0.012)
+_NEURAL_SIMULTANEOUS_GROUP_SHRINK_SEC = _env_float('LIVE_NEURAL_GROUP_SHRINK_SEC', 0.004)
+_NEURAL_SIMULTANEOUS_STEP_RATIO = _env_float('LIVE_NEURAL_GROUP_STEP_RATIO', 0.50)
+_NEURAL_GROUP_PRUNE_ENABLED = _env_bool('LIVE_NEURAL_GROUP_PRUNE_ENABLED', False)
+_NEURAL_GROUP_PRUNE_MIN_SIZE = max(2, int(_env_float('LIVE_NEURAL_GROUP_PRUNE_MIN_SIZE', 3)))
+_NEURAL_GROUP_PRUNE_ABS_ONSET = _env_float('LIVE_NEURAL_GROUP_PRUNE_ABS_ONSET', 0.55)
+_NEURAL_GROUP_PRUNE_MEDIAN_RATIO = _env_float('LIVE_NEURAL_GROUP_PRUNE_MEDIAN_RATIO', 0.55)
 
 
 def _adaptive_neural_group_tolerances(group_size):
@@ -8473,6 +8549,26 @@ def _group_neural_note_events_by_onset(note_events):
     return event_groups
 
 
+def _prune_neural_group_confidence_outliers(group):
+    if not _NEURAL_GROUP_PRUNE_ENABLED or len(group) < _NEURAL_GROUP_PRUNE_MIN_SIZE:
+        return group
+
+    onset_probs = [float(event.get('onset_prob', 0.5) or 0.0) for event in group]
+    if not onset_probs:
+        return group
+
+    median_prob = float(np.median(np.asarray(onset_probs, dtype=np.float64)))
+    keep = [
+        event
+        for event, onset_prob in zip(group, onset_probs)
+        if not (
+            onset_prob < _NEURAL_GROUP_PRUNE_ABS_ONSET
+            and onset_prob < median_prob * _NEURAL_GROUP_PRUNE_MEDIAN_RATIO
+        )
+    ]
+    return keep or group
+
+
 def _convert_neural_note_events_to_results(note_events, split_midi=60):
     """Convert frame-level neural note events into the live note/chord payload shape."""
     event_groups = _group_neural_note_events_by_onset(note_events)
@@ -8482,6 +8578,7 @@ def _convert_neural_note_events_to_results(note_events, split_midi=60):
     onsets = []
 
     for group in event_groups:
+        group = _prune_neural_group_confidence_outliers(group)
         avg_onset = sum(event['onset_time'] for event in group) / len(group)
         midi_notes = sorted(int(event['midi_note']) for event in group)
         min_offset = min(event['offset_time'] for event in group)
@@ -8589,7 +8686,8 @@ def _select_live_neural_onset_threshold(audio_chunk, base_onset_threshold, enabl
             selected = max(0.30, base_onset_threshold - 0.04)
             profile = 'soft_sparse_recall'
         elif chunk_rms > 0.110 or (chunk_rms > 0.060 and crest_factor < 2.30):
-            selected = min(0.46, base_onset_threshold + 0.02)
+            precision_cap = 0.46 if base_onset_threshold <= 0.50 else 0.95
+            selected = min(precision_cap, base_onset_threshold + 0.02)
             profile = 'loud_dense_precision'
 
     return float(selected), {
@@ -8643,6 +8741,11 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
         if adaptive_onset_threshold
         else 'fixed_onset_baseline'
     )
+    enhanced_status = {
+        'reason': 'not_attempted',
+        'selected_path': None,
+        'last_error': None,
+    }
     mel_status = {
         'reason': 'not_attempted',
         'selected_path': None,
@@ -8655,6 +8758,83 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
     }
 
     if USE_GPU:
+        ensemble_model = get_gpu_enhanced_mel_transcriber()
+        enhanced_status = get_gpu_enhanced_mel_transcriber_status()
+        if ensemble_model is not None and ensemble_model.initialized:
+            model_name = 'enhanced_mel'
+            model_sr = int(ensemble_model.config.get('sample_rate', 16000))
+
+            t0 = time.perf_counter()
+            if sr != model_sr:
+                gcd = math.gcd(sr, model_sr)
+                up, down = model_sr // gcd, sr // gcd
+                model_audio = resample_poly(audio_full_sr, up, down).astype(np.float32, copy=False)
+            else:
+                model_audio = audio_full_sr
+            timings['neural_resample'] = (time.perf_counter() - t0) * 1000
+
+            try:
+                _enhanced_base_thr = float(os.environ.get('LIVE_ENHANCED_ONSET_BASE', '0.75'))
+            except (TypeError, ValueError):
+                _enhanced_base_thr = 0.75
+            try:
+                _enhanced_offset_thr = float(os.environ.get('LIVE_ENHANCED_OFFSET_BASE', '0.35'))
+            except (TypeError, ValueError):
+                _enhanced_offset_thr = 0.35
+            try:
+                _enhanced_min_velocity = int(os.environ.get('LIVE_ENHANCED_MIN_VELOCITY', '8'))
+            except (TypeError, ValueError):
+                _enhanced_min_velocity = 8
+            try:
+                _enhanced_duplicate_window_sec = float(os.environ.get('LIVE_ENHANCED_DUPLICATE_WINDOW_SEC', '0.04'))
+            except (TypeError, ValueError):
+                _enhanced_duplicate_window_sec = 0.04
+            try:
+                _enhanced_merge_gap_sec = float(os.environ.get('LIVE_ENHANCED_MERGE_GAP_SEC', '0.0'))
+            except (TypeError, ValueError):
+                _enhanced_merge_gap_sec = 0.0
+            _enhanced_filter_harmonics_raw = str(
+                os.environ.get('LIVE_ENHANCED_FILTER_HARMONICS', '0')
+            ).strip().lower()
+            _enhanced_filter_harmonics = _enhanced_filter_harmonics_raw in {
+                '1', 'true', 'yes', 'y', 'on'
+            }
+            selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
+                model_audio,
+                _enhanced_base_thr,
+                enabled=adaptive_onset_threshold,
+            )
+            onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
+            onset_threshold_experiment = str(
+                threshold_debug.get('experiment') or onset_threshold_experiment
+            )
+            timings['neural_onset_threshold_base'] = _enhanced_base_thr
+            timings['neural_onset_threshold_selected'] = selected_onset_threshold
+            timings['neural_offset_threshold'] = _enhanced_offset_thr
+            timings['neural_min_velocity'] = _enhanced_min_velocity
+            timings['neural_filter_harmonics'] = bool(_enhanced_filter_harmonics)
+            timings['neural_duplicate_window_sec'] = _enhanced_duplicate_window_sec
+            timings['neural_merge_gap_sec'] = _enhanced_merge_gap_sec
+            timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
+            timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
+            timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
+
+            t0 = time.perf_counter()
+            transcribed_dict = ensemble_model.transcribe(
+                model_audio,
+                onset_threshold=selected_onset_threshold,
+                offset_threshold=_enhanced_offset_thr,
+                frame_threshold=0.5,
+                min_velocity=_enhanced_min_velocity,
+                duplicate_window_sec=_enhanced_duplicate_window_sec,
+                merge_gap_sec=_enhanced_merge_gap_sec,
+                filter_harmonics=_enhanced_filter_harmonics,
+            )
+            timings['neural_transcribe'] = (time.perf_counter() - t0) * 1000
+            inference_detail = transcribed_dict.get('_inference_timing_ms') or {}
+            note_events = transcribed_dict.get('est_note_events', [])
+
+    if model_name is None and USE_GPU:
         ensemble_model = get_gpu_mel_baseline_transcriber()
         mel_status = get_gpu_mel_baseline_transcriber_status()
         if ensemble_model is not None and ensemble_model.initialized:
@@ -8750,6 +8930,8 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
         else:
             error_message = (
                 'Live neural transcription unavailable: '
+                + _format_loader_status('enhanced_mel', enhanced_status)
+                + '; '
                 + _format_loader_status('mel_baseline', mel_status)
                 + '; '
                 + _format_loader_status('custom_transcriber', custom_status)
@@ -8759,6 +8941,7 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             'error': error_message,
             'error_code': error_code,
             'loader_status': {
+                'enhanced_mel': enhanced_status,
                 'mel_baseline': mel_status,
                 'custom_transcriber': custom_status,
             },

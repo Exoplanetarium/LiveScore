@@ -110,6 +110,8 @@ image = image.add_local_file("rhythm_training/train_ensemble.py", "/root/rhythm_
 # Add mel baseline model (trained multi-resolution model)
 image = image.add_local_file("rhythm_training/train_mel_baseline.py", "/root/rhythm_training/train_mel_baseline.py")
 image = image.add_local_file("rhythm_training/mel_baseline_transcription.pt", "/root/rhythm_training/mel_baseline_transcription.pt")
+image = image.add_local_file("rhythm_training/train_enhanced_mel_transcriber.py", "/root/rhythm_training/train_enhanced_mel_transcriber.py")
+image = image.add_local_file("rhythm_training/enhanced_mel_transcription.pt", "/root/rhythm_training/enhanced_mel_transcription.pt")
 image = image.add_local_file("train_display_chord_pairwise_model.py", "/root/train_display_chord_pairwise_model.py")
 
 @app.function(
@@ -125,7 +127,10 @@ def fastapi_app():
     
     # Pre-load models on container startup (before first request)
     print("[Warmup] Pre-loading models...")
-    from gpu_ops import get_gpu_mel_baseline_transcriber, get_gpu_rhythm_model
+    from gpu_ops import (get_gpu_enhanced_mel_transcriber,
+                         get_gpu_mel_baseline_transcriber,
+                         get_gpu_rhythm_model)
+    get_gpu_enhanced_mel_transcriber()
     get_gpu_mel_baseline_transcriber()
     get_gpu_rhythm_model()
     print("[Warmup] Models loaded!")

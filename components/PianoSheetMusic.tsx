@@ -532,6 +532,119 @@ function generateMeasureXmls(
     return matched || fallback;
   };
 
+  const getIoiDurationSpec = (ioiBeats?: number): DurationSpec => {
+    const fallback = getDurationSpec(1, "quarter", false, false);
+    if (
+      ioiBeats === undefined ||
+      !Number.isFinite(ioiBeats) ||
+      ioiBeats <= 0
+    ) {
+      return fallback;
+    }
+
+    const roundedBeats = Math.max(
+      0.125,
+      Math.min(4, Math.round(ioiBeats * 24) / 24),
+    );
+    const simpleSpecs: DurationSpec[] = [
+      {
+        beats: 4,
+        duration: 96,
+        noteType: "whole",
+        dotted: false,
+        triplet: false,
+      },
+      {
+        beats: 3,
+        duration: 72,
+        noteType: "half",
+        dotted: true,
+        triplet: false,
+      },
+      {
+        beats: 2,
+        duration: 48,
+        noteType: "half",
+        dotted: false,
+        triplet: false,
+      },
+      {
+        beats: 1.5,
+        duration: 36,
+        noteType: "quarter",
+        dotted: true,
+        triplet: false,
+      },
+      {
+        beats: 1,
+        duration: 24,
+        noteType: "quarter",
+        dotted: false,
+        triplet: false,
+      },
+      {
+        beats: 0.75,
+        duration: 18,
+        noteType: "eighth",
+        dotted: true,
+        triplet: false,
+      },
+      {
+        beats: 0.5,
+        duration: 12,
+        noteType: "eighth",
+        dotted: false,
+        triplet: false,
+      },
+      {
+        beats: 0.25,
+        duration: 6,
+        noteType: "16th",
+        dotted: false,
+        triplet: false,
+      },
+      {
+        beats: 0.125,
+        duration: 3,
+        noteType: "32nd",
+        dotted: false,
+        triplet: false,
+      },
+    ];
+
+    return simpleSpecs.reduce((best, spec) => {
+      const bestError = Math.abs(best.beats - roundedBeats);
+      const specError = Math.abs(spec.beats - roundedBeats);
+      return specError < bestError ? spec : best;
+    }, simpleSpecs[0]);
+  };
+
+  const retimeXmlToDurationSpec = (
+    xmlArr: string[],
+    durationSpec: DurationSpec,
+  ): string[] => {
+    const typeXml = `<type>${durationSpec.noteType}</type>${
+      durationSpec.dotted ? "<dot/>" : ""
+    }`;
+    return xmlArr.map((xml) => {
+      if (!xml.includes("<duration>")) {
+        return xml;
+      }
+
+      let updated = xml.replace(
+        /<duration>\d+(?:\.\d+)?<\/duration>/,
+        `<duration>${durationSpec.duration}</duration>`,
+      );
+      updated = updated.replace(
+        /<type>[\s\S]*?<\/type>(?:<dot\/>)?(?:<time-modification>[\s\S]*?<\/time-modification>)?/,
+        typeXml,
+      );
+      updated = updated.replace(/<tuplet[^>]*\/>/g, "");
+      updated = updated.replace(/<notations>\s*<\/notations>/g, "");
+      return updated;
+    });
+  };
+
   // Helper to split beats into a list of (noteType, duration, dotted, beats) tuples
   // Used for ties that span measure boundaries
   const splitBeatsIntoNoteTypes = (
@@ -1147,6 +1260,84 @@ function generateMeasureXmls(
   // Sort groups by authoritative beat position.
   timeGroups.sort((a, b) => a.beatStart - b.beatStart || a.time - b.time);
 
+  // Score-facing rhythm is based on onset spacing, not acoustic offset.
+  // Pedal, room decay, and expressive releases make offsets a poor notation
+  // authority; the next onset cluster is much closer to what the eye expects.
+  const estimateGroupIoiBeats = (groupIndex: number): number => {
+    const current = timeGroups[groupIndex];
+    const next = timeGroups
+      .slice(groupIndex + 1)
+      .find(
+        (candidate) =>
+          candidate.beatStart - current.beatStart > BEAT_GROUP_TOLERANCE,
+      );
+    if (next) {
+      return next.beatStart - current.beatStart;
+    }
+
+    const previous = [...timeGroups]
+      .slice(0, groupIndex)
+      .reverse()
+      .find(
+        (candidate) =>
+          current.beatStart - candidate.beatStart > BEAT_GROUP_TOLERANCE,
+      );
+    if (previous) {
+      return current.beatStart - previous.beatStart;
+    }
+
+    return 1;
+  };
+
+  const estimateHandIoiBeats = (
+    groupIndex: number,
+    staffKey: "treble" | "bass",
+  ): number => {
+    const current = timeGroups[groupIndex];
+    const next = timeGroups
+      .slice(groupIndex + 1)
+      .find(
+        (candidate) =>
+          candidate[staffKey].length > 0 &&
+          candidate.beatStart - current.beatStart > BEAT_GROUP_TOLERANCE,
+      );
+    if (next) {
+      return next.beatStart - current.beatStart;
+    }
+
+    const previous = [...timeGroups]
+      .slice(0, groupIndex)
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate[staffKey].length > 0 &&
+          current.beatStart - candidate.beatStart > BEAT_GROUP_TOLERANCE,
+      );
+    if (previous) {
+      return current.beatStart - previous.beatStart;
+    }
+
+    return estimateGroupIoiBeats(groupIndex);
+  };
+
+  for (let groupIndex = 0; groupIndex < timeGroups.length; groupIndex++) {
+    for (const staffKey of ["treble", "bass"] as const) {
+      const durationSpec = getIoiDurationSpec(
+        estimateHandIoiBeats(groupIndex, staffKey),
+      );
+      for (const ev of timeGroups[groupIndex][staffKey]) {
+        if (ev.beats <= 0) continue;
+        ev.beats = durationSpec.beats;
+        ev.xml = retimeXmlToDurationSpec(ev.xml, durationSpec);
+        ev.triplet = false;
+        ev.tripletPosition = undefined;
+        ev.tripletType = durationSpec.noteType;
+        ev.actualNotes = undefined;
+        ev.normalNotes = undefined;
+      }
+    }
+  }
+
   // Deduplicate MIDI notes within each time group per staff
   // This prevents the same note from appearing twice at the same position
   for (const group of timeGroups) {
@@ -1719,10 +1910,18 @@ function generateMeasureXmls(
   }
 
   // Now generate XML for each measure
+  const STABLE_MEASURES_PER_SYSTEM = 3;
   for (let mIdx = 0; mIdx < measuresData.length; mIdx++) {
     const mData = measuresData[mIdx];
     const measureNum = mIdx + 1;
     let measureContent = "";
+
+    if (
+      measureNum > 1 &&
+      (measureNum - 1) % STABLE_MEASURES_PER_SYSTEM === 0
+    ) {
+      measureContent += '<print new-system="yes"/>';
+    }
 
     // Attributes only for first measure - with dynamic time signature
     if (measureNum === 1) {
@@ -2161,6 +2360,40 @@ function generateBlankPageMusicXML(
 // Blank grand staff shown before live chunks arrive so the engraving surface is stable.
 const FALLBACK_XML = generateBlankPageMusicXML();
 
+function buildEventSignature(notes: NoteResult[], chords: ChordResult[]) {
+  const noteSig = notes
+    .map((note) =>
+      [
+        "n",
+        Math.round((note.time_seconds ?? 0) * 1000),
+        note.midi_note,
+        Math.round((note.duration_seconds ?? 0) * 1000),
+        Math.round((note.start_beat ?? -1) * 24),
+        Math.round((note.note_divisions ?? -1) * 24),
+        note.note_value ?? "",
+        note.dotted ? 1 : 0,
+        note.triplet ? 1 : 0,
+      ].join(":"),
+    )
+    .join("|");
+  const chordSig = chords
+    .map((chord) =>
+      [
+        "c",
+        Math.round((chord.time_seconds ?? 0) * 1000),
+        (chord.midi_notes ?? []).join(","),
+        Math.round((chord.duration_seconds ?? 0) * 1000),
+        Math.round((chord.start_beat ?? -1) * 24),
+        Math.round((chord.note_divisions ?? -1) * 24),
+        chord.note_value ?? "",
+        chord.dotted ? 1 : 0,
+        chord.triplet ? 1 : 0,
+      ].join(":"),
+    )
+    .join("|");
+  return `${notes.length}/${chords.length}:${noteSig}::${chordSig}`;
+}
+
 // Drop-in replacement component:
 export default function PianoSheetMusic({
   results,
@@ -2177,6 +2410,7 @@ export default function PianoSheetMusic({
   const [accumulatedChords, setAccumulatedChords] = useState<ChordResult[]>([]);
   const hasReceivedDataRef = useRef<boolean>(false);
   const lastRefinementVersionRef = useRef<number | undefined>(undefined);
+  const lastAppliedResultsSignatureRef = useRef<string>("");
 
   useEffect(() => {
     // If results is null and we've previously received data, this is a reset signal
@@ -2186,12 +2420,15 @@ export default function PianoSheetMusic({
         setAccumulatedNotes([]);
         setAccumulatedChords([]);
         hasReceivedDataRef.current = false;
+        lastAppliedResultsSignatureRef.current = "";
       }
       return;
     }
 
     const incomingNotes = results.notes ?? [];
     const incomingChords = results.chords ?? [];
+    const isLiveStreamUpdate =
+      results.analysis_summary?.method === "live_stream";
 
     // Check if this is a refinement update (version changed)
     const isRefinementUpdate =
@@ -2205,6 +2442,29 @@ export default function PianoSheetMusic({
       isRefinementUpdate &&
       (incomingNotes.length > 0 || incomingChords.length > 0)
     ) {
+      const signature = `refine:${refinementVersion}:${buildEventSignature(
+        incomingNotes,
+        incomingChords,
+      )}`;
+      if (signature === lastAppliedResultsSignatureRef.current) {
+        return;
+      }
+      lastAppliedResultsSignatureRef.current = signature;
+      hasReceivedDataRef.current = true;
+      setAccumulatedNotes(incomingNotes);
+      setAccumulatedChords(incomingChords);
+      return;
+    }
+
+    if (isLiveStreamUpdate) {
+      const signature = `stream:${buildEventSignature(
+        incomingNotes,
+        incomingChords,
+      )}`;
+      if (signature === lastAppliedResultsSignatureRef.current) {
+        return;
+      }
+      lastAppliedResultsSignatureRef.current = signature;
       hasReceivedDataRef.current = true;
       setAccumulatedNotes(incomingNotes);
       setAccumulatedChords(incomingChords);
@@ -2215,6 +2475,10 @@ export default function PianoSheetMusic({
 
     // Mark that we've received data
     hasReceivedDataRef.current = true;
+    lastAppliedResultsSignatureRef.current = `append:${buildEventSignature(
+      incomingNotes,
+      incomingChords,
+    )}`;
 
     // Always append incoming notes/chords - no automatic reset based on timestamps
     // (Reset should only happen when explicitly triggered, not on every chunk)
@@ -2231,6 +2495,9 @@ export default function PianoSheetMusic({
           seen.add(key);
           toAdd.push(n);
         }
+      }
+      if (toAdd.length === 0) {
+        return prev;
       }
       return [...prev, ...toAdd];
     });
@@ -2249,6 +2516,9 @@ export default function PianoSheetMusic({
           seen.add(key);
           toAdd.push(c);
         }
+      }
+      if (toAdd.length === 0) {
+        return prev;
       }
       return [...prev, ...toAdd];
     });
@@ -2287,7 +2557,9 @@ export default function PianoSheetMusic({
     }),
     [],
   );
-  const shouldFollowLatest = results?.analysis_summary?.method === "live";
+  const shouldFollowLatest =
+    results?.analysis_summary?.method === "live" ||
+    results?.analysis_summary?.method === "live_stream";
   const measuresSentRef = useRef<number>(0);
   const lastXmlRef = useRef<string | null>(null);
   const pendingXmlRef = useRef<string | null>(null);
@@ -2765,6 +3037,19 @@ export default function PianoSheetMusic({
       return;
     }
 
+    if (
+      !pendingXmlRef.current &&
+      score !== lastXmlRef.current &&
+      measures.length <= measuresSentRef.current
+    ) {
+      try {
+        sendRenderXml(score, "render-updated-current-measure");
+      } catch (e) {
+        console.warn("Failed posting current-measure renderXml", e);
+      }
+      return;
+    }
+
     // Otherwise, if there are new measures, compose a combined XML by inserting
     // the new measures into the previously-sent XML, then post the combined XML.
     if (measures.length > measuresSentRef.current) {
@@ -3057,6 +3342,7 @@ export default function PianoSheetMusic({
                 onPress={() => {
                   setAccumulatedNotes([]);
                   setAccumulatedChords([]);
+                  lastAppliedResultsSignatureRef.current = "";
                   lastXmlRef.current = null;
                   measuresSentRef.current = 0;
                   pendingXmlRef.current = null;

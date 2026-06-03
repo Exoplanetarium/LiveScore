@@ -1103,3 +1103,732 @@ Update rule:
 - Why: in real polyphonic piano, notes a 12th/octave+third above another are overwhelmingly **genuine chord voicings / melody**, not spectral partials, and confidence does not separate the two. Same lesson as `project_runs_include_octaves`: do not filter by harmonic interval.
 - Decision: reverted entirely (`live_rhythm.py` restored). 
 - Precision ceiling note: cheap pipeline precision levers are now exhausted — the threshold raise banked the safe gain; the remaining FPs are either phantom (spurious, no signal) or harmonic-interval notes that cannot be removed without destroying real notes. Further precision needs the model (better onset calibration), not post-processing.
+
+## 2026-06-02
+
+### FIXED: live beat-grid phase bug behind compressed score durations
+
+- Symptom: a live recording around 9 seconds long could generate a score around 4 seconds long, even when recording/playback started together.
+- Root cause: live note annotation was using local chunk/phase beat indices instead of absolute beat positions on the session beat grid.
+- Implementation:
+  - `backend/live_rhythm.py`: added `BeatGrid.absolute_beat_at_idx(...)`.
+  - Switched coarse and refined live annotation to use absolute beat positions.
+  - Added `backend/test_live_rhythm_grid.py` to guard the absolute-grid behavior.
+- Decision: keep. This fixes duration/grid consistency separately from neural transcription quality.
+
+### ADDED: enhanced mel transcriber model and inference path
+
+- New training/inference assets:
+  - `backend/rhythm_training/train_enhanced_mel_transcriber.py`
+  - `backend/rhythm_training/enhanced_mel_transcription.pt`
+- Architecture highlights:
+  - `EnhancedMelTranscriber` with larger mel-only Conv/Conformer stack.
+  - Pitch-local frequency readout.
+  - Explicit `offset_logits` head.
+  - `decode_enhanced_note_events(...)`.
+  - `_build_model_from_config(...)` for checkpoint-compatible inference loading.
+- Trained checkpoint reported by user:
+  - `event_f1=0.9414496391590838`
+  - `event_precision=0.9569432927218218`
+  - `event_recall=0.9264497004878651`
+  - `onset_f1=0.8728227183542482`
+  - `offset_f1=0.5291791264414719`
+  - Config includes `conv_channels=192`, `d_model=384`, `n_layers=10`, `n_heads=8`, `event_hidden=192`, `n_note_value_classes=12`, `sample_rate=16000`, `hop_length=256`, `n_mels=229`.
+- `backend/gpu_ops.py`:
+  - Added `GpuEnhancedMelTranscriber`.
+  - Added `get_gpu_enhanced_mel_transcriber()` and `get_gpu_enhanced_mel_transcriber_status()`.
+  - Search paths include env overrides `LIVE_ENHANCED_MEL_MODEL_PATH` / `ENHANCED_MEL_MODEL_PATH`, local backend paths, and `/root/rhythm_training/enhanced_mel_transcription.pt`.
+  - Returns the same public contract as the old mel baseline path: `est_note_events` plus `_inference_timing_ms`.
+- `backend/detect_note.py`:
+  - Live neural priority is now `enhanced_mel -> mel_baseline -> custom_velocity_weighted`.
+  - Full neural file-path inference also tries enhanced mel before mel baseline.
+  - Loader-status errors now include `enhanced_mel`.
+  - Added enhanced env knobs: `LIVE_ENHANCED_ONSET_BASE`, `LIVE_ENHANCED_OFFSET_BASE`, `LIVE_ENHANCED_MIN_VELOCITY`, `LIVE_ENHANCED_FILTER_HARMONICS`, plus full-inference equivalents.
+- `backend/main.py`: `/warmup` preloads enhanced mel and reports `enhanced_mel_model`.
+- `backend/modal_deploy.py`: Modal image now includes the enhanced training file/checkpoint and warms enhanced mel on startup.
+- Smoke validation:
+  - Checkpoint loaded locally on CUDA with `43,225,009` params.
+  - One-second silence returned zero events and timing metadata.
+  - `analyze_audio_live_neural(...)` smoke reported `neural_model=enhanced_mel`.
+
+### REJECTED: uncalibrated enhanced mel default at onset 0.50
+
+- First frozen-manifest run:
+  - Command: `backend\env\Scripts\python.exe backend\test_experiment.py --benchmark-manifest backend\live_benchmark_replay_auto_v2.json --no-run-retro-correction --output-json backend\live_benchmark_replay_auto_v2_results_20260602_enhancedmel.json`
+  - Result file: `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedmel.json`
+  - Harness note: `test_experiment.py` runs the local app analyzer, not a remote Modal endpoint. Since the local analyzer now prioritizes `enhanced_mel`, it still validates the inference path Modal will use after deploy.
+- Against `backend/live_benchmark_replay_auto_v2_results_20260531_onsetbase046.json`:
+  - control note F1: `0.8823 -> 0.8737` (`-0.0086`)
+  - control display note F1: `0.8985 -> 0.8880` (`-0.0106`)
+  - control display cluster F1: `0.6775 -> 0.6570` (`-0.0205`)
+  - control offset F1: `0.6970 -> 0.7153` (`+0.0183`)
+- Interpretation: the enhanced model was not simply worse; the old live threshold heuristics were miscalibrated for the new model. The explicit offset head helped immediately, while note/control/cluster F1 needed a much higher onset threshold.
+
+### KEPT: enhanced mel onset calibration 0.50 -> 0.75
+
+- Sweep:
+  - Temporary runner: `backend/_tmp_enhanced_sweep.py`.
+  - Frozen 48-clip manifest, retro disabled, `LIVE_ENHANCED_OFFSET_BASE=0.35`.
+  - Swept `LIVE_ENHANCED_ONSET_BASE` and spot-checked `LIVE_ENHANCED_MIN_VELOCITY` / `LIVE_ENHANCED_FILTER_HARMONICS`.
+  - `min_velocity` and `filter_harmonics` were neutral. `filter_harmonics` currently has no effect because `decode_enhanced_note_events(...)` does not implement the old mel-baseline harmonic-filter branch.
+- Control-arm sweep results:
+  - `0.50`: note F1 `0.8737`, display note F1 `0.8880`, cluster F1 `0.6570`, offset F1 `0.7153`
+  - `0.55`: note F1 `0.8831`, display note F1 `0.8970`, cluster F1 `0.6629`, offset F1 `0.7219`
+  - `0.60`: note F1 `0.8933`, display note F1 `0.9064`, cluster F1 `0.6759`, offset F1 `0.7277`
+  - `0.65`: note F1 `0.8975`, display note F1 `0.9091`, cluster F1 `0.6831`, offset F1 `0.7311`
+  - `0.70`: note F1 `0.9054`, display note F1 `0.9168`, cluster F1 `0.6989`, offset F1 `0.7346`
+  - `0.75`: note F1 `0.9134`, display note F1 `0.9239`, cluster F1 `0.7038`, offset F1 `0.7395`
+  - `0.80`: note F1 `0.9134`, display note F1 `0.9252`, cluster F1 `0.7029`, offset F1 `0.7353`
+  - `0.85`: note F1 `0.8734`, display note F1 `0.8795`, cluster F1 `0.6290`, offset F1 `0.7026`
+  - `0.90`: note F1 `0.5372`, display note F1 `0.5368`, cluster F1 `0.3285`, offset F1 `0.4237`
+- Best balanced threshold:
+  - `LIVE_ENHANCED_ONSET_BASE=0.75`.
+  - `0.80` slightly improves display note F1 but slightly lowers cluster F1 and offset F1, so `0.75` is the better display-structure default.
+- Best result file:
+  - `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on075_v08_fh0.json`
+- Paired comparison versus `backend/live_benchmark_replay_auto_v2_results_20260531_onsetbase046.json`:
+  - control display cluster F1: `0.6775 -> 0.7038` (`+0.0262`), 95% CI `[-0.0067, +0.0604]`, `p=0.1301`
+  - control display note F1: `0.8985 -> 0.9239` (`+0.0253`), 95% CI `[+0.0154, +0.0364]`, `p=0.0000`
+  - control display offset F1: `0.7048 -> 0.7457` (`+0.0409`), 95% CI `[+0.0249, +0.0581]`, `p=0.0000`
+  - treatment display cluster F1: `0.6729 -> 0.6980` (`+0.0251`), 95% CI `[-0.0051, +0.0590]`, `p=0.1313`
+  - treatment display note F1: `0.8956 -> 0.9177` (`+0.0221`), 95% CI `[+0.0109, +0.0342]`, `p=0.0006`
+  - treatment display offset F1: `0.7033 -> 0.7414` (`+0.0382`), 95% CI `[+0.0222, +0.0551]`, `p=0.0001`
+- Paired comparison versus `backend/live_benchmark_replay_auto_v2_results_20260531_distillctx_onset050.json`:
+  - control display cluster F1: `0.6628 -> 0.7038` (`+0.0410`), 95% CI `[+0.0073, +0.0752]`, `p=0.0208`
+  - control display note F1: `0.8901 -> 0.9239` (`+0.0337`), 95% CI `[+0.0219, +0.0483]`, `p=0.0000`
+  - control display offset F1: `0.7169 -> 0.7457` (`+0.0288`), 95% CI `[+0.0156, +0.0429]`, `p=0.0001`
+  - treatment display cluster F1: `0.6571 -> 0.6980` (`+0.0409`), 95% CI `[+0.0092, +0.0748]`, `p=0.0163`
+  - treatment display note F1: `0.8858 -> 0.9177` (`+0.0319`), 95% CI `[+0.0186, +0.0476]`, `p=0.0000`
+  - treatment display offset F1: `0.7145 -> 0.7414` (`+0.0269`), 95% CI `[+0.0130, +0.0414]`, `p=0.0003`
+- Implementation decision:
+  - `backend/detect_note.py`: changed enhanced live default from `LIVE_ENHANCED_ONSET_BASE=0.50` to `0.75`.
+  - `backend/detect_note.py`: changed enhanced full-inference default from `ENHANCED_MEL_ONSET_THRESHOLD=0.50` to `0.75`.
+  - Keep `LIVE_ENHANCED_OFFSET_BASE=0.35`, `LIVE_ENHANCED_MIN_VELOCITY=8`, and `LIVE_ENHANCED_FILTER_HARMONICS=0`.
+- Conclusion:
+  - The enhanced model is a net win after calibration: better note F1, better display cluster F1, and clearly better offset/display-offset F1.
+  - The initially worse result was a threshold-calibration mismatch, not evidence that the new neural model was inferior.
+
+### KEPT: tighter enhanced onset grouping step ratio 0.65 -> 0.50
+
+- Goal:
+  - Raise `display_cluster_f1` after the enhanced model/onset calibration work.
+  - The neural event F1 was already high; the remaining target was display-structure grouping: over/under-clustered note groups rather than raw note detection.
+- Implementation:
+  - `backend/detect_note.py`
+    - Exposed onset-grouping parameters as env knobs:
+      - `LIVE_NEURAL_GROUP_BASE_TOLERANCE_SEC`
+      - `LIVE_NEURAL_GROUP_MIN_TOLERANCE_SEC`
+      - `LIVE_NEURAL_GROUP_SHRINK_SEC`
+      - `LIVE_NEURAL_GROUP_STEP_RATIO`
+    - Changed the default step ratio from `0.65` to `0.50`.
+  - Rationale:
+    - The base span tolerance still allows simultaneous notes to group.
+    - The tighter step ratio makes it harder for a chain of nearby-but-not-truly-simultaneous attacks to merge into one displayed cluster.
+- Sweep:
+  - Temporary runner: `backend/_tmp_enhanced_cluster_sweep.py`
+  - Logs: `backend/benchmark_artifacts/enhanced_cluster_20260602/`
+  - Summary: `backend/enhanced_mel_cluster_sweep_20260602_summary.json`
+  - Baseline: enhanced default with adaptive-cap fix (`LIVE_ENHANCED_ONSET_BASE=0.75`, `LIVE_CONTEXT_SEC=2.4`, `LIVE_NEURAL_GROUP_STEP_RATIO=0.65`).
+- Tested grouping variants:
+  - base tolerance `0.020`: control cluster `0.7097`, treatment cluster `0.7061`
+  - base tolerance `0.025`: control cluster `0.7015`, treatment cluster `0.7032`
+  - base tolerance `0.035`: control cluster `0.7019`, treatment cluster `0.7050`
+  - base tolerance `0.040`: control cluster `0.7035`, treatment cluster `0.7048`
+  - shrink `0.002`: control cluster `0.7040`, treatment cluster `0.7068`
+  - shrink `0.006`: control cluster `0.7015`, treatment cluster `0.7035`
+  - step ratio `0.50`: control cluster `0.7097`, treatment cluster `0.7079`
+  - step ratio `0.80`: control cluster `0.7024`, treatment cluster `0.7057`
+- Winner:
+  - `LIVE_NEURAL_GROUP_STEP_RATIO=0.50`
+  - Result file: `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050.json`
+- Paired comparison versus current enhanced default (`backend/live_benchmark_replay_auto_v2_results_20260602_enhancedheur_default_adaptfix.json`):
+  - control display cluster F1: `0.7038 -> 0.7097` (`+0.0059`), 95% CI `[-0.0115, +0.0270]`, `p=0.5880`
+  - treatment display cluster F1: `0.7058 -> 0.7079` (`+0.0021`), 95% CI `[-0.0112, +0.0168]`, `p=0.7798`
+  - control display offset F1: `0.7457 -> 0.7493` (`+0.0035`)
+  - treatment display offset F1: `0.7445 -> 0.7473` (`+0.0027`)
+  - display note F1 is effectively unchanged (`control -0.0001`, treatment `+0.0014`).
+- Paired comparison versus old mel baseline (`backend/live_benchmark_replay_auto_v2_results_20260531_onsetbase046.json`):
+  - control display cluster F1: `0.6775 -> 0.7097` (`+0.0321`), 95% CI `[+0.0015, +0.0656]`, `p=0.0519`
+  - treatment display cluster F1: `0.6729 -> 0.7079` (`+0.0350`), 95% CI `[+0.0043, +0.0687]`, `p=0.0345`
+  - control display note F1: `0.8985 -> 0.9237` (`+0.0252`)
+  - treatment display note F1: `0.8956 -> 0.9227` (`+0.0271`)
+  - control display offset F1: `0.7048 -> 0.7493` (`+0.0445`)
+  - treatment display offset F1: `0.7033 -> 0.7473` (`+0.0440`)
+- Decision:
+  - Keep `LIVE_NEURAL_GROUP_STEP_RATIO=0.50` as the shipped default.
+  - The incremental improvement over the enhanced adaptive-cap default is modest and not statistically significant on its own, but it raises both control and treatment cluster F1 and offset F1 with no meaningful note-F1 cost.
+
+### TESTED / REJECTED: chord-member confidence outlier pruning
+
+- Idea:
+  - Within simultaneous note groups, drop very weak chord members only if they are both below an absolute onset-probability floor and below a ratio of the group median onset probability.
+  - This avoids interval-based harmonic filtering, which previously destroyed real piano voicings.
+- Implementation:
+  - `backend/detect_note.py`
+    - Added disabled-by-default env-gated group pruning:
+      - `LIVE_NEURAL_GROUP_PRUNE_ENABLED`
+      - `LIVE_NEURAL_GROUP_PRUNE_MIN_SIZE`
+      - `LIVE_NEURAL_GROUP_PRUNE_ABS_ONSET`
+      - `LIVE_NEURAL_GROUP_PRUNE_MEDIAN_RATIO`
+- Sweep results:
+  - `abs=0.55`, `ratio=0.55`, `min_size=3`: control cluster `0.7038`, treatment cluster `0.7058`
+  - `abs=0.60`, `ratio=0.60`, `min_size=3`: control cluster `0.7038`, treatment cluster `0.7058`
+  - `abs=0.65`, `ratio=0.70`, `min_size=3`: control cluster `0.7038`, treatment cluster `0.7057`
+  - `abs=0.60`, `ratio=0.60`, `min_size=4`: control cluster `0.7038`, treatment cluster `0.7057`
+- Decision:
+  - Reject as a default. The tested settings were effectively neutral/no-op and did not raise cluster F1.
+  - Keep the env-gated implementation available for future diagnostics, but leave `LIVE_NEURAL_GROUP_PRUNE_ENABLED=0`.
+
+### ADDED: first continuous WebSocket live-stream backend
+
+- Motivation:
+  - The existing live path still treats each frontend recording chunk as a mini transcription job, then shifts/dedupes chunk-relative output back onto an absolute timeline.
+  - That is a workable benchmark harness, but it is not a true live architecture: packet/chunk boundaries leak into semantic note decisions, and the score layer receives unstable intermediate guesses as if they were final.
+  - The new direction separates transport chunking from semantic state:
+    - audio packets are just transport,
+    - backend session owns the continuous timeline,
+    - neural windows are rolling observations,
+    - note hypotheses become stable over time.
+- `backend/main.py`
+  - Added `ContinuousLiveStreamSession`.
+  - Added packet decoder `_decode_stream_packet_audio(...)`.
+  - Added global `_continuous_live_stream_sessions`.
+  - Added WebSocket endpoint:
+    - `/live/stream`
+- WebSocket protocol:
+  - Start:
+    - `{"type":"start","session_id":"...","sample_rate":44100,"inference_interval_ms":100,"trusted_delay_ms":180,"commit_delay_ms":500,"lock_delay_ms":2000}`
+  - Audio packet as PCM16 base64:
+    - `{"type":"audio_packet","sample_rate":44100,"encoding":"pcm16","pcm16_base64":"..."}`
+  - Audio packet as float samples:
+    - `{"type":"audio_packet","sample_rate":44100,"samples":[...]}`
+  - Flush / stop:
+    - `{"type":"flush"}`
+    - `{"type":"stop"}`
+- Streaming session behavior:
+  - Maintains an audio ring buffer on absolute session time.
+  - Appends small frontend packets without treating them as semantic analysis chunks.
+  - Runs enhanced live neural inference on rolling windows at a configurable tick (default `100 ms`).
+  - Uses context window defaulting to `LIVE_CONTEXT_SEC` (`2.4s`).
+  - Converts model output from window-relative time to absolute session time.
+  - Updates note hypotheses by pitch/onset matching instead of regenerating truth from scratch.
+  - Emits note lifecycle layers:
+    - `heard_notes`
+    - `candidate_notes`
+    - `active_notes`
+    - `committed_notes`
+    - `locked_notes`
+  - Default timing:
+    - trusted delay `180 ms`
+    - commit delay `500 ms`
+    - lock delay `2000 ms`
+- Smoke validation:
+  - Instantiated `ContinuousLiveStreamSession`.
+  - Appended one second of silence.
+  - Forced inference.
+  - Enhanced model loaded successfully and returned a `live_stream_update` with zero notes:
+    - `counts={'heard':0,'candidate':0,'active':0,'committed':0,'locked':0}`
+- Decision:
+  - Keep as the first backend-only prototype of the true streaming architecture.
+  - This does not replace `/live/audio-chunk` yet and does not wire into the frontend score renderer yet.
+  - Next step is frontend packet streaming over WebSocket and then feeding `committed_notes` into notation state with measure locking.
+
+### ADDED: frontend WebSocket live-stream transport wiring
+
+- Motivation:
+  - Move the live tab's normal transport path away from repeatedly stopping the recorder, saving a WAV chunk, uploading it, and restarting capture.
+  - Keep transport packet boundaries separate from semantic note decisions by sending native PCM buffers to the backend stream session.
+- `app/index.tsx`
+  - Added `USE_LIVE_STREAM_TRANSPORT=true`.
+  - Added WebSocket URL derivation from `BACKEND_URL`:
+    - `https -> wss`
+    - `http -> ws`
+  - Added stream payload types for `active_notes`, `committed_notes`, and `locked_notes`.
+  - Added conversion from backend stream note hypotheses to the existing `AnalysisResult` / `NoteResult` shape used by the live score and recent event list.
+  - Uses visible notes from:
+    - `committed_notes`
+    - `active_notes`
+  - Keeps `candidate_notes` out of the score surface so very early guesses do not jitter the notation.
+- Recorder behavior:
+  - Uses `react-native-audio-record`'s native `AudioRecord.on("data", ...)` event.
+  - Sends base64 PCM16 buffers directly over `/live/stream` as:
+    - `{"type":"audio_packet","sample_rate":44100,"encoding":"pcm16","pcm16_base64":"..."}`
+  - Starts the microphone once at session start and stops it once at session stop.
+  - The old `/live/audio-chunk` uploader remains in the file behind the feature flag for fallback/debug.
+- Session behavior:
+  - Opens `/live/stream`.
+  - Sends `start` with:
+    - inference interval `100 ms`
+    - trusted delay `180 ms`
+    - commit delay `500 ms`
+    - lock delay `2000 ms`
+  - On stop, sends `stop` and waits briefly for the final forced backend update.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+  - Direct `npx tsc --noEmit` from PowerShell was blocked by local execution policy (`npx.ps1`), so the check was rerun through `cmd /c`.
+- Current caveat:
+  - This wires live PCM packet transport and immediate note rendering.
+  - It does not yet add chord grouping or frontend measure-lock rendering from `locked_notes`.
+  - The existing score renderer receives stream notes through the old `AnalysisResult` shape; a dedicated stable/live notation layer is still the next architecture step.
+
+### FIXED: live-stream notation duration and score follow behavior
+
+- Problem:
+  - The stream adapter emitted raw note seconds but not the notation fields the MusicXML renderer expects:
+    - `start_beat`
+    - `end_beat`
+    - `note_value`
+    - `note_divisions`
+    - dotted/triplet metadata
+  - Without those fields, the renderer often fell back to quarter-note defaults.
+  - `PianoSheetMusic` also treated stream snapshots like chunk deltas, so early note durations were appended once and not updated as the backend hypothesis matured.
+  - The score follow-tail mode only matched `method="live"`, so `method="live_stream"` did not auto-follow generated notation.
+- `app/index.tsx`
+  - Added stream duration quantization from seconds to beat units using the current BPM.
+  - Added note-value metadata for stream notes before passing them to the score renderer.
+  - Added app-side triplet metadata fields to `NoteResult`.
+- `components/PianoSheetMusic.tsx`
+  - Treats `analysis_summary.method === "live_stream"` as a live snapshot and replaces accumulated score notes on each update instead of appending stale note versions.
+  - Enables follow-tail for both `live` and `live_stream` score updates.
+- `components/osmdHTML.ts`
+  - Added vertical follow-tail scrolling for wrapped portrait score layout.
+  - Added a short programmatic-scroll guard so auto-scroll does not mark itself as a user drag.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### FIXED: live-stream history truncation and render-depth churn
+
+- Problem:
+  - The live-stream backend emits bounded lifecycle arrays:
+    - `active_notes[-64:]`
+    - `committed_notes[-256:]`
+    - `locked_notes[-256:]`
+  - The frontend was treating each `live_stream_update` as the complete score snapshot.
+  - `PianoSheetMusic` then replaced its stream score with that bounded snapshot.
+  - Result: notes from the beginning of a longer live recording could disappear from the score as newer notes arrived.
+- `app/index.tsx`
+  - Added a per-session `liveStreamNotePayloadsRef` map keyed by backend note id, falling back to pitch+onset.
+  - Merges each stream update into the full-session note map before building `AnalysisResult`.
+  - Clears that map only when a new WebSocket stream session starts.
+  - Added `liveStreamAnalysisSignatureRef` so `setAnalysisResult` only runs when note/chord content materially changes.
+- `components/PianoSheetMusic.tsx`
+  - Kept the stable note/chord signature guard.
+  - Kept no-op append protection so identical incoming notes/chords return previous state instead of creating fresh arrays.
+- Reverted:
+  - Removed the compact WebView content-height resizing experiment.
+  - Removed the WebView-side rendered `contentHeight` message.
+  - Restored compact portrait WebView scrolling/layout behavior to the earlier fixed-viewport path.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### ADDED: score-quality diagnostic report
+
+- Motivation:
+  - `display_cluster_f1` is a strict exact onset-cluster metric, not a full generated-score quality metric.
+  - It can stay low even when note F1 is high if chords are mostly right but underclustered, overclustered, or missing one pitch.
+  - The live UX needs a broader report that separates:
+    - pitch coverage,
+    - duration / offset quality,
+    - note-value quality,
+    - chord/set exactness versus partial correctness,
+    - onset/grid alignment,
+    - stability/revision behavior.
+- Added:
+  - `backend/score_quality_report.py`
+- Usage:
+  - `backend\env\Scripts\python.exe -B backend\score_quality_report.py <test_experiment_results.json>`
+- Outputs:
+  - `<results_stem>_score_quality_report.json`
+  - `<results_stem>_score_quality_report.md`
+- First run:
+  - Source:
+    - `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050.json`
+  - Outputs:
+    - `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050_score_quality_report.json`
+    - `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050_score_quality_report.md`
+- Key findings from the first report:
+  - Control:
+    - score-quality diagnostic index: `0.7737`
+    - display note F1: `0.9248`
+    - display offset F1: `0.8384`
+    - exact cluster F1: `0.7007`
+    - cluster Jaccard: `0.8867`
+  - Treatment:
+    - score-quality diagnostic index: `0.7740`
+    - display note F1: `0.9249`
+    - display offset F1: `0.8379`
+    - exact cluster F1: `0.7012`
+    - cluster Jaccard: `0.8872`
+  - Interpretation:
+    - The score is much closer on pitch-set overlap than exact cluster F1 alone suggests.
+    - To reach exact cluster F1 `0.80` on this result, the system needs about `201` more exact cluster matches, assuming predicted/ground-truth cluster counts stay fixed.
+    - The largest strict-cluster bucket is underclustering:
+      - control underclustered matches: `321`
+      - treatment underclustered matches: `320`
+    - This suggests the next score-quality work should focus on chord completion / simultaneity grouping and notation stability, not just neural onset detection.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\score_quality_report.py` passed.
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: removed arbitrary score-quality index from report
+
+- Problem:
+  - The initial report included a weighted `score_quality_index`.
+  - That number was arbitrary and could hide the specific failure modes the report is supposed to expose.
+- `backend/score_quality_report.py`
+  - Removed `score_quality_index` from JSON output.
+  - Removed `score_quality` from the Markdown summary table.
+  - Removed it from CLI console output.
+  - Kept the underlying submetrics and failure breakdowns:
+    - note F1,
+    - offset F1,
+    - note-value accuracy,
+    - exact cluster F1,
+    - cluster Jaccard,
+    - under/over/pitch-conflict cluster counts,
+    - stability/revision metrics,
+    - boundary recall.
+- Regenerated:
+  - `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050_score_quality_report.json`
+  - `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedcluster_group_step050_score_quality_report.md`
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\score_quality_report.py` passed.
+
+### KEPT: enhanced adaptive threshold cap fix
+
+- Problem:
+  - `_select_live_neural_onset_threshold(...)` still had an old mel-baseline hard cap for the loud/dense profile:
+    - `selected = min(0.46, base_onset_threshold + 0.02)`
+  - This was correct for the old `mel_baseline` default around `0.46`, but wrong for calibrated enhanced mel at `0.75`.
+  - In enhanced treatment/adaptive runs, loud/dense chunks could be pushed down to `0.46`, effectively undoing the enhanced threshold calibration.
+- Implementation:
+  - `backend/detect_note.py`
+    - Keep the old `0.46` cap only when `base_onset_threshold <= 0.50`.
+    - For enhanced/high-threshold models, allow `base + 0.02` up to `0.95`.
+  - Old mel behavior is preserved for `LIVE_ONSET_BASE=0.46`.
+  - Enhanced loud/dense adaptive chunks can now select `0.77` when the base is `0.75`.
+- Benchmark:
+  - Result file: `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedheur_default_adaptfix.json`
+  - Compared against the previous best enhanced run `backend/live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on075_v08_fh0.json`.
+- Paired treatment/adaptive improvement:
+  - display cluster F1: `0.6980 -> 0.7058` (`+0.0078`), 95% CI `[+0.0027, +0.0142]`, `p=0.0013`
+  - display note F1: `0.9177 -> 0.9213` (`+0.0036`), 95% CI `[-0.0010, +0.0091]`, `p=0.1792`
+  - display offset F1: `0.7414 -> 0.7445` (`+0.0031`), 95% CI `[-0.0016, +0.0086]`, `p=0.2625`
+  - Control/fixed arm is unchanged, as expected.
+- Final comparison versus old mel `backend/live_benchmark_replay_auto_v2_results_20260531_onsetbase046.json`:
+  - control display cluster F1: `0.6775 -> 0.7038` (`+0.0262`)
+  - treatment display cluster F1: `0.6729 -> 0.7058` (`+0.0329`), 95% CI `[+0.0028, +0.0657]`, `p=0.0427`
+  - control display note F1: `0.8985 -> 0.9239` (`+0.0253`)
+  - treatment display note F1: `0.8956 -> 0.9213` (`+0.0257`)
+  - control display offset F1: `0.7048 -> 0.7457` (`+0.0409`)
+  - treatment display offset F1: `0.7033 -> 0.7445` (`+0.0413`)
+- Decision:
+  - Keep. This is a true inherited-heuristic bug fix and makes adaptive mode compatible with the enhanced model.
+
+### TESTED / REJECTED: enhanced offset, context, duplicate, and merge heuristics
+
+- Harness:
+  - Temporary runner: `backend/_tmp_enhanced_heuristic_sweep.py`
+  - Logs: `backend/benchmark_artifacts/enhanced_heuristics_20260602/`
+  - Aggregate summary: `backend/enhanced_mel_heuristic_sweep_20260602_all_summary.json`
+  - Baseline for this sweep:
+    - `LIVE_ENHANCED_ONSET_BASE=0.75`
+    - `LIVE_ENHANCED_OFFSET_BASE=0.35`
+    - `LIVE_CONTEXT_SEC=2.4`
+    - `LIVE_ENHANCED_DUPLICATE_WINDOW_SEC=0.04`
+    - `LIVE_ENHANCED_MERGE_GAP_SEC=0.0`
+    - adaptive-cap fix enabled
+- Baseline after adaptive-cap fix:
+  - control: note F1 `0.9134`, display note F1 `0.9239`, display cluster F1 `0.7038`, display offset F1 `0.7457`, duplicates/100 `3.54`
+  - treatment: note F1 `0.9115`, display note F1 `0.9213`, display cluster F1 `0.7058`, display offset F1 `0.7445`, duplicates/100 `3.54`
+
+- Offset threshold sweep:
+  - `LIVE_ENHANCED_OFFSET_BASE=0.25`: control cluster `0.7029`, display offset `0.7434`
+  - `0.45`: control cluster `0.7038`, display offset `0.7446`
+  - `0.55`: control cluster `0.7038`, display offset `0.7441`
+  - Decision: reject. Default `0.35` keeps the same/better cluster F1 and best display offset F1.
+
+- Context length sweep:
+  - `LIVE_CONTEXT_SEC=1.8`: control cluster `0.6873`
+  - `3.0`: control cluster `0.6841`
+  - `3.6`: control cluster `0.6999`, display note F1 `0.9243`, display offset F1 `0.7470`, duplicates/100 `3.14`
+  - Retuned `3.6s` context:
+    - onset `0.70`: control cluster `0.6913`
+    - onset `0.80`: control cluster `0.6961`
+    - onset `0.85`: control cluster `0.6314`
+  - Decision: reject for shipped default. `3.6s` improves duplicates and offset slightly, but loses primary display cluster F1 versus `2.4s`/`0.75`.
+
+- Duplicate-window sweep:
+  - Added optional enhanced decoder parameter/env:
+    - `duplicate_window_sec`
+    - `LIVE_ENHANCED_DUPLICATE_WINDOW_SEC`
+  - `0.06`: control cluster `0.7038`, display note `0.9239`, duplicates/100 `3.54`
+  - `0.08`: control cluster `0.7038`, display note `0.9237`, duplicates/100 `3.52`
+  - Decision: neutral/reject as default. Wider window barely changes duplicates and slightly hurts display note F1 at `0.08`.
+
+- Same-pitch merge-gap sweep:
+  - Added optional enhanced decoder parameter/env:
+    - `merge_gap_sec`
+    - `LIVE_ENHANCED_MERGE_GAP_SEC`
+  - `0.04`: control cluster `0.7034`, treatment cluster `0.7067`
+  - `0.08`: control cluster `0.6949`, treatment cluster `0.6987`
+  - Decision: reject as default. `0.04` gives a tiny treatment cluster gain but regresses control cluster; `0.08` clearly regresses.
+
+- Final kept heuristic from this batch:
+  - Adaptive threshold cap fix only.
+  - Keep enhanced defaults:
+    - `LIVE_ENHANCED_ONSET_BASE=0.75`
+    - `LIVE_ENHANCED_OFFSET_BASE=0.35`
+    - `LIVE_CONTEXT_SEC=2.4`
+    - `LIVE_ENHANCED_DUPLICATE_WINDOW_SEC=0.04`
+    - `LIVE_ENHANCED_MERGE_GAP_SEC=0.0`
+
+### BENCHMARKED: current score-quality breakdown, 2026-06-03
+
+- Ran the fixed 48-clip replay benchmark with current code and enhanced model:
+  - Command: `backend\env\Scripts\python.exe -B backend\test_experiment.py --benchmark-manifest backend\live_benchmark_replay_auto_v2.json --no-run-retro-correction --output-json backend\live_benchmark_replay_auto_v2_results_20260603_current.json`
+  - Report: `backend/live_benchmark_replay_auto_v2_results_20260603_current_score_quality_report.md`
+- Current raw-cluster score-quality aggregate:
+  - control: note F1 `0.9248`, offset F1 `0.8384`, note-value accuracy `26.7%`, exact cluster F1 `0.7007`, cluster Jaccard `0.8867`, weighted avg revisions `1.4592`
+  - treatment: note F1 `0.9247`, offset F1 `0.8376`, note-value accuracy `26.8%`, exact cluster F1 `0.7002`, cluster Jaccard `0.8870`, weighted avg revisions `1.4476`
+- Compared with previous `20260602_enhancedcluster_group_step050`:
+  - control is exactly unchanged on paired display metrics.
+  - treatment slipped slightly from the previous run, mostly one regression on `clip_033`; display cluster mean `0.7079 -> 0.7061`, display note mean `0.9227 -> 0.9225`, display offset mean `0.7473 -> 0.7470`.
+- Failure breakdown:
+  - 492 missing notes vs 153 extra notes in control. Recall is the larger note-level problem.
+  - 370 duration/offset errors among 3964 matched notes.
+  - 2906 note-value errors among 3964 evaluable matched notes.
+  - Cluster exactness needs about 201 more exact cluster matches to hit `0.80` with the same predicted/GT cluster counts.
+  - Cluster errors are dominated by underclustering: under `321`, over `133`, pitch conflicts `60`, unmatched GT clusters `120`.
+  - Boundary diagnostics: 122 control boundary misses, 120 tagged `no_control_coarse_candidate`, so nearly all boundary misses are real missing detections rather than later quantization drift.
+  - Stability is still expensive: weighted stabilization median about `1250 ms`, avg revisions about `1.46`, max revisions `5`.
+- Extra diagnostic:
+  - Ran slot-consensus cluster metric:
+    - Command: `backend\env\Scripts\python.exe -B backend\test_experiment.py --benchmark-manifest backend\live_benchmark_replay_auto_v2.json --no-run-retro-correction --cluster-metric-slot-consensus --output-json backend\live_benchmark_replay_auto_v2_results_20260603_slotconsensus.json`
+    - Report: `backend/live_benchmark_replay_auto_v2_results_20260603_slotconsensus_score_quality_report.md`
+  - Slot consensus lowered cluster F1: control `0.7007 -> 0.6845`, treatment `0.7002 -> 0.6830`.
+  - Decision: do not keep slot-consensus metric/behavior as an improvement. The cluster gap is not just score grouping jitter; it is mostly missing chord tones plus some duration/offset instability.
+- Next likely improvement targets:
+  - Model/postprocessing recall for dense chords and boundary-adjacent notes, especially `Pour le piano` and `Gnomenreigen` clips.
+  - Duration/note-value decoding or live rhythm quantization; note-value accuracy is the weakest score-facing submetric.
+  - Stabilization policy; the user experience likely benefits more from fewer late revisions than from tiny F1 changes.
+
+### CHANGED: onset-to-onset score durations and stable measure layout, 2026-06-03
+
+- User observation:
+  - Acoustic duration/note-value inference is intrinsically unreliable for piano notation because of pedal, harmonics, decay, and expressive releases.
+  - For live score display, the next onset/IOI is a better notation authority than trying to detect when the previous note stopped sounding.
+- Implemented in `components/PianoSheetMusic.tsx`:
+  - Added an IOI duration pass after onset/time grouping.
+  - Displayed note durations now come from the distance to the next onset cluster, quantized to simple score values from whole through 32nd.
+  - The final event uses the previous IOI as a provisional duration, or a quarter note if there is no context yet.
+  - The pass intentionally strips triplet tuplets from IOI-derived durations for now, keeping this first version simple and stable.
+  - Added a render guard so XML changes inside the current measure are still sent to OSMD even when the total measure count has not grown.
+- Implemented in `components/osmdHTML.ts`:
+  - Forced fixed measure widths in OSMD.
+  - Kept portrait layout at 3 measures per system.
+  - Enabled XML new-system handling and added stable new-system breaks every 3 measures from the generated MusicXML.
+  - Set last-system scaling to `1.0` so the final line does not stretch while new measures are arriving.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: first live-stream latency reduction pass, 2026-06-03
+
+- User report:
+  - Live transcription falls behind real-time audio.
+  - After about a 15 second recording, the app can take another 15-20 seconds to catch up.
+- Likely bottleneck:
+  - The live WebSocket path was requesting neural inference every `100 ms` while each inference used a rolling `2.4 s` context window.
+  - If deployed GPU inference ever exceeds the inference interval, the WebSocket receive loop can fall behind packet arrival and process stale packets after recording stops.
+- Implemented in `app/index.tsx`:
+  - Added low-latency stream constants:
+    - `LIVE_STREAM_CONTEXT_SEC = 1.8`
+    - `LIVE_STREAM_INFERENCE_INTERVAL_MS = 250`
+  - Start messages now send `context_sec` explicitly.
+  - Audio packets now include `client_sent_at_ms`.
+  - Added once-per-second `[LiveStream] latency` logs with:
+    - recording wall elapsed
+    - backend audio time
+    - estimated audio backlog
+    - server backlog
+    - inference ms
+    - neural/model real-time factors
+    - packet count and skipped inference count
+    - current onset threshold/profile
+  - Aligned live stream score duration metadata to backend `audio_time_sec`.
+- Implemented in `backend/main.py`:
+  - Continuous live stream sessions now track packet count, packet sequence, first audio wall time, and stream backlog.
+  - WebSocket packet handler passes packet timing metadata into the session.
+  - Live stream updates include backlog and inference telemetry.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+- Next readout:
+  - If `audioBacklogMs` grows steadily, backend inference/receive-loop throughput is the bottleneck.
+  - If `audioBacklogMs` stays low but notes appear late, the bottleneck is likely frontend rendering/OSMD batching or note state delays (`trusted_delay_ms`, `commit_delay_ms`).
+
+### CHANGED: lightweight live score strip above OSMD, 2026-06-03
+
+- User goal:
+  - Reduce perceived notation latency from OSMD/WebView rendering.
+  - Show the previous and current measure immediately in a small live layer while the full OSMD score updates less often.
+- Implemented in `components/LiveScoreStrip.tsx`:
+  - Added a lightweight WebView/SVG renderer for the previous and current measure.
+  - Draws a compact grand-staff preview directly from live note/chord observations without invoking OSMD.
+  - Keeps this layer intentionally approximate so it can behave as immediate visual feedback rather than final engraving.
+- Implemented in `app/index.tsx`:
+  - Mounted the live strip directly above the existing OSMD WebView.
+  - Increased `LIVE_OSMD_BATCH_MS` to `500` so OSMD acts as the steadier committed-score layer while the strip handles fast feedback.
+- Follow-up correction:
+  - The first strip version still used the same stabilized `analysisResult` as OSMD, so it inherited the same apparent measure lag.
+  - Added a separate `livePreviewResult` fed by backend `heard_notes`, `candidate_notes`, and `active_notes` so the strip can show the earliest available neural hypotheses while OSMD remains stabilized.
+  - Changed the strip's current-measure window to follow backend audio time instead of the latest detected note, avoiding a trailing window when detection is late.
+  - Reduced dense-passage clutter by deduping repeated pitch/onset observations and drawing compact pitch dots without stems.
+- Follow-up liveness UI:
+  - Added ghost-note rendering in the live strip: heard/candidate notes appear as pale provisional marks, while active/committed/locked notes become darker.
+  - Added a moving red audio-time now-line so the user can see the app tracking the performance even between note confirmations.
+  - Kept the strip window anchored to backend audio time, with note time as a fallback only before audio-time metadata is available.
+- Performance correction:
+  - Replaced the live strip WebView/HTML/SVG implementation with native `react-native-svg` rendering.
+  - Moved the now-line to a Reanimated UI-thread animation so it can move smoothly without React re-rendering the strip every frame.
+  - Kept ghost-note semantics and the audio-time anchored two-measure window, but removed WebView document reloads and frame-by-frame SVG string reconstruction.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: faster live inference cadence with UI preview backpressure, 2026-06-03
+
+- User goal:
+  - Move visible live-preview latency closer to the warmed model runtime, without reducing model context, thresholds, or score accuracy.
+  - Ensure the frontend can keep up when backend updates arrive faster.
+- Implemented in `app/index.tsx`:
+  - Lowered `LIVE_STREAM_INFERENCE_INTERVAL_MS` from `250` to `90`.
+  - Kept `LIVE_STREAM_CONTEXT_SEC = 1.8`, trusted delay, commit delay, and OSMD batching unchanged so accuracy/stabilization behavior is not weakened.
+  - Added `LIVE_PREVIEW_BATCH_MS = 66` and a coalescing preview queue:
+    - backend updates can arrive as fast as the stream supports;
+    - React preview state is flushed at most about 15fps;
+    - if multiple preview updates arrive before the next flush, only the newest one is rendered.
+  - Added `coalescedPreviewUpdates` to the existing `[LiveStream] latency` log so UI backpressure can be observed.
+  - Added cleanup for pending preview flushes on start, stop, socket reset, failure, and unmount.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+
+### CHANGED: log-driven live latency reduction, 2026-06-03
+
+- User-provided log readout:
+  - Warm inference was fast after startup: usually `13-17 ms`.
+  - First inference still spiked to about `1539 ms`.
+  - Audio packets arrived every about `40 ms`.
+  - Effective inference cadence looked like about `280 ms`, suggesting the deployed stream was still behaving near the older `250 ms` interval rather than the requested `90 ms`.
+- Implemented in `backend/main.py`:
+  - Added a WebSocket `warmup` message for `/live/stream`.
+  - The warmup runs `analyze_audio_live_neural` on a synthetic live-context buffer using the same live neural path as streaming inference.
+  - The warmup does not append audio to the session, advance `sample_cursor`, or create hypotheses, so recording timestamps are not shifted.
+- Implemented in `app/index.tsx`:
+  - After `live_stream_started`, the app now sends `warmup` and waits before `AudioRecord.start()`.
+  - Added backward tolerance: if an older backend deployment does not support WebSocket warmup, the app warns and continues instead of breaking recording.
+  - Added `backendInferenceIntervalMs`, `backendContextMs`, and requested interval to `[LiveStream] latency` logs so future logs can prove whether the deployed backend accepted the low-latency interval.
+  - Added `[LiveStream] warmed` logs with warmup timing.
+- Implemented in `components/LiveScoreStrip.tsx`:
+  - The moving now-line and visible two-measure window can now use the local recording clock as the primary timing source, with backend audio time as fallback.
+  - This improves perceived real-time response without changing model context, thresholds, inference results, or score stabilization.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+
+### EXPERIMENT: hand-independent onset-to-onset note extension, 2026-06-03
+
+- User request:
+  - Try extending every played note to the next onset in its own hand, to see how the generated score feels.
+- Implemented in `components/PianoSheetMusic.tsx`:
+  - Added per-hand IOI duration estimation for the score rhythm pass.
+  - Treble events now use the distance to the next treble onset.
+  - Bass events now use the distance to the next bass onset.
+  - If a hand has no later onset, the pass falls back to the previous same-hand IOI, then to the global onset IOI.
+  - This intentionally preserves model onsets and pitch decisions; it only changes score-facing displayed durations.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: 70ms stream cadence and packet-anchored backlog metric, 2026-06-03
+
+- User-provided log readout:
+  - Backend warmup worked and the deployed stream accepted `backendInferenceIntervalMs: 90`.
+  - Effective inference cadence was still about `120 ms` because audio packets arrive every about `40 ms`, so a `90 ms` gate can only fire on every third packet.
+  - Session-wall `audioBacklogMs` still included startup/recorder delay before the first audio packet, so it overstated true stream lag.
+- Implemented in `app/index.tsx`:
+  - Lowered `LIVE_STREAM_INFERENCE_INTERVAL_MS` from `90` to `70`, targeting every-second-packet inference at roughly `80 ms` cadence while keeping the same `1.8 s` model context.
+  - Added `liveStreamFirstPacketSentAtRef` to anchor stream-lag measurement to the first actual audio packet.
+  - Added `packetElapsedMs` and `packetAudioBacklogMs` to `[LiveStream] latency` logs while keeping the existing button/session-anchored `audioBacklogMs`.
+  - Reset the first-packet anchor on stream open, recording start, stop, failure, and unmount.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: live preview UI-lag telemetry, 2026-06-03
+
+- User concern:
+  - The backend is now inferring at an effective `80 ms` cadence, but the live dot visualization may still feel a couple hundred milliseconds behind.
+- Log readout before this change:
+  - `coalescedPreviewUpdates` was regularly nonzero even with an `80 ms` inference cadence, suggesting preview updates may be arriving to JS in bursts or waiting behind UI work.
+  - Existing logs did not distinguish backend data staleness from preview queue/render delay.
+- Implemented in `app/index.tsx`:
+  - Added preview queue telemetry:
+    - `previewFlushes`
+    - `droppedPreviewUpdates`
+    - `previewLastQueueWaitMs`
+    - `previewMaxQueueWaitMs`
+    - `previewDataLagMs`
+  - `previewDataLagMs` compares local first-packet time to the backend audio time represented by the preview result when it is flushed to React state.
+  - Per-window preview counters reset after each `[LiveStream] latency` log.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: faster live preview flush and stale-preview bypass, 2026-06-03
+
+- User-provided telemetry readout:
+  - `previewDataLagMs` was usually around `200-250 ms`, with a max around `425 ms`.
+  - `previewMaxQueueWaitMs` reached `100-200 ms`, showing that the preview queue itself could add visible lag.
+  - Backend inference was already healthy at `70 ms` requested / `80 ms` effective cadence.
+- Implemented in `app/index.tsx`:
+  - Lowered `LIVE_PREVIEW_BATCH_MS` from `66` to `33`, targeting about `30 fps` preview updates.
+  - Added `LIVE_PREVIEW_STALE_FLUSH_MS = 180`.
+  - The live preview now flushes immediately when pending preview data is already at least `180 ms` behind local first-packet time.
+  - Backend/model cadence, context, thresholds, and OSMD batching are unchanged.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: absolute-clock live preview now-line, 2026-06-03
+
+- User observation:
+  - The live dot preview is fast enough after the preview flush tuning, but the red time bar still appears to lag.
+- Cause:
+  - `LiveScoreStrip` was using `localElapsedSeconds={duration}`.
+  - `duration` was advanced by a JS `setInterval` that added `0.1` seconds per tick, so it could drift when the JS thread was busy.
+- Implemented in `app/index.tsx`:
+  - Added an absolute `recordingStartedAtMs` state and `recordingTimerStartedAtRef`.
+  - The duration timer now computes elapsed time from `Date.now() - recordingStartedAtMs` instead of incrementing by a fixed amount.
+  - Passed `localStartedAtMs` into `LiveScoreStrip`.
+- Implemented in `components/LiveScoreStrip.tsx`:
+  - The red now-line now computes its beat position directly from `Date.now() - localStartedAtMs` inside the Reanimated frame callback.
+  - `localElapsedSeconds` remains as a fallback, but the live path no longer depends on JS timer increments for the now-line.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: decoupled live WebSocket receive and inference worker, 2026-06-03
+
+- User goal:
+  - Reduce preview latency without changing model context, thresholds, or accuracy behavior.
+  - Keep receiving audio packets while inference runs instead of blocking the WebSocket receive loop during each model call.
+- Implemented in `backend/main.py`:
+  - Added an async inference worker for `/live/stream`.
+  - The WebSocket receive loop now decodes/appends audio packets and signals the worker, then immediately returns to reading packets.
+  - The inference worker runs `maybe_run_inference` on the latest rolling buffer and sends updates through a locked send path.
+  - Added session thread-safety:
+    - short lock around audio buffer appends/snapshots/status/hypothesis updates;
+    - separate inference lock so flush/stop/worker cannot run overlapping model calls;
+    - model inference runs outside the audio-buffer lock so packet receive can continue.
+  - Added `transport_mode: "decoupled"` to stream session status.
+- Implemented in `app/index.tsx`:
+  - Added `transportMode` to `[LiveStream] latency` logs so deployed behavior can be verified.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+  - `cmd /c npx tsc --noEmit` passed.

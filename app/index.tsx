@@ -16,6 +16,7 @@ import {
   View,
 } from "react-native";
 import AudioRecord from "react-native-audio-record";
+import LiveScoreStrip from "../components/LiveScoreStrip";
 import PianoSheetMusic from "../components/PianoSheetMusic";
 import { ThemedText } from "../components/ThemedText";
 import { ThemedView } from "../components/ThemedView";
@@ -24,10 +25,19 @@ import { useLiveRhythm } from "../hooks/useLiveRhythm";
 const BACKEND_URL =
   "https://exoplanetarium--livescore-gpu-fastapi-app.modal.run";
 const CHUNK_INTERVAL_MS = 600;
+const LIVE_AUDIO_SAMPLE_RATE = 44100;
+const USE_LIVE_STREAM_TRANSPORT = true;
+const LIVE_STREAM_CONTEXT_SEC = 1.8;
+const LIVE_STREAM_INFERENCE_INTERVAL_MS = 70;
+const LIVE_STREAM_TRUSTED_DELAY_MS = 180;
+const LIVE_STREAM_COMMIT_DELAY_MS = 500;
+const LIVE_STREAM_LOCK_DELAY_MS = 2000;
 const USE_LIVE_NEURAL_PATH = true;
 const USE_LIVE_ADAPTIVE_ONSET_THRESHOLD_EXPERIMENT = true;
 const USE_LIVE_OSMD_ENGRAVING_EXPERIMENT = true;
-const LIVE_OSMD_BATCH_MS = 40;
+const LIVE_PREVIEW_BATCH_MS = 33;
+const LIVE_PREVIEW_STALE_FLUSH_MS = 180;
+const LIVE_OSMD_BATCH_MS = 500;
 
 type LiveNoiseProfile = "open" | "balanced" | "clean";
 
@@ -80,6 +90,9 @@ interface NoteResult {
   dotted?: boolean;
   triplet?: boolean;
   triplet_position?: "start" | "middle" | "end";
+  triplet_type?: "half" | "quarter" | "eighth" | "16th" | "32nd";
+  actual_notes?: number;
+  normal_notes?: number;
   start_beat?: number;
   end_beat?: number;
   duration_source?: string;
@@ -158,7 +171,263 @@ interface QueuedChunkUpload {
   telemetry: RecordedChunkTelemetry;
 }
 
+interface LiveStreamNotePayload {
+  id?: number;
+  state?: "candidate" | "active" | "committed" | "locked";
+  midi_note: number;
+  onset_time: number;
+  offset_time?: number;
+  duration?: number;
+  confidence?: number;
+  observations?: number;
+  first_seen_time?: number;
+  last_seen_time?: number;
+}
+
+interface LiveStreamUpdate {
+  type: string;
+  session?: {
+    session_id?: string;
+    audio_time_sec?: number;
+    current_time_sec?: number;
+    sample_rate?: number;
+    buffered_sec?: number;
+    stream_backlog_sec?: number;
+    context_sec?: number;
+    inference_interval_sec?: number;
+    trusted_delay_sec?: number;
+    commit_delay_sec?: number;
+    lock_delay_sec?: number;
+    transport_mode?: string;
+  };
+  inference?: {
+    ran?: boolean;
+    reason?: string;
+    inference_ms?: number;
+    observation_count?: number;
+    received_packet_count?: number;
+    skipped_inference_count?: number;
+    neural_timing?: {
+      neural_total?: number;
+      neural_real_time_factor?: number;
+      neural_model_total?: number;
+      neural_model_real_time_factor?: number;
+      neural_feature_extraction?: number;
+      neural_model_inference?: number;
+      neural_decode_notes?: number;
+    };
+    analysis_summary?: {
+      neural_model?: string;
+      live_onset_threshold?: number;
+      live_onset_threshold_profile?: string;
+    };
+  };
+  warmup?: {
+    status?: string;
+    inference_ms?: number;
+    neural_timing?: {
+      neural_total?: number;
+      neural_real_time_factor?: number;
+      neural_model_total?: number;
+      neural_model_real_time_factor?: number;
+      neural_feature_extraction?: number;
+      neural_model_inference?: number;
+      neural_decode_notes?: number;
+    };
+    error?: string;
+  };
+  heard_notes?: LiveStreamNotePayload[];
+  candidate_notes?: LiveStreamNotePayload[];
+  active_notes?: LiveStreamNotePayload[];
+  committed_notes?: LiveStreamNotePayload[];
+  locked_notes?: LiveStreamNotePayload[];
+  counts?: {
+    candidate?: number;
+    active?: number;
+    committed?: number;
+    locked?: number;
+  };
+  error?: string;
+}
+
 type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
+
+function getLiveStreamUrl() {
+  const wsBaseUrl = BACKEND_URL.replace(/^https:/, "wss:").replace(
+    /^http:/,
+    "ws:",
+  );
+  return `${wsBaseUrl}/live/stream`;
+}
+
+function midiToNoteName(midi: number) {
+  const names = [
+    "C",
+    "C#",
+    "D",
+    "D#",
+    "E",
+    "F",
+    "F#",
+    "G",
+    "G#",
+    "A",
+    "A#",
+    "B",
+  ];
+  const pitchClass = ((midi % 12) + 12) % 12;
+  const octave = Math.floor(midi / 12) - 1;
+  return `${names[pitchClass]}${octave}`;
+}
+
+function quantizeStreamDurationBeats(rawBeats: number): {
+  beats: number;
+  noteValue: NonNullable<NoteResult["note_value"]>;
+  dotted?: boolean;
+  triplet?: boolean;
+} {
+  const candidates: {
+    beats: number;
+    noteValue: NonNullable<NoteResult["note_value"]>;
+    dotted?: boolean;
+    triplet?: boolean;
+  }[] = [
+    { beats: 4, noteValue: "whole" },
+    { beats: 3, noteValue: "half", dotted: true },
+    { beats: 2, noteValue: "half" },
+    { beats: 1.5, noteValue: "quarter", dotted: true },
+    { beats: 1, noteValue: "quarter" },
+    { beats: 0.75, noteValue: "eighth", dotted: true },
+    { beats: 2 / 3, noteValue: "quarter", triplet: true },
+    { beats: 0.5, noteValue: "eighth" },
+    { beats: 0.375, noteValue: "16th", dotted: true },
+    { beats: 1 / 3, noteValue: "eighth", triplet: true },
+    { beats: 0.25, noteValue: "16th" },
+    { beats: 1 / 6, noteValue: "16th", triplet: true },
+    { beats: 0.125, noteValue: "32nd" },
+  ];
+  const clampedBeats = Math.max(0.125, Math.min(4, rawBeats));
+
+  return candidates.reduce((best, candidate) =>
+    Math.abs(candidate.beats - clampedBeats) <
+    Math.abs(best.beats - clampedBeats)
+      ? candidate
+      : best,
+  );
+}
+
+function streamPayloadToNote(
+  payload: LiveStreamNotePayload,
+  bpm: number = 120,
+): NoteResult {
+  const onset = Number(payload.onset_time ?? 0);
+  const duration = Math.max(
+    0.04,
+    Number(payload.duration ?? (payload.offset_time ?? onset) - onset),
+  );
+  const offset = Number(payload.offset_time ?? onset + duration);
+  const secondsPerBeat = 60 / Math.max(40, Math.min(240, bpm || 120));
+  const startBeat = Math.round((onset / secondsPerBeat) * 24) / 24;
+  const durationSpec = quantizeStreamDurationBeats(duration / secondsPerBeat);
+
+  return {
+    time_seconds: onset,
+    start_beat: startBeat,
+    end_beat: startBeat + durationSpec.beats,
+    midi_note: payload.midi_note,
+    note_name: midiToNoteName(payload.midi_note),
+    method: `live_stream_${payload.state ?? "active"}`,
+    confidence: payload.confidence,
+    offset_seconds: offset,
+    duration_seconds: Math.max(0.04, offset - onset),
+    note_value: durationSpec.noteValue,
+    note_divisions: durationSpec.beats,
+    dotted: durationSpec.dotted,
+    triplet: durationSpec.triplet,
+    actual_notes: durationSpec.triplet ? 3 : undefined,
+    normal_notes: durationSpec.triplet ? 2 : undefined,
+    hand: payload.midi_note < 60 ? "bass" : "treble",
+  };
+}
+
+function getLiveStreamNoteKey(payload: LiveStreamNotePayload) {
+  if (payload.id != null) {
+    return `id-${payload.id}`;
+  }
+  return `${payload.midi_note}-${Math.round((payload.onset_time ?? 0) * 1000)}`;
+}
+
+function buildLiveStreamAnalysisResult(
+  update: LiveStreamUpdate,
+  bpm?: number,
+  bpmConfidence?: number,
+  accumulatedPayloads?: Map<string, LiveStreamNotePayload>,
+  includeUnstableNotes = false,
+): AnalysisResult {
+  const noteMap = new Map<string, NoteResult>();
+  const visibleNotes = [
+    ...(includeUnstableNotes ? (update.heard_notes ?? []) : []),
+    ...(includeUnstableNotes ? (update.candidate_notes ?? []) : []),
+    ...(includeUnstableNotes ? (update.active_notes ?? []) : []),
+    ...(update.committed_notes ?? []),
+    ...(update.locked_notes ?? []),
+    ...(!includeUnstableNotes ? (update.active_notes ?? []) : []),
+  ];
+
+  for (const payload of visibleNotes) {
+    const key = getLiveStreamNoteKey(payload);
+    accumulatedPayloads?.set(key, payload);
+    noteMap.set(key, streamPayloadToNote(payload, bpm));
+  }
+
+  if (accumulatedPayloads) {
+    noteMap.clear();
+    for (const [key, payload] of accumulatedPayloads) {
+      noteMap.set(key, streamPayloadToNote(payload, bpm));
+    }
+  }
+
+  const notes = [...noteMap.values()];
+  const onsets = notes.map((note) => ({
+    time_seconds: note.time_seconds,
+    duration_seconds: note.duration_seconds,
+  }));
+
+  const result = buildLiveAnalysisResult(notes, [], onsets, bpm, bpmConfidence);
+  result.analysis_summary.method = "live_stream";
+  result.analysis_summary.duration_seconds = Math.max(
+    result.analysis_summary.duration_seconds,
+    update.session?.audio_time_sec ?? update.session?.current_time_sec ?? 0,
+  );
+  return result;
+}
+
+function buildAnalysisResultEventSignature(result: AnalysisResult) {
+  const notes = result.notes
+    .map((note) =>
+      [
+        note.midi_note,
+        Math.round((note.time_seconds ?? 0) * 1000),
+        Math.round((note.duration_seconds ?? 0) * 1000),
+        Math.round((note.start_beat ?? -1) * 24),
+        Math.round((note.note_divisions ?? -1) * 24),
+        note.note_value ?? "",
+        note.dotted ? 1 : 0,
+        note.triplet ? 1 : 0,
+      ].join(":"),
+    )
+    .join("|");
+  const chords = result.chords
+    .map((chord) =>
+      [
+        Math.round((chord.time_seconds ?? 0) * 1000),
+        (chord.midi_notes ?? []).join(","),
+        Math.round((chord.duration_seconds ?? 0) * 1000),
+      ].join(":"),
+    )
+    .join("|");
+  return `${result.notes.length}/${result.chords.length}:${notes}::${chords}`;
+}
 
 function buildLiveAnalysisResult(
   notes: NoteResult[],
@@ -225,16 +494,22 @@ function getConnectionStatusText(
   }
 
   if (isProcessing) {
-    return "Processing chunk";
+    return USE_LIVE_STREAM_TRANSPORT
+      ? "Updating stream"
+      : "Processing chunk";
   }
 
   switch (status) {
     case "connected":
-      return "Live session active";
+      return USE_LIVE_STREAM_TRANSPORT
+        ? "Live stream active"
+        : "Live session active";
     case "connecting":
       return "Connecting";
     case "error":
-      return "Chunk upload failed";
+      return USE_LIVE_STREAM_TRANSPORT
+        ? "Live stream failed"
+        : "Chunk upload failed";
     default:
       return "Idle";
   }
@@ -269,6 +544,9 @@ export default function LiveTranscriptionScreen() {
   const [isWarmingUp, setIsWarmingUp] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
+  const [recordingStartedAtMs, setRecordingStartedAtMs] = useState<
+    number | null
+  >(null);
   const [liveScoreViewportHeight, setLiveScoreViewportHeight] = useState(0);
   const [isScoreScrollActive, setIsScoreScrollActive] = useState(false);
   const [connectionStatus, setConnectionStatus] =
@@ -277,6 +555,8 @@ export default function LiveTranscriptionScreen() {
     null,
   );
   const [liveEngravingResult, setLiveEngravingResult] =
+    useState<AnalysisResult | null>(null);
+  const [livePreviewResult, setLivePreviewResult] =
     useState<AnalysisResult | null>(null);
   const [liveEngravingVersion, setLiveEngravingVersion] = useState(0);
   const [sessionReady, setSessionReady] = useState(false);
@@ -296,12 +576,47 @@ export default function LiveTranscriptionScreen() {
     result: AnalysisResult | null;
     version: number;
   }>({ result: null, version: 0 });
+  const livePreviewFlushTimeoutRef =
+    useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingLivePreviewRef = useRef<AnalysisResult | null>(null);
+  const pendingLivePreviewQueuedAtRef = useRef<number | null>(null);
+  const pendingLivePreviewAudioTimeMsRef = useRef<number | null>(null);
+  const lastLivePreviewFlushAtRef = useRef(0);
+  const coalescedLivePreviewUpdatesRef = useRef(0);
+  const droppedLivePreviewUpdatesRef = useRef(0);
+  const livePreviewFlushCountRef = useRef(0);
+  const lastLivePreviewQueueWaitMsRef = useRef<number | null>(null);
+  const maxLivePreviewQueueWaitMsRef = useRef(0);
+  const lastLivePreviewDataLagMsRef = useRef<number | null>(null);
   const pendingChunkUploadRef = useRef<QueuedChunkUpload | null>(null);
   const isRecordingRef = useRef(false);
+  const recordingTimerStartedAtRef = useRef<number | null>(null);
   const sessionReadyRef = useRef(false);
   const backendWarmupPromiseRef = useRef<Promise<void> | null>(null);
+  const liveStreamSocketRef = useRef<WebSocket | null>(null);
+  const liveStreamSessionIdRef = useRef<string | null>(null);
+  const liveStreamPacketSequenceRef = useRef(0);
+  const liveStreamNotePayloadsRef = useRef<Map<string, LiveStreamNotePayload>>(
+    new Map(),
+  );
+  const liveStreamAnalysisSignatureRef = useRef("");
+  const liveStreamAudioSubscriptionRef = useRef<{
+    remove?: () => void;
+  } | null>(null);
+  const liveStreamStartResolveRef = useRef<(() => void) | null>(null);
+  const liveStreamStartRejectRef = useRef<((error: Error) => void) | null>(
+    null,
+  );
+  const liveStreamWarmResolveRef = useRef<(() => void) | null>(null);
+  const liveStreamWarmRejectRef = useRef<((error: Error) => void) | null>(
+    null,
+  );
+  const liveStreamStopResolveRef = useRef<(() => void) | null>(null);
   const currentChunkStartedAtRef = useRef<number | null>(null);
   const chunkSequenceRef = useRef(0);
+  const liveStreamRecordingStartedAtRef = useRef<number | null>(null);
+  const liveStreamFirstPacketSentAtRef = useRef<number | null>(null);
+  const lastLiveStreamLatencyLogAtRef = useRef(0);
   // Track concurrent uploads so the spinner only clears when the queue drains.
   const inFlightUploadsRef = useRef(0);
   const [hasStoppedRecording, setHasStoppedRecording] = useState(false);
@@ -324,6 +639,23 @@ export default function LiveTranscriptionScreen() {
     sessionReadyRef.current = sessionReady;
   }, [sessionReady]);
 
+  const clearLivePreviewQueue = useCallback(() => {
+    if (livePreviewFlushTimeoutRef.current) {
+      clearTimeout(livePreviewFlushTimeoutRef.current);
+      livePreviewFlushTimeoutRef.current = null;
+    }
+    pendingLivePreviewRef.current = null;
+    pendingLivePreviewQueuedAtRef.current = null;
+    pendingLivePreviewAudioTimeMsRef.current = null;
+    lastLivePreviewFlushAtRef.current = 0;
+    coalescedLivePreviewUpdatesRef.current = 0;
+    droppedLivePreviewUpdatesRef.current = 0;
+    livePreviewFlushCountRef.current = 0;
+    lastLivePreviewQueueWaitMsRef.current = null;
+    maxLivePreviewQueueWaitMsRef.current = 0;
+    lastLivePreviewDataLagMsRef.current = null;
+  }, []);
+
   const handleLiveScoreSectionLayout = useCallback(
     (event: LayoutChangeEvent) => {
       liveScoreSectionYRef.current = event.nativeEvent.layout.y;
@@ -337,19 +669,6 @@ export default function LiveTranscriptionScreen() {
       scrollViewRef.current?.scrollTo({ y: targetY, animated: false });
     });
   }, []);
-
-  const handleLiveScoreViewportLayout = useCallback(
-    (event: LayoutChangeEvent) => {
-      const nextHeight = Math.max(
-        220,
-        Math.floor(event.nativeEvent.layout.height),
-      );
-      setLiveScoreViewportHeight((previous) =>
-        Math.abs(previous - nextHeight) < 8 ? previous : nextHeight,
-      );
-    },
-    [],
-  );
 
   const clearPendingChunkUpload = useCallback(() => {
     const pendingUpload = pendingChunkUploadRef.current;
@@ -490,6 +809,450 @@ export default function LiveTranscriptionScreen() {
     return backendWarmupPromiseRef.current;
   }, [warmBackend]);
 
+  const removeLiveStreamAudioSubscription = useCallback(() => {
+    liveStreamAudioSubscriptionRef.current?.remove?.();
+    liveStreamAudioSubscriptionRef.current = null;
+  }, []);
+
+  const handleLiveScoreViewportLayout = useCallback(
+    (event: LayoutChangeEvent) => {
+      const nextHeight = Math.max(
+        220,
+        Math.floor(event.nativeEvent.layout.height),
+      );
+      setLiveScoreViewportHeight((previous) =>
+        Math.abs(previous - nextHeight) < 8 ? previous : nextHeight,
+      );
+    },
+    [],
+  );
+
+  const flushLivePreviewResult = useCallback(() => {
+    if (livePreviewFlushTimeoutRef.current) {
+      clearTimeout(livePreviewFlushTimeoutRef.current);
+      livePreviewFlushTimeoutRef.current = null;
+    }
+
+    const nextResult = pendingLivePreviewRef.current;
+    const queuedAtMs = pendingLivePreviewQueuedAtRef.current;
+    const previewAudioTimeMs = pendingLivePreviewAudioTimeMsRef.current;
+    pendingLivePreviewRef.current = null;
+    pendingLivePreviewQueuedAtRef.current = null;
+    pendingLivePreviewAudioTimeMsRef.current = null;
+    if (!nextResult) {
+      return;
+    }
+
+    const nowMs = Date.now();
+    lastLivePreviewFlushAtRef.current = nowMs;
+    livePreviewFlushCountRef.current += 1;
+    if (queuedAtMs != null) {
+      const queueWaitMs = nowMs - queuedAtMs;
+      lastLivePreviewQueueWaitMsRef.current = queueWaitMs;
+      maxLivePreviewQueueWaitMsRef.current = Math.max(
+        maxLivePreviewQueueWaitMsRef.current,
+        queueWaitMs,
+      );
+    }
+    if (
+      previewAudioTimeMs != null &&
+      liveStreamFirstPacketSentAtRef.current != null
+    ) {
+      lastLivePreviewDataLagMsRef.current = Math.max(
+        0,
+        nowMs - liveStreamFirstPacketSentAtRef.current - previewAudioTimeMs,
+      );
+    }
+    setLivePreviewResult(nextResult);
+  }, []);
+
+  const queueLivePreviewResult = useCallback(
+    (nextResult: AnalysisResult) => {
+      if (pendingLivePreviewRef.current) {
+        droppedLivePreviewUpdatesRef.current += 1;
+      }
+      pendingLivePreviewRef.current = nextResult;
+      const nowMs = Date.now();
+      pendingLivePreviewQueuedAtRef.current = nowMs;
+      const previewAudioTimeMs =
+        (nextResult.analysis_summary.duration_seconds ?? 0) * 1000;
+      pendingLivePreviewAudioTimeMsRef.current = previewAudioTimeMs;
+      const elapsedMs = nowMs - lastLivePreviewFlushAtRef.current;
+      const firstPacketSentAtMs = liveStreamFirstPacketSentAtRef.current;
+      const previewDataLagMs =
+        firstPacketSentAtMs != null
+          ? Math.max(0, nowMs - firstPacketSentAtMs - previewAudioTimeMs)
+          : 0;
+
+      if (
+        elapsedMs >= LIVE_PREVIEW_BATCH_MS ||
+        previewDataLagMs >= LIVE_PREVIEW_STALE_FLUSH_MS
+      ) {
+        flushLivePreviewResult();
+        return;
+      }
+
+      coalescedLivePreviewUpdatesRef.current += 1;
+      if (!livePreviewFlushTimeoutRef.current) {
+        livePreviewFlushTimeoutRef.current = setTimeout(
+          flushLivePreviewResult,
+          Math.max(1, LIVE_PREVIEW_BATCH_MS - elapsedMs),
+        );
+      }
+    },
+    [flushLivePreviewResult],
+  );
+
+  const handleLiveStreamPayload = useCallback(
+    (data: LiveStreamUpdate) => {
+      if (data.type === "live_stream_started") {
+        setSessionReady(true);
+        sessionReadyRef.current = true;
+        setConnectionStatus("connected");
+        liveStreamStartResolveRef.current?.();
+        liveStreamStartResolveRef.current = null;
+        liveStreamStartRejectRef.current = null;
+        return;
+      }
+
+      if (data.type === "live_stream_warmed") {
+        console.log("[LiveStream] warmed", {
+          warmupStatus: data.warmup?.status,
+          warmupInferenceMs: data.warmup?.inference_ms,
+          warmupNeuralTotalMs: data.warmup?.neural_timing?.neural_total,
+          warmupModelTotalMs: data.warmup?.neural_timing?.neural_model_total,
+          backendInferenceIntervalMs:
+            data.session?.inference_interval_sec != null
+              ? Math.round(data.session.inference_interval_sec * 1000)
+              : undefined,
+          backendContextMs:
+            data.session?.context_sec != null
+              ? Math.round(data.session.context_sec * 1000)
+              : undefined,
+          warmupError: data.warmup?.error,
+        });
+        if (data.warmup?.error) {
+          liveStreamWarmRejectRef.current?.(
+            new Error(String(data.warmup.error)),
+          );
+        } else {
+          liveStreamWarmResolveRef.current?.();
+        }
+        liveStreamWarmResolveRef.current = null;
+        liveStreamWarmRejectRef.current = null;
+        return;
+      }
+
+      if (data.type === "live_stream_update") {
+        if (data.inference?.ran) {
+          const nowMs = Date.now();
+          const backendAudioTimeMs =
+            ((data.session?.audio_time_sec ??
+              data.session?.current_time_sec ??
+              0) || 0) * 1000;
+          const recordingStartedAtMs = liveStreamRecordingStartedAtRef.current;
+          if (
+            recordingStartedAtMs != null &&
+            nowMs - lastLiveStreamLatencyLogAtRef.current >= 1000
+          ) {
+            lastLiveStreamLatencyLogAtRef.current = nowMs;
+            const wallElapsedMs = nowMs - recordingStartedAtMs;
+            const firstPacketSentAtMs = liveStreamFirstPacketSentAtRef.current;
+            const packetElapsedMs =
+              firstPacketSentAtMs != null
+                ? nowMs - firstPacketSentAtMs
+                : undefined;
+            const audioBacklogMs = Math.max(
+              0,
+              wallElapsedMs - backendAudioTimeMs,
+            );
+            const packetAudioBacklogMs =
+              packetElapsedMs != null
+                ? Math.max(0, packetElapsedMs - backendAudioTimeMs)
+                : undefined;
+            const neuralTiming = data.inference.neural_timing;
+            const coalescedPreviewUpdates =
+              coalescedLivePreviewUpdatesRef.current;
+            const droppedPreviewUpdates = droppedLivePreviewUpdatesRef.current;
+            const previewFlushes = livePreviewFlushCountRef.current;
+            const previewLastQueueWaitMs =
+              lastLivePreviewQueueWaitMsRef.current;
+            const previewMaxQueueWaitMs =
+              maxLivePreviewQueueWaitMsRef.current;
+            const previewDataLagMs = lastLivePreviewDataLagMsRef.current;
+            coalescedLivePreviewUpdatesRef.current = 0;
+            droppedLivePreviewUpdatesRef.current = 0;
+            livePreviewFlushCountRef.current = 0;
+            maxLivePreviewQueueWaitMsRef.current = 0;
+            console.log("[LiveStream] latency", {
+              wallElapsedMs,
+              packetElapsedMs:
+                packetElapsedMs != null
+                  ? Math.round(packetElapsedMs)
+                  : undefined,
+              backendAudioTimeMs: Math.round(backendAudioTimeMs),
+              audioBacklogMs: Math.round(audioBacklogMs),
+              packetAudioBacklogMs:
+                packetAudioBacklogMs != null
+                  ? Math.round(packetAudioBacklogMs)
+                  : undefined,
+              serverBacklogMs:
+                data.session?.stream_backlog_sec != null
+                  ? Math.round(data.session.stream_backlog_sec * 1000)
+                  : undefined,
+              inferenceMs: data.inference.inference_ms,
+              neuralTotalMs: neuralTiming?.neural_total,
+              neuralRtf: neuralTiming?.neural_real_time_factor,
+              modelTotalMs: neuralTiming?.neural_model_total,
+              modelRtf: neuralTiming?.neural_model_real_time_factor,
+              observations: data.inference.observation_count,
+              receivedPackets: data.inference.received_packet_count,
+              skippedInferences: data.inference.skipped_inference_count,
+              coalescedPreviewUpdates,
+              droppedPreviewUpdates,
+              previewFlushes,
+              previewLastQueueWaitMs:
+                previewLastQueueWaitMs != null
+                  ? Math.round(previewLastQueueWaitMs)
+                  : undefined,
+              previewMaxQueueWaitMs: Math.round(previewMaxQueueWaitMs),
+              previewDataLagMs:
+                previewDataLagMs != null
+                  ? Math.round(previewDataLagMs)
+                  : undefined,
+              requestedInferenceIntervalMs: LIVE_STREAM_INFERENCE_INTERVAL_MS,
+              backendInferenceIntervalMs:
+                data.session?.inference_interval_sec != null
+                  ? Math.round(data.session.inference_interval_sec * 1000)
+                  : undefined,
+              backendContextMs:
+                data.session?.context_sec != null
+                  ? Math.round(data.session.context_sec * 1000)
+                  : undefined,
+              transportMode: data.session?.transport_mode,
+              bufferedSec: data.session?.buffered_sec,
+              onsetThreshold:
+                data.inference.analysis_summary?.live_onset_threshold,
+              onsetProfile:
+                data.inference.analysis_summary?.live_onset_threshold_profile,
+            });
+          }
+
+          const nextResult = buildLiveStreamAnalysisResult(
+            data,
+            currentBpm || 120,
+            undefined,
+            liveStreamNotePayloadsRef.current,
+          );
+          const nextPreviewResult = buildLiveStreamAnalysisResult(
+            data,
+            currentBpm || 120,
+            undefined,
+            undefined,
+            true,
+          );
+          queueLivePreviewResult(nextPreviewResult);
+          const nextSignature = buildAnalysisResultEventSignature(nextResult);
+          if (nextSignature !== liveStreamAnalysisSignatureRef.current) {
+            liveStreamAnalysisSignatureRef.current = nextSignature;
+            setAnalysisResult(nextResult);
+          }
+        }
+        setConnectionStatus("connected");
+        setIsProcessing(false);
+        return;
+      }
+
+      if (data.type === "live_stream_stopped") {
+        liveStreamStopResolveRef.current?.();
+        liveStreamStopResolveRef.current = null;
+        setIsProcessing(false);
+        return;
+      }
+
+      if (data.type === "live_stream_error") {
+        const error = new Error(data.error || "Live stream failed");
+        if (
+          liveStreamWarmResolveRef.current &&
+          String(data.error || "").includes("Unsupported message type: warmup")
+        ) {
+          console.warn(
+            "[LiveStream] Live-path warmup is not supported by this backend deployment; continuing without it.",
+          );
+          liveStreamWarmResolveRef.current();
+          liveStreamWarmResolveRef.current = null;
+          liveStreamWarmRejectRef.current = null;
+          setConnectionStatus("connected");
+          setIsProcessing(false);
+          return;
+        }
+        liveStreamStartRejectRef.current?.(error);
+        liveStreamStartResolveRef.current = null;
+        liveStreamStartRejectRef.current = null;
+        liveStreamWarmRejectRef.current?.(error);
+        liveStreamWarmResolveRef.current = null;
+        liveStreamWarmRejectRef.current = null;
+        liveStreamStopResolveRef.current?.();
+        liveStreamStopResolveRef.current = null;
+        setConnectionStatus("error");
+        setIsProcessing(false);
+      }
+    },
+    [currentBpm, queueLivePreviewResult],
+  );
+
+  const openLiveStreamSocket = useCallback(
+    async (streamSessionId: string) => {
+      const existingSocket = liveStreamSocketRef.current;
+      if (
+        existingSocket &&
+        existingSocket.readyState !== WebSocket.CLOSED &&
+        existingSocket.readyState !== WebSocket.CLOSING
+      ) {
+        existingSocket.close();
+      }
+
+      const socket = new WebSocket(getLiveStreamUrl());
+      liveStreamSocketRef.current = socket;
+      liveStreamSessionIdRef.current = streamSessionId;
+      liveStreamFirstPacketSentAtRef.current = null;
+      liveStreamNotePayloadsRef.current = new Map();
+      liveStreamAnalysisSignatureRef.current = "";
+      clearLivePreviewQueue();
+      setLivePreviewResult(null);
+
+      await withTimeout(
+        new Promise<void>((resolve, reject) => {
+          liveStreamStartResolveRef.current = resolve;
+          liveStreamStartRejectRef.current = reject;
+
+          socket.onopen = () => {
+            socket.send(
+              JSON.stringify({
+                type: "start",
+                session_id: streamSessionId,
+                sample_rate: LIVE_AUDIO_SAMPLE_RATE,
+                context_sec: LIVE_STREAM_CONTEXT_SEC,
+                inference_interval_ms: LIVE_STREAM_INFERENCE_INTERVAL_MS,
+                trusted_delay_ms: LIVE_STREAM_TRUSTED_DELAY_MS,
+                commit_delay_ms: LIVE_STREAM_COMMIT_DELAY_MS,
+                lock_delay_ms: LIVE_STREAM_LOCK_DELAY_MS,
+              }),
+            );
+          };
+
+          socket.onmessage = (event) => {
+            try {
+              handleLiveStreamPayload(JSON.parse(String(event.data)));
+            } catch (error) {
+              console.warn("[LiveStream] Could not parse message", error);
+            }
+          };
+
+          socket.onerror = () => {
+            reject(new Error("Live stream socket error"));
+          };
+
+          socket.onclose = () => {
+            liveStreamSocketRef.current = null;
+            liveStreamStartResolveRef.current = null;
+            liveStreamStartRejectRef.current = null;
+            liveStreamWarmResolveRef.current = null;
+            liveStreamWarmRejectRef.current = null;
+            liveStreamStopResolveRef.current?.();
+            liveStreamStopResolveRef.current = null;
+          };
+        }),
+        8000,
+      );
+
+      if (socket.readyState === WebSocket.OPEN) {
+        await withTimeout(
+          new Promise<void>((resolve, reject) => {
+            liveStreamWarmResolveRef.current = resolve;
+            liveStreamWarmRejectRef.current = reject;
+            socket.send(
+              JSON.stringify({
+                type: "warmup",
+                session_id: streamSessionId,
+              }),
+            );
+          }),
+          10000,
+        ).catch((error) => {
+          console.warn("[LiveStream] Live-path warmup failed", error);
+          liveStreamWarmResolveRef.current = null;
+          liveStreamWarmRejectRef.current = null;
+        });
+      }
+    },
+    [clearLivePreviewQueue, handleLiveStreamPayload],
+  );
+
+  const installLiveStreamAudioSubscription = useCallback(() => {
+    removeLiveStreamAudioSubscription();
+    liveStreamPacketSequenceRef.current = 0;
+    const subscription = AudioRecord.on("data", (pcm16Base64: string) => {
+      if (!isRecordingRef.current) {
+        return;
+      }
+
+      const socket = liveStreamSocketRef.current;
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        return;
+      }
+
+      liveStreamPacketSequenceRef.current += 1;
+      const packetSentAtMs = Date.now();
+      if (liveStreamFirstPacketSentAtRef.current == null) {
+        liveStreamFirstPacketSentAtRef.current = packetSentAtMs;
+      }
+      socket.send(
+        JSON.stringify({
+          type: "audio_packet",
+          session_id: liveStreamSessionIdRef.current,
+          sample_rate: LIVE_AUDIO_SAMPLE_RATE,
+          encoding: "pcm16",
+          pcm16_base64: pcm16Base64,
+          sequence_number: liveStreamPacketSequenceRef.current,
+          client_sent_at_ms: packetSentAtMs,
+        }),
+      );
+    }) as unknown as { remove?: () => void };
+    liveStreamAudioSubscriptionRef.current = subscription;
+  }, [removeLiveStreamAudioSubscription]);
+
+  const stopLiveStreamSocket = useCallback(async () => {
+    const socket = liveStreamSocketRef.current;
+    if (!socket) {
+      return;
+    }
+
+    if (socket.readyState === WebSocket.OPEN) {
+      await withTimeout(
+        new Promise<void>((resolve) => {
+          liveStreamStopResolveRef.current = resolve;
+          socket.send(
+            JSON.stringify({
+              type: "stop",
+              session_id: liveStreamSessionIdRef.current,
+            }),
+          );
+        }),
+        2500,
+      ).catch((error) => {
+        console.warn("[LiveStream] Timed out waiting for stream stop", error);
+      });
+    }
+
+    socket.close();
+    liveStreamSocketRef.current = null;
+    liveStreamSessionIdRef.current = null;
+    liveStreamWarmResolveRef.current = null;
+    liveStreamWarmRejectRef.current = null;
+    liveStreamStopResolveRef.current = null;
+  }, []);
+
   const flushLiveEngraving = useCallback(() => {
     engravingFlushTimeoutRef.current = null;
     const pending = pendingEngravingRef.current;
@@ -513,7 +1276,7 @@ export default function LiveTranscriptionScreen() {
 
   useEffect(() => {
     const audioOptions = {
-      sampleRate: 44100,
+      sampleRate: LIVE_AUDIO_SAMPLE_RATE,
       channels: 1,
       bitsPerSample: 16,
       audioSource: 6,
@@ -536,7 +1299,21 @@ export default function LiveTranscriptionScreen() {
       if (engravingFlushTimeoutRef.current) {
         clearTimeout(engravingFlushTimeoutRef.current);
       }
+      clearLivePreviewQueue();
       clearPendingChunkUpload();
+      removeLiveStreamAudioSubscription();
+      liveStreamSocketRef.current?.close();
+      liveStreamSocketRef.current = null;
+      liveStreamSessionIdRef.current = null;
+      liveStreamStartResolveRef.current = null;
+      liveStreamStartRejectRef.current = null;
+      liveStreamWarmResolveRef.current = null;
+      liveStreamWarmRejectRef.current = null;
+      liveStreamStopResolveRef.current = null;
+      liveStreamRecordingStartedAtRef.current = null;
+      liveStreamFirstPacketSentAtRef.current = null;
+      lastLiveStreamLatencyLogAtRef.current = 0;
+      recordingTimerStartedAtRef.current = null;
       currentChunkStartedAtRef.current = null;
       chunkSequenceRef.current = 0;
       try {
@@ -547,7 +1324,13 @@ export default function LiveTranscriptionScreen() {
       sessionReadyRef.current = false;
       void resetSession();
     };
-  }, [clearPendingChunkUpload, resetSession, warmBackend]);
+  }, [
+    clearPendingChunkUpload,
+    clearLivePreviewQueue,
+    removeLiveStreamAudioSubscription,
+    resetSession,
+    warmBackend,
+  ]);
 
   useEffect(() => {
     if (!USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
@@ -853,8 +1636,10 @@ export default function LiveTranscriptionScreen() {
       setIsWarmingUp(true);
       setConnectionStatus("connecting");
       setDuration(0);
+      setRecordingStartedAtMs(null);
       setIsRecording(false);
       isRecordingRef.current = false;
+      recordingTimerStartedAtRef.current = null;
       setSessionReady(false);
       sessionReadyRef.current = false;
       setHasStoppedRecording(false);
@@ -867,6 +1652,8 @@ export default function LiveTranscriptionScreen() {
 
       setAnalysisResult(null);
       setLiveEngravingResult(null);
+      clearLivePreviewQueue();
+      setLivePreviewResult(null);
       setLiveEngravingVersion(0);
       pendingEngravingRef.current = { result: null, version: 0 };
       if (engravingFlushTimeoutRef.current) {
@@ -892,24 +1679,48 @@ export default function LiveTranscriptionScreen() {
         throw sessionStartError;
       }
 
-      currentChunkStartedAtRef.current = Date.now();
-      AudioRecord.start();
+      if (USE_LIVE_STREAM_TRANSPORT) {
+        const streamSessionId = `stream_${Date.now()}_${Math.random()
+          .toString(36)
+          .slice(2, 10)}`;
+        await openLiveStreamSocket(streamSessionId);
+        installLiveStreamAudioSubscription();
+        const startedAtMs = Date.now();
+        isRecordingRef.current = true;
+        recordingTimerStartedAtRef.current = startedAtMs;
+        setRecordingStartedAtMs(startedAtMs);
+        liveStreamRecordingStartedAtRef.current = startedAtMs;
+        liveStreamFirstPacketSentAtRef.current = null;
+        lastLiveStreamLatencyLogAtRef.current = 0;
+        AudioRecord.start();
+      } else {
+        const startedAtMs = Date.now();
+        recordingTimerStartedAtRef.current = startedAtMs;
+        setRecordingStartedAtMs(startedAtMs);
+        currentChunkStartedAtRef.current = startedAtMs;
+        AudioRecord.start();
+        isRecordingRef.current = true;
+        chunkTimeoutRef.current = setTimeout(
+          analyzeRecordingChunk,
+          CHUNK_INTERVAL_MS,
+        );
+      }
       setIsWarmingUp(false);
       setIsRecording(true);
       scrollToLiveScoreSection();
-      isRecordingRef.current = true;
       setSessionReady(true);
       sessionReadyRef.current = true;
       setConnectionStatus("connected");
       durationIntervalRef.current = setInterval(() => {
-        setDuration((previous) => previous + 0.1);
+        const startedAtMs = recordingTimerStartedAtRef.current;
+        if (startedAtMs != null) {
+          setDuration(Math.max(0, (Date.now() - startedAtMs) / 1000));
+        }
       }, 100);
-      chunkTimeoutRef.current = setTimeout(
-        analyzeRecordingChunk,
-        CHUNK_INTERVAL_MS,
-      );
     } catch (error) {
       console.error("Failed to start live transcription", error);
+      removeLiveStreamAudioSubscription();
+      await stopLiveStreamSocket();
       try {
         AudioRecord.stop();
       } catch {
@@ -928,8 +1739,14 @@ export default function LiveTranscriptionScreen() {
       setSessionReady(false);
       sessionReadyRef.current = false;
       setDuration(0);
+      setRecordingStartedAtMs(null);
       setIsRecording(false);
       isRecordingRef.current = false;
+      recordingTimerStartedAtRef.current = null;
+      liveStreamRecordingStartedAtRef.current = null;
+      liveStreamFirstPacketSentAtRef.current = null;
+      lastLiveStreamLatencyLogAtRef.current = 0;
+      clearLivePreviewQueue();
       Alert.alert(
         "Live Session Error",
         "The app could not create the live backend session. Recording was not started.",
@@ -938,18 +1755,29 @@ export default function LiveTranscriptionScreen() {
   }, [
     analyzeRecordingChunk,
     clearPendingChunkUpload,
+    clearLivePreviewQueue,
     createSession,
     currentBpm,
     ensureBackendWarm,
+    installLiveStreamAudioSubscription,
+    openLiveStreamSocket,
     requestPermissions,
     resetSession,
+    removeLiveStreamAudioSubscription,
     scrollToLiveScoreSection,
+    stopLiveStreamSocket,
   ]);
 
   const stopLiveTranscription = useCallback(async () => {
     const wasRecording = isRecordingRef.current;
     isRecordingRef.current = false;
     setIsRecording(false);
+    setRecordingStartedAtMs(null);
+    recordingTimerStartedAtRef.current = null;
+    liveStreamRecordingStartedAtRef.current = null;
+    liveStreamFirstPacketSentAtRef.current = null;
+    lastLiveStreamLatencyLogAtRef.current = 0;
+    clearLivePreviewQueue();
 
     if (durationIntervalRef.current) {
       clearInterval(durationIntervalRef.current);
@@ -962,56 +1790,72 @@ export default function LiveTranscriptionScreen() {
 
     try {
       if (wasRecording) {
-        let finalChunkPath: string | null = null;
-        const captureStoppedAtMs = Date.now();
-        const captureStartedAtMs =
-          currentChunkStartedAtRef.current ?? captureStoppedAtMs;
-        currentChunkStartedAtRef.current = null;
-        try {
-          const finalAudioFile = await AudioRecord.stop();
-          const resolved = await resolveRecordedFilePath(finalAudioFile);
-          if (resolved) {
-            const target = `${FileSystem.cacheDirectory ?? ""}live_chunk_${Date.now()}_final.wav`;
-            try {
-              await FileSystem.moveAsync({ from: resolved, to: target });
-              finalChunkPath = target;
-            } catch {
+        if (USE_LIVE_STREAM_TRANSPORT) {
+          removeLiveStreamAudioSubscription();
+          try {
+            const finalAudioFile = await AudioRecord.stop();
+            const resolved = await resolveRecordedFilePath(finalAudioFile);
+            if (resolved) {
+              FileSystem.deleteAsync(resolved, { idempotent: true }).catch(
+                () => {},
+              );
+            }
+          } catch (error) {
+            console.warn("Failed to stop live audio recorder", error);
+          }
+          await stopLiveStreamSocket();
+        } else {
+          let finalChunkPath: string | null = null;
+          const captureStoppedAtMs = Date.now();
+          const captureStartedAtMs =
+            currentChunkStartedAtRef.current ?? captureStoppedAtMs;
+          currentChunkStartedAtRef.current = null;
+          try {
+            const finalAudioFile = await AudioRecord.stop();
+            const resolved = await resolveRecordedFilePath(finalAudioFile);
+            if (resolved) {
+              const target = `${FileSystem.cacheDirectory ?? ""}live_chunk_${Date.now()}_final.wav`;
               try {
-                await FileSystem.copyAsync({ from: resolved, to: target });
+                await FileSystem.moveAsync({ from: resolved, to: target });
                 finalChunkPath = target;
               } catch {
-                finalChunkPath = resolved;
+                try {
+                  await FileSystem.copyAsync({ from: resolved, to: target });
+                  finalChunkPath = target;
+                } catch {
+                  finalChunkPath = resolved;
+                }
               }
             }
-          }
-        } catch (error) {
-          console.warn("Failed to capture final chunk", error);
-        }
-
-        if (
-          inFlightUploadsRef.current > 0 ||
-          pendingChunkUploadRef.current != null
-        ) {
-          drainPendingChunkUploads();
-          await waitForChunkQueueToDrain();
-        }
-
-        if (finalChunkPath) {
-          const finalTelemetry: RecordedChunkTelemetry = {
-            sequenceNumber: chunkSequenceRef.current + 1,
-            captureStartedAtMs,
-            captureStoppedAtMs,
-            fileReadyAtMs: Date.now(),
-          };
-          chunkSequenceRef.current = finalTelemetry.sequenceNumber;
-          try {
-            await processRecordedChunk(finalChunkPath, finalTelemetry);
           } catch (error) {
-            console.warn("Final chunk analysis failed", error);
-          } finally {
-            FileSystem.deleteAsync(finalChunkPath, {
-              idempotent: true,
-            }).catch(() => {});
+            console.warn("Failed to capture final chunk", error);
+          }
+
+          if (
+            inFlightUploadsRef.current > 0 ||
+            pendingChunkUploadRef.current != null
+          ) {
+            drainPendingChunkUploads();
+            await waitForChunkQueueToDrain();
+          }
+
+          if (finalChunkPath) {
+            const finalTelemetry: RecordedChunkTelemetry = {
+              sequenceNumber: chunkSequenceRef.current + 1,
+              captureStartedAtMs,
+              captureStoppedAtMs,
+              fileReadyAtMs: Date.now(),
+            };
+            chunkSequenceRef.current = finalTelemetry.sequenceNumber;
+            try {
+              await processRecordedChunk(finalChunkPath, finalTelemetry);
+            } catch (error) {
+              console.warn("Final chunk analysis failed", error);
+            } finally {
+              FileSystem.deleteAsync(finalChunkPath, {
+                idempotent: true,
+              }).catch(() => {});
+            }
           }
         }
       }
@@ -1033,10 +1877,13 @@ export default function LiveTranscriptionScreen() {
       setIsProcessing(false);
     }
   }, [
+    clearLivePreviewQueue,
     drainPendingChunkUploads,
     processRecordedChunk,
+    removeLiveStreamAudioSubscription,
     resolveRecordedFilePath,
     stopPolling,
+    stopLiveStreamSocket,
     waitForChunkQueueToDrain,
   ]);
 
@@ -1321,6 +2168,15 @@ export default function LiveTranscriptionScreen() {
               style={styles.liveScorePane}
               onLayout={handleLiveScoreSectionLayout}
             >
+              <View style={styles.liveScoreStrip}>
+                <LiveScoreStrip
+                  results={livePreviewResult ?? analysisResult}
+                  bpm={currentBpm || 120}
+                  localElapsedSeconds={duration}
+                  localStartedAtMs={recordingStartedAtMs}
+                  isRecording={isRecording}
+                />
+              </View>
               <View
                 style={styles.liveScoreViewport}
                 onLayout={handleLiveScoreViewportLayout}
@@ -1750,6 +2606,13 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 220,
     minWidth: 0,
+  },
+  liveScoreStrip: {
+    height: 150,
+    minHeight: 150,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(148,163,184,0.24)",
+    backgroundColor: "#f8fafc",
   },
   liveScorePlaceholder: {
     flex: 1,

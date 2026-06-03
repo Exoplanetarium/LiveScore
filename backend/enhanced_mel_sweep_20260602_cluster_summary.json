@@ -1,0 +1,54 @@
+[
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on055_v08_fh0.json",
+    "control_display_cluster_f1": 0.6629326781565889
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on055_v15_fh0.json",
+    "control_display_cluster_f1": 0.6629326781565889
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on055_v15_fh1.json",
+    "control_display_cluster_f1": 0.6629326781565889
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on060_v08_fh0.json",
+    "control_display_cluster_f1": 0.6758622959555702
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on060_v15_fh0.json",
+    "control_display_cluster_f1": 0.6758622959555702
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on060_v15_fh1.json",
+    "control_display_cluster_f1": 0.6758622959555702
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on065_v08_fh0.json",
+    "control_display_cluster_f1": 0.6831224207652034
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on065_v15_fh1.json",
+    "control_display_cluster_f1": 0.6831224207652034
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on070_v08_fh0.json",
+    "control_display_cluster_f1": 0.6989402493029815
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on075_v08_fh0.json",
+    "control_display_cluster_f1": 0.7037759463590485
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on080_v08_fh0.json",
+    "control_display_cluster_f1": 0.7029108074984762
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on085_v08_fh0.json",
+    "control_display_cluster_f1": 0.6289741959100804
+  },
+  {
+    "file": "live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on090_v08_fh0.json",
+    "control_display_cluster_f1": 0.3284552716616534
+  }
+]

@@ -1,0 +1,62 @@
+[
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on085_v08_fh0.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.8734485953005443,
+      "display_note_f1": 0.8794556357057525,
+      "display_cluster_f1": 0.6289741959100804,
+      "display_offset_f1": 0.7071044632523361,
+      "offset_f1": 0.7025825610772588,
+      "duplicates_per_100_notes": 2.6828775090765915,
+      "boundary_miss_rate": 0.18136664987911624,
+      "p95_chunk_total_ms": 25.61180208333333
+    },
+    "treatment": {
+      "f1": 0.8778711939710553,
+      "display_note_f1": 0.8882180289857571,
+      "display_cluster_f1": 0.636608947933332,
+      "display_offset_f1": 0.7063067199034677,
+      "offset_f1": 0.7003481281832703,
+      "duplicates_per_100_notes": 3.3811856363367463,
+      "boundary_miss_rate": 0.15477227514949726,
+      "p95_chunk_total_ms": 25.387468749999996
+    },
+    "config": {
+      "name": "on085_v08_fh0",
+      "onset": "0.85",
+      "min_velocity": "8",
+      "filter_harmonics": "0"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedmel_on090_v08_fh0.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.5372088068387734,
+      "display_note_f1": 0.5367543785717558,
+      "display_cluster_f1": 0.3284552716616534,
+      "display_offset_f1": 0.42445523974791527,
+      "offset_f1": 0.42367065486690075,
+      "duplicates_per_100_notes": 0.9286081892168837,
+      "boundary_miss_rate": 0.5884519625213789,
+      "p95_chunk_total_ms": 24.988093749999997
+    },
+    "treatment": {
+      "f1": 0.6612768064922205,
+      "display_note_f1": 0.6639015825097222,
+      "display_cluster_f1": 0.445435935633059,
+      "display_offset_f1": 0.5139241093737595,
+      "offset_f1": 0.5118133676010035,
+      "duplicates_per_100_notes": 1.6967607475091906,
+      "boundary_miss_rate": 0.4453780376304634,
+      "p95_chunk_total_ms": 25.544593749999997
+    },
+    "config": {
+      "name": "on090_v08_fh0",
+      "onset": "0.90",
+      "min_velocity": "8",
+      "filter_harmonics": "0"
+    }
+  }
+]

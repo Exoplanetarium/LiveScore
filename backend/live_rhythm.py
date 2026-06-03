@@ -506,6 +506,12 @@ class BeatGrid:
     def time_at_idx(self, idx: int) -> float:
         return self.phase + idx * self.step_seconds()
 
+    def absolute_beat_at_idx(self, idx: int) -> float:
+        """Return the snapped grid time as beats from recording/session start."""
+        if self.period <= 0:
+            return idx / max(self.subdivision, 1)
+        return self.time_at_idx(idx) / self.period
+
     def beats_from(self, t: float) -> float:
         if self.period <= 0:
             return 0.0
@@ -792,7 +798,7 @@ def _annotate_grid_position(note: Dict, grid: BeatGrid) -> None:
     onset = float(note.get('time_seconds', 0.0) or 0.0)
     idx = grid.snap_idx(onset)
     note['start_grid_idx'] = idx
-    note['start_beat'] = idx / max(grid.subdivision, 1)
+    note['start_beat'] = grid.absolute_beat_at_idx(idx)
     note['grid_subdivision'] = grid.subdivision
     # Preserve the raw neural onset for runtime logic and expose a separate
     # snapped onset only for evaluation-side cluster grouping.
@@ -1014,7 +1020,7 @@ def apply_window_decode(
         note['triplet'] = is_triplet
         note['quantization_method'] = quantization_method
         note['start_grid_idx'] = idx
-        note['start_beat'] = idx / max(sub, 1)
+        note['start_beat'] = grid.absolute_beat_at_idx(idx)
         note['grid_subdivision'] = sub
         observed = float(note.get('time_seconds', 0.0) or 0.0)
         target_t = grid.time_at_idx(idx)

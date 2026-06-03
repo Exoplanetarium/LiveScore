@@ -1,0 +1,116 @@
+[
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedheur_context36_on070.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9083907497742504,
+      "precision": 0.8937595028679765,
+      "recall": 0.9289492304191509,
+      "display_note_f1": 0.9172627969271481,
+      "display_cluster_f1": 0.6912508195336792,
+      "display_offset_f1": 0.7418700097144609,
+      "offset_f1": 0.7369096590612526,
+      "duplicates_per_100_notes": 3.3995708306689747,
+      "boundary_miss_rate": 0.06677645990125738,
+      "p95_chunk_total_ms": 34.2645
+    },
+    "treatment": {
+      "f1": 0.9058232182981749,
+      "precision": 0.8888567573192729,
+      "recall": 0.9299404606272601,
+      "display_note_f1": 0.9150961162774707,
+      "display_cluster_f1": 0.6939287557720222,
+      "display_offset_f1": 0.7418296896882607,
+      "offset_f1": 0.7365042567899712,
+      "duplicates_per_100_notes": 3.5227834844861974,
+      "boundary_miss_rate": 0.06401443118447898,
+      "p95_chunk_total_ms": 34.71464583333333
+    },
+    "name": "context36_on070",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.70",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_ENHANCED_MIN_VELOCITY": "8",
+      "LIVE_ENHANCED_FILTER_HARMONICS": "0",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_CONTEXT_SEC": "3.6"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedheur_context36_on080.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.9123688930625464,
+      "precision": 0.9361235351683856,
+      "recall": 0.8955219622879907,
+      "display_note_f1": 0.9238153727718653,
+      "display_cluster_f1": 0.696084636825511,
+      "display_offset_f1": 0.742927801085204,
+      "offset_f1": 0.7354105081645509,
+      "duplicates_per_100_notes": 3.4207497286369337,
+      "boundary_miss_rate": 0.09503262832658291,
+      "p95_chunk_total_ms": 29.114416666666664
+    },
+    "treatment": {
+      "f1": 0.9112865886590314,
+      "precision": 0.9329512346768563,
+      "recall": 0.8966295581950235,
+      "display_note_f1": 0.9222180989018813,
+      "display_cluster_f1": 0.6906141270666761,
+      "display_offset_f1": 0.7427153393598983,
+      "offset_f1": 0.7355357485415964,
+      "duplicates_per_100_notes": 3.33491249065392,
+      "boundary_miss_rate": 0.09661256447936421,
+      "p95_chunk_total_ms": 29.438604166666664
+    },
+    "name": "context36_on080",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.80",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_ENHANCED_MIN_VELOCITY": "8",
+      "LIVE_ENHANCED_FILTER_HARMONICS": "0",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_CONTEXT_SEC": "3.6"
+    }
+  },
+  {
+    "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\live_benchmark_replay_auto_v2_results_20260602_enhancedheur_context36_on085.json",
+    "clips": 48,
+    "control": {
+      "f1": 0.873496264035453,
+      "precision": 0.9617124289551816,
+      "recall": 0.8105663669142824,
+      "display_note_f1": 0.8806484657406476,
+      "display_cluster_f1": 0.6314099316762908,
+      "display_offset_f1": 0.709227547559539,
+      "offset_f1": 0.7035235172684094,
+      "duplicates_per_100_notes": 2.73384181276734,
+      "boundary_miss_rate": 0.17638056496166793,
+      "p95_chunk_total_ms": 29.70539583333333
+    },
+    "treatment": {
+      "f1": 0.8673429063764428,
+      "precision": 0.9488133514929236,
+      "recall": 0.8117436439163782,
+      "display_note_f1": 0.876209269588399,
+      "display_cluster_f1": 0.6230977748216336,
+      "display_offset_f1": 0.6983623765718133,
+      "offset_f1": 0.6925384189212749,
+      "duplicates_per_100_notes": 3.023329964775539,
+      "boundary_miss_rate": 0.17750487924387692,
+      "p95_chunk_total_ms": 29.439677083333333
+    },
+    "name": "context36_on085",
+    "env": {
+      "LIVE_ENHANCED_ONSET_BASE": "0.85",
+      "LIVE_ENHANCED_OFFSET_BASE": "0.35",
+      "LIVE_ENHANCED_MIN_VELOCITY": "8",
+      "LIVE_ENHANCED_FILTER_HARMONICS": "0",
+      "LIVE_ENHANCED_DUPLICATE_WINDOW_SEC": "0.04",
+      "LIVE_ENHANCED_MERGE_GAP_SEC": "0.0",
+      "LIVE_CONTEXT_SEC": "3.6"
+    }
+  }
+]

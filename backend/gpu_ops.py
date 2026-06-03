@@ -33,6 +33,10 @@ if TYPE_CHECKING:
                                                     MelFeatureExtractor)
     from rhythm_training.train_mel_baseline import \
         _build_model_from_config as _build_mel_model
+    from rhythm_training.train_enhanced_mel_transcriber import (
+        EnhancedMelTranscriber, decode_enhanced_note_events)
+    from rhythm_training.train_enhanced_mel_transcriber import \
+        _build_model_from_config as _build_enhanced_mel_model
     from rhythm_training.train_transcription import (PianoTranscriptionModel,
                                                      transcribe_audio)
 
@@ -1612,6 +1616,259 @@ class GpuMelBaselineTranscriber(nn.Module):
 
 
 # ─── Mel Baseline Transcriber Singleton ─────────────────────────────────────
+
+# Enhanced mel transcriber singleton lives beside the older mel baseline path.
+class GpuEnhancedMelTranscriber(nn.Module):
+    """
+    GPU inference wrapper for the enhanced mel transcription model.
+
+    Keeps the same public event contract as GpuMelBaselineTranscriber while
+    using the explicit offset head and enhanced decoder.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.initialized = False
+        self.config = None
+        self.extractor = None
+        self.model = None
+
+    def load_from_pt(self, path: str):
+        """Load a trained enhanced mel model checkpoint."""
+        checkpoint = torch.load(path, map_location=DEVICE, weights_only=False)
+        config = checkpoint.get('config', {})
+        self.config = config
+
+        from rhythm_training.train_mel_baseline import MelFeatureExtractor  # type: ignore
+        from rhythm_training.train_enhanced_mel_transcriber import _build_model_from_config  # type: ignore
+
+        self.extractor = MelFeatureExtractor(
+            sr=config.get('sample_rate', 16000),
+            hop_length=config.get('hop_length', 256),
+            n_fft=config.get('n_fft', 2048),
+            n_mels=config.get('n_mels', 229),
+            device=DEVICE,
+        )
+
+        self.model = _build_model_from_config(config)
+        self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        self.model.to(DEVICE)
+        self.model.eval()
+
+        self.initialized = True
+        n_params = sum(p.numel() for p in self.model.parameters())
+        print(f"[GPU EnhancedMel] Loaded from {path} ({n_params:,} params)")
+
+    @torch.no_grad()
+    def transcribe(self, audio: np.ndarray, onset_threshold: float = 0.5,
+                   frame_threshold: float = 0.5,
+                   offset_threshold: float = 0.35,
+                   min_note_duration: float = 0.04,
+                   min_velocity: int = 8,
+                   duplicate_window_sec: float = 0.04,
+                   merge_gap_sec: float = 0.0,
+                   filter_harmonics: bool = False) -> Dict:
+        """
+        Transcribe audio to note events.
+
+        Returns dict matching ByteDance/Ensemble format:
+            {'est_note_events': [...], '_inference_timing_ms': {...}}
+        """
+        import time
+        timings = {}
+        t_total = time.perf_counter()
+
+        if not self.initialized:
+            return {'est_note_events': [], '_inference_timing_ms': {'error': 'not_initialized'}}
+
+        sr = self.config.get('sample_rate', 16000)
+        hop = self.config.get('hop_length', 256)
+
+        t0 = time.perf_counter()
+        audio_t = torch.from_numpy(audio).float().to(DEVICE)
+        timings['audio_to_gpu'] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        features = self.extractor.extract(audio_t)
+        torch.cuda.synchronize() if DEVICE.type == 'cuda' else None
+        timings['feature_extraction'] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        n_frames = features.size(1)
+        chunk_frames = int(10.0 * sr / hop)
+        overlap = chunk_frames // 4
+        step = chunk_frames - overlap
+
+        n_keys = self.config.get('n_keys', 88)
+        n_note_value_classes = self.config.get('n_note_value_classes', 12)
+        all_onset = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_offset = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_frame = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_vel = np.zeros((n_frames, n_keys), dtype=np.float32)
+        all_note_value = np.zeros((n_frames, n_keys, n_note_value_classes), dtype=np.float32)
+        counts = np.zeros(n_frames, dtype=np.float32)
+
+        n_chunks = 0
+        for start in range(0, n_frames, step):
+            end = min(start + chunk_frames, n_frames)
+            chunk = features[:, start:end, :]
+
+            out = self.model(chunk)
+
+            onset_p = torch.sigmoid(out['onset_logits'][0]).cpu().numpy()
+            offset_p = torch.sigmoid(out['offset_logits'][0]).cpu().numpy()
+            frame_p = torch.sigmoid(out['frame_logits'][0]).cpu().numpy()
+            vel = out['velocity'][0].cpu().numpy()
+            nv_probs = F.softmax(out['note_value_logits'][0], dim=-1).cpu().numpy()
+
+            actual_nv_classes = nv_probs.shape[-1]
+            if actual_nv_classes != n_note_value_classes:
+                if actual_nv_classes < n_note_value_classes:
+                    pad = np.zeros((*nv_probs.shape[:-1], n_note_value_classes - actual_nv_classes), dtype=np.float32)
+                    nv_probs = np.concatenate([nv_probs, pad], axis=-1)
+                else:
+                    nv_probs = nv_probs[..., :n_note_value_classes]
+
+            actual_len = end - start
+            all_onset[start:end] += onset_p[:actual_len]
+            all_offset[start:end] += offset_p[:actual_len]
+            all_frame[start:end] += frame_p[:actual_len]
+            all_vel[start:end] += vel[:actual_len]
+            all_note_value[start:end] += nv_probs[:actual_len]
+            counts[start:end] += 1.0
+            n_chunks += 1
+
+        torch.cuda.synchronize() if DEVICE.type == 'cuda' else None
+        timings['model_inference'] = (time.perf_counter() - t0) * 1000
+
+        t0 = time.perf_counter()
+        counts = np.maximum(counts, 1.0)
+        all_onset /= counts[:, None]
+        all_offset /= counts[:, None]
+        all_frame /= counts[:, None]
+        all_vel /= counts[:, None]
+        all_note_value /= counts[:, None, None]
+
+        from rhythm_training.train_enhanced_mel_transcriber import decode_enhanced_note_events  # type: ignore
+        events = decode_enhanced_note_events(
+            all_onset, all_offset, all_frame, all_vel, all_note_value,
+            onset_threshold=onset_threshold,
+            offset_threshold=offset_threshold,
+            frame_threshold=frame_threshold,
+            min_note_duration=min_note_duration,
+            min_velocity=min_velocity,
+            duplicate_window_sec=duplicate_window_sec,
+            merge_gap_sec=merge_gap_sec,
+            sr=sr,
+            hop=hop,
+        )
+        timings['decode_notes'] = (time.perf_counter() - t0) * 1000
+
+        timings['total'] = (time.perf_counter() - t_total) * 1000
+        timings['audio_duration_ms'] = len(audio) / sr * 1000
+        timings['n_frames'] = n_frames
+        timings['n_chunks'] = n_chunks
+        timings['onset_threshold'] = onset_threshold
+        timings['offset_threshold'] = offset_threshold
+        timings['frame_threshold'] = frame_threshold
+        timings['duplicate_window_sec'] = duplicate_window_sec
+        timings['merge_gap_sec'] = merge_gap_sec
+        timings['real_time_factor'] = timings['total'] / timings['audio_duration_ms'] if timings['audio_duration_ms'] > 0 else 0
+
+        print(f"[TIMING] EnhancedMel.transcribe: audio_to_gpu={timings['audio_to_gpu']:.1f}ms, features={timings['feature_extraction']:.1f}ms, model={timings['model_inference']:.1f}ms, decode={timings['decode_notes']:.1f}ms | TOTAL={timings['total']:.1f}ms for {timings['audio_duration_ms']:.0f}ms audio (RTF={timings['real_time_factor']:.2f}x)")
+
+        return {'est_note_events': events, '_inference_timing_ms': timings}
+
+
+_gpu_enhanced_mel_transcriber: Optional[GpuEnhancedMelTranscriber] = None
+_gpu_enhanced_mel_transcriber_loaded = False
+_gpu_enhanced_mel_transcriber_status: Dict[str, object] = {
+    'model': 'enhanced_mel',
+    'attempted': False,
+    'initialized': False,
+    'use_gpu': USE_GPU,
+    'searched_paths': [],
+    'selected_path': None,
+    'reason': 'not_attempted',
+    'last_error': None,
+}
+
+
+def get_gpu_enhanced_mel_transcriber_status() -> Dict[str, object]:
+    """Return the current enhanced mel loader status."""
+    return dict(_gpu_enhanced_mel_transcriber_status)
+
+
+def get_gpu_enhanced_mel_transcriber() -> Optional[GpuEnhancedMelTranscriber]:
+    """Lazy-load the GPU enhanced mel transcriber (singleton)."""
+    global _gpu_enhanced_mel_transcriber, _gpu_enhanced_mel_transcriber_loaded
+    global _gpu_enhanced_mel_transcriber_status
+
+    if _gpu_enhanced_mel_transcriber_loaded:
+        return _gpu_enhanced_mel_transcriber
+
+    override_path = os.environ.get('LIVE_ENHANCED_MEL_MODEL_PATH') or os.environ.get('ENHANCED_MEL_MODEL_PATH')
+    model_paths = []
+    if override_path:
+        model_paths.append(override_path)
+    model_paths.extend([
+        os.path.join(os.path.dirname(__file__), 'rhythm_training', 'enhanced_mel_transcription.pt'),
+        os.path.join(os.path.dirname(__file__), 'enhanced_mel_transcription.pt'),
+        '/root/rhythm_training/enhanced_mel_transcription.pt',
+    ])
+
+    _gpu_enhanced_mel_transcriber_status.update({
+        'attempted': True,
+        'initialized': False,
+        'use_gpu': USE_GPU,
+        'searched_paths': list(model_paths),
+        'selected_path': None,
+        'reason': 'loading',
+        'last_error': None,
+    })
+
+    if not USE_GPU:
+        _gpu_enhanced_mel_transcriber_status.update({
+            'reason': 'cuda_unavailable',
+            'last_error': 'CUDA not available',
+        })
+        _gpu_enhanced_mel_transcriber_loaded = True
+        return None
+
+    found_checkpoint = False
+
+    for path in model_paths:
+        if os.path.exists(path):
+            found_checkpoint = True
+            _gpu_enhanced_mel_transcriber_status['selected_path'] = path
+            try:
+                _gpu_enhanced_mel_transcriber = GpuEnhancedMelTranscriber()
+                _gpu_enhanced_mel_transcriber.load_from_pt(path)
+                _gpu_enhanced_mel_transcriber_status.update({
+                    'initialized': True,
+                    'reason': 'initialized',
+                    'last_error': None,
+                })
+                break
+            except Exception as e:
+                print(f"[GPU EnhancedMel] Failed to load from {path}: {e}")
+                _gpu_enhanced_mel_transcriber = None
+                _gpu_enhanced_mel_transcriber_status.update({
+                    'reason': 'load_failed',
+                    'last_error': f"{type(e).__name__}: {e}",
+                })
+
+    if _gpu_enhanced_mel_transcriber is None:
+        print("[GPU EnhancedMel] Model not found (not trained yet?)")
+        if _gpu_enhanced_mel_transcriber_status.get('reason') != 'load_failed':
+            _gpu_enhanced_mel_transcriber_status.update({
+                'reason': 'checkpoint_missing' if not found_checkpoint else 'not_initialized',
+                'last_error': None,
+            })
+
+    _gpu_enhanced_mel_transcriber_loaded = True
+    return _gpu_enhanced_mel_transcriber
+
 
 _gpu_mel_baseline_transcriber: Optional[GpuMelBaselineTranscriber] = None
 _gpu_mel_baseline_transcriber_loaded = False
