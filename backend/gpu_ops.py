@@ -1667,6 +1667,14 @@ class GpuEnhancedMelTranscriber(nn.Module):
                    min_velocity: int = 8,
                    duplicate_window_sec: float = 0.04,
                    merge_gap_sec: float = 0.0,
+                   soft_polyphony_rescue: bool = False,
+                   soft_polyphony_onset_threshold: float = 0.45,
+                   soft_polyphony_frame_threshold: float = 0.35,
+                   soft_polyphony_min_velocity: int = 4,
+                   soft_polyphony_min_delta: float = 0.05,
+                   soft_polyphony_lookback_sec: float = 0.08,
+                   lattice_rescue: bool = False,
+                   lattice_model_path: Optional[str] = None,
                    filter_harmonics: bool = False) -> Dict:
         """
         Transcribe audio to note events.
@@ -1759,6 +1767,14 @@ class GpuEnhancedMelTranscriber(nn.Module):
             min_velocity=min_velocity,
             duplicate_window_sec=duplicate_window_sec,
             merge_gap_sec=merge_gap_sec,
+            soft_polyphony_rescue=soft_polyphony_rescue,
+            soft_polyphony_onset_threshold=soft_polyphony_onset_threshold,
+            soft_polyphony_frame_threshold=soft_polyphony_frame_threshold,
+            soft_polyphony_min_velocity=soft_polyphony_min_velocity,
+            soft_polyphony_min_delta=soft_polyphony_min_delta,
+            soft_polyphony_lookback_sec=soft_polyphony_lookback_sec,
+            lattice_rescue=lattice_rescue,
+            lattice_model_path=lattice_model_path,
             sr=sr,
             hop=hop,
         )
@@ -1773,6 +1789,19 @@ class GpuEnhancedMelTranscriber(nn.Module):
         timings['frame_threshold'] = frame_threshold
         timings['duplicate_window_sec'] = duplicate_window_sec
         timings['merge_gap_sec'] = merge_gap_sec
+        timings['soft_polyphony_rescue'] = bool(soft_polyphony_rescue)
+        timings['soft_polyphony_onset_threshold'] = soft_polyphony_onset_threshold
+        timings['soft_polyphony_frame_threshold'] = soft_polyphony_frame_threshold
+        timings['soft_polyphony_min_velocity'] = soft_polyphony_min_velocity
+        timings['soft_polyphony_min_delta'] = soft_polyphony_min_delta
+        timings['soft_polyphony_lookback_sec'] = soft_polyphony_lookback_sec
+        timings['soft_polyphony_rescued_events'] = sum(
+            1 for event in events if event.get('decode_source') == 'soft_polyphony_rescue'
+        )
+        timings['lattice_rescue'] = bool(lattice_rescue)
+        timings['lattice_rescued_events'] = sum(
+            1 for event in events if event.get('decode_source') == 'lattice_calibrated'
+        )
         timings['real_time_factor'] = timings['total'] / timings['audio_duration_ms'] if timings['audio_duration_ms'] > 0 else 0
 
         print(f"[TIMING] EnhancedMel.transcribe: audio_to_gpu={timings['audio_to_gpu']:.1f}ms, features={timings['feature_extraction']:.1f}ms, model={timings['model_inference']:.1f}ms, decode={timings['decode_notes']:.1f}ms | TOTAL={timings['total']:.1f}ms for {timings['audio_duration_ms']:.0f}ms audio (RTF={timings['real_time_factor']:.2f}x)")

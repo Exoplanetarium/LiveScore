@@ -1,0 +1,66 @@
+{
+  "model_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\rhythm_training\\enhanced_mel_transcription.pt",
+  "split": "validation",
+  "segment_manifest": "mel_hard_case_manifest_validation_pedal_onset_v2.json",
+  "segments_total": 128,
+  "segments_train": 64,
+  "segments_eval": 64,
+  "candidate_counts": {
+    "train": 1614,
+    "eval": 1140,
+    "train_positive": 633,
+    "eval_positive": 516
+  },
+  "classifier": {
+    "feature_names": [
+      "onset_peak",
+      "frame_peak",
+      "velocity_peak",
+      "velocity_int",
+      "local_onset_delta",
+      "prev_onset_level",
+      "anchor_dt_abs",
+      "anchor_cluster_size",
+      "pitch_distance_to_anchor",
+      "same_pitch_recent_primary",
+      "harmonic_to_anchor",
+      "active_frame_before",
+      "is_middle_register",
+      "normalized_pitch"
+    ],
+    "average_precision": 0.6901232036751155,
+    "roc_auc": 0.732468072947724,
+    "threshold_selection": {
+      "threshold": 0.8371717456326647,
+      "precision": 1.0,
+      "recall": 0.007751937984496124,
+      "f1": 0.015384615384615384
+    }
+  },
+  "event_metrics": {
+    "primary": {
+      "matched": 6986,
+      "predicted": 7047,
+      "ground_truth": 7892,
+      "precision": 0.9913438342557116,
+      "recall": 0.8852002027369488,
+      "f1": 0.9352700984001605
+    },
+    "lattice": {
+      "matched": 6990,
+      "predicted": 7051,
+      "ground_truth": 7892,
+      "precision": 0.9913487448588852,
+      "recall": 0.8857070451089711,
+      "f1": 0.9355551094157799
+    },
+    "delta_f1": 0.00028501101561939635,
+    "delta_recall": 0.0005068423720223647,
+    "delta_precision": 4.910603173646777e-06
+  },
+  "lattice_additions": {
+    "total": 4,
+    "mean_per_segment": 0.0625,
+    "max_per_segment": 1
+  }
+}

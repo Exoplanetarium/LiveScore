@@ -1832,3 +1832,756 @@ Update rule:
 - Validation:
   - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
   - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: streaming continuity filter for pedaled boundary rebirths, 2026-06-04
+
+- User hypothesis:
+  - Pedal may be causing havoc because sustained notes whose true onsets happened before the current rolling window can be re-detected as new notes near the next window boundary.
+  - Same-pitch repeats should require clear attack evidence; otherwise they are probably sustained/pedaled continuity, not new score events.
+- Implemented in `backend/main.py`:
+  - Added per-observation attack metrics from the rolling audio window:
+    - `attack_ratio`
+    - `attack_delta`
+    - `has_strong_attack`
+  - Added `_filter_stream_continuity` before live hypotheses are updated.
+  - The filter suppresses newly-created observations when:
+    - the same pitch was already active/recent and the new observation appears near the analysis-window boundary with weak attack;
+    - the same pitch is repeated implausibly fast with weak attack;
+    - a weak-attack upper pitch is explainable as a harmonic of a recently sounding lower pitch.
+  - Existing matched hypotheses still update normally, so stable notes are not erased by the filter.
+  - Added cumulative/per-inference continuity counters to the live stream payload.
+- Implemented in `app/index.tsx`:
+  - Added continuity-filter fields to the live stream type.
+  - Added `continuitySuppressed`, `continuitySamePitchBoundary`, `continuityImplausibleRepeat`, `continuityHarmonicSustain`, and `continuityTotalSuppressed` to `[LiveStream] latency` logs.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+  - `cmd /c npx tsc --noEmit` passed.
+  - Smoke-tested the attack metric and verified a shifted same-pitch boundary rebirth with weak attack is suppressed.
+
+### CHANGED: note-birth and suppression diagnostics for live pedal failures, 2026-06-04
+
+- User observation:
+  - The one-chord pedaled ring-out test showed many single notes on screen even though sampled latency logs showed only sparse observations.
+  - The existing logs sampled one inference per second and did not expose note births, so they could miss hypotheses created between sampled lines.
+- Implemented in `backend/main.py`:
+  - `_update_hypotheses` now returns per-inference hypothesis diagnostics:
+    - created note count;
+    - matched observation count;
+    - stale skipped count;
+    - active/committed/locked promotion counts;
+    - compact `birth_samples` with MIDI, onset, confidence, source, attack ratio/delta, and hypothesis id.
+  - `_filter_stream_continuity` now always reports cumulative `total_suppressed`, even on zero-observation updates.
+  - Suppressed candidates now include compact `suppressed_samples` with MIDI, onset, confidence, attack evidence, source, reason, and harmonic/repeat context.
+- Implemented in `app/index.tsx`:
+  - Added live debug sample types.
+  - Accumulates note birth/suppression/promotion diagnostics across all live stream updates between the once-per-second `[LiveStream] latency` logs.
+  - Logs:
+    - `noteBirths`, `noteMatches`, `noteStaleSkipped`, `noteSuppressed`;
+    - `notePromotedActive`, `notePromotedCommitted`, `notePromotedLocked`;
+    - recent `noteBirthSamples` and `noteSuppressedSamples`;
+    - `liveCounts`.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: attack-group gated note birth for live pedal ring-out, 2026-06-04
+
+- User goal:
+  - Reconcile onset-only precision with frame/sustain recall without relying on unconstrained frame-based note creation.
+  - Stop the one-chord pedaled ring-out failure where weak/no-attack candidates became many committed single notes.
+- Implemented in `backend/main.py`:
+  - Added short-lived live attack groups created by observations with strong broadband attack evidence.
+  - Unmatched weak-attack observations can now create notes only if they are inside a short attack-group rescue window or have extremely high confidence.
+  - Matched observations still update existing hypotheses.
+  - Strong-attack observations still create new hypotheses normally.
+  - Added a new continuity suppression reason and counter: `weak_birth_outside_attack`.
+  - Added attack-group telemetry:
+    - `attack_groups`
+    - `registered_attack_groups`
+- Implemented in `app/index.tsx`:
+  - Added `continuityWeakBirthOutsideAttack`, `continuityAttackGroups`, and `continuityRegisteredAttackGroups` to `[LiveStream] latency` logs.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+  - `cmd /c npx tsc --noEmit` passed.
+  - Targeted smoke test kept initial strong chord attacks and suppressed weak/no-attack follow-up notes as `weak_birth_outside_attack`.
+
+### CHANGED: perceptually grounded same-staff chord grouping tolerance, 2026-06-04
+
+- User goal:
+  - Reduce visually broken-up same-staff chords after attack-group note birth, where notes a few milliseconds apart were rendered as separate 32nds.
+- Rationale:
+  - The previous `5 ms` same-staff tolerance was stricter than a musically useful simultaneity threshold.
+  - Updated to `20 ms`, grounded in Ira Hirsh's auditory temporal-order range: below roughly this range, temporal order is not reliably perceived as separate musical events. Reference: Hirsh's temporal-order work as discussed in "The Times of Ira Hirsh: Multiple Ranges of Auditory Temporal Perception" (https://pmc.ncbi.nlm.nih.gov/articles/PMC1363770/).
+- Implemented in `components/PianoSheetMusic.tsx`:
+  - Changed `SAME_STAFF_TOLERANCE` from `0.005` to `0.02`.
+  - Changed the local `CHORD_MERGE_TOLERANCE` from exact-time matching (`0`) to `SAME_STAFF_TOLERANCE`, so notes grouped as same-staff simultaneous are not split apart by the later chord-merge pass.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: piano-specific 30ms notation simultaneity experiment, 2026-06-04
+
+- User goal:
+  - Try the piano-specific onset-asynchrony range from Goebl & Parncutt after dense pedaled/chord-heavy material still showed broken-up attacks.
+- Rationale:
+  - Goebl & Parncutt's "Perception of onset asynchronies: Acoustic piano versus synthesized complex versus pure tones" tested onset asynchronies in 10ms steps from -50ms to +50ms and found reliable ordering for acoustic piano closer to about `30 ms`, slightly looser than the classic Hirsh `20 ms` temporal-order range.
+  - Reference: https://www.ofai.at/~werner.goebl/papers/goebl_parncutt_smpc2001.pdf
+- Implemented in `components/PianoSheetMusic.tsx`:
+  - Changed score-side `SAME_STAFF_TOLERANCE` from `0.02` to `0.03`.
+  - Changed `CROSS_STAFF_TIME_TOLERANCE` from `0.025` to `0.03` so cross-staff grouping does not silently cap the 30ms same-staff experiment.
+  - Made `BEAT_GROUP_TOLERANCE` and `SAME_STAFF_BEAT_TOLERANCE` at least as wide as the corresponding 30ms time tolerance converted into beats at the current BPM, while still preserving the existing minimum grid tolerances.
+  - Kept `CHORD_MERGE_TOLERANCE = SAME_STAFF_TOLERANCE`.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: disable harmonic explain-away for treble melody range, 2026-06-04
+
+- User observation:
+  - Dense, pedaled, chord-heavy material still lost much of the melody after attack-group gating.
+  - Logs showed many upper/melody-range candidates being suppressed as `harmonic_sustain`, including MIDI values above middle C.
+- Experiment:
+  - Keep attack-group birth gating and ring-out protection.
+  - Stop using the broad harmonic explain-away rule for melody-range candidates.
+- Implemented in `backend/main.py`:
+  - Added `STREAM_HARMONIC_SUPPRESS_MAX_MIDI = 59`.
+  - `harmonic_sustain` suppression now applies only when the candidate pitch is `<= 59`.
+  - MIDI `60+` candidates can still be suppressed by other guards such as `weak_birth_outside_attack`, but they are no longer discarded merely because they are interval-related to a lower sounding note.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+  - Focused smoke check confirmed MIDI `73` is no longer classified as `harmonic_sustain`; weak/no-attack candidates outside attack groups still route through `weak_birth_outside_attack`.
+
+### CHANGED: attack-group-gated harmonic suppression, 2026-06-04
+
+- User observation:
+  - The MIDI `60+` harmonic carve-out did not recover melody in dense pedaled material because much of the melody lived in the middle register.
+- Experiment:
+  - Replace the range-based carve-out with an attack-context rule.
+  - Harmonic explain-away should only fire during ring-out/no-attack contexts, not near a real attack group.
+- Implemented in `backend/main.py`:
+  - Removed `STREAM_HARMONIC_SUPPRESS_MAX_MIDI`.
+  - Moved attack-group lookup before harmonic suppression.
+  - `harmonic_sustain` suppression now requires `attack_group is None` in addition to weak attack and confidence below `0.78`.
+  - Candidates that look harmonically related but occur near a registered attack group are allowed to continue into normal attack-group rescue / note-birth logic.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py` passed.
+  - Focused smoke check confirmed a weak harmonic-looking middle-register candidate is kept near an attack group, while the same candidate is suppressed as `harmonic_sustain` during ring-out.
+
+### CHANGED: strict 10ms notation grouping diagnostic, 2026-06-04
+
+- User observation:
+  - Dense pedaled melody still dropped out after backend harmonic suppression was made attack-group-aware.
+  - User suspected chord grouping may be absorbing melody notes rather than the backend failing to emit them.
+- Experiment:
+  - Temporarily narrow score-side chord/time grouping to `10 ms` to test whether melody returns when only extremely close onsets are merged.
+  - This intentionally steps below the earlier Hirsh/Goebl perceptual ranges; it is a diagnostic setting, not a final perceptual claim.
+- Implemented in `components/PianoSheetMusic.tsx`:
+  - Changed `SAME_STAFF_TOLERANCE` from `0.03` to `0.01`.
+  - Changed `CROSS_STAFF_TIME_TOLERANCE` from `0.03` to `0.01`.
+  - Existing beat tolerances still derive from the current time tolerances and BPM.
+  - `CHORD_MERGE_TOLERANCE` continues to follow `SAME_STAFF_TOLERANCE`.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### REVERTED: strict 10ms notation grouping diagnostic, 2026-06-04
+
+- User result:
+  - Dropping score-side grouping to `10 ms` did not restore the missing melody in dense pedaled material.
+  - This suggests chord grouping was not the primary cause of the dropout.
+- Reverted in `components/PianoSheetMusic.tsx`:
+  - Restored `SAME_STAFF_TOLERANCE` from `0.01` to `0.03`.
+  - Restored `CROSS_STAFF_TIME_TOLERANCE` from `0.01` to `0.03`.
+  - Kept beat tolerances derived from the active time tolerances and BPM.
+- Next suspected suppressors:
+  - backend `weak_birth_outside_attack`;
+  - same-pitch / implausible-repeat suppression;
+  - candidate aging before commit;
+  - score-side duplicate-MIDI removal inside the same staff/time group.
+- Validation:
+  - `cmd /c npx tsc --noEmit` passed.
+
+### CHANGED: wider attack-group rescue window, 2026-06-04
+
+- User result:
+  - Reverting the strict `10 ms` score grouping diagnostic did not restore the missing dense pedaled melody.
+  - This points back to backend note-birth gating rather than notation chord grouping.
+- Experiment:
+  - Increase the live attack-group rescue window from `0.16 s` to `0.25 s`.
+  - Goal: let weak/middle-range melody candidates survive when they are plausibly part of a nearby real attack, while keeping ring-out-only candidates outside the rescue window suppressed.
+- Implemented in `backend/main.py`:
+  - Changed `STREAM_ATTACK_GROUP_RESCUE_SEC` from `0.16` to `0.25`.
+
+### ADDED: decoder-only tuning sweep harness, 2026-06-04
+
+- User goal:
+  - Improve transcription/score accuracy without increasing latency.
+  - Avoid a larger/slower model; tune decoder decisions against the existing benchmark metrics instead.
+- Added `backend/tune_decoder_settings.py`:
+  - Runs `backend/test_experiment.py` repeatedly with candidate environment-variable decoder settings.
+  - Sweeps zero-latency knobs such as:
+    - `LIVE_ENHANCED_ONSET_BASE`;
+    - `LIVE_ENHANCED_OFFSET_BASE`;
+    - `LIVE_ENHANCED_DUPLICATE_WINDOW_SEC`;
+    - `LIVE_ENHANCED_FILTER_HARMONICS`;
+    - live neural grouping/pruning tolerances in the full preset.
+  - Writes per-candidate benchmark JSON/log files under `backend/benchmark_artifacts/decoder_tuning_*`.
+  - Writes `decoder_tuning_summary.json` and `decoder_tuning_summary.md`.
+  - Ranks candidates by score submetrics directly:
+    - display note precision/recall/F1;
+    - display offset F1;
+    - display cluster F1;
+    - cluster average Jaccard;
+    - strict onset F1;
+    - duplicate rate;
+    - measured chunk timing.
+  - Includes a latency guard so a candidate is marked only if its mean clip-level p95 chunk time stays within the configured tolerance of baseline.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\tune_decoder_settings.py` passed.
+  - Smoke-ran one real candidate on `clip_001`:
+    - command: `backend\env\Scripts\python.exe backend\tune_decoder_settings.py --preset quick --clip-ids clip_001 --max-candidates 1 --no-warmup`
+    - output: `backend/benchmark_artifacts/decoder_tuning_20260604_112716/decoder_tuning_summary.md`
+    - baseline smoke metrics: display note F1 `0.9388`, recall `0.8846`, precision `1.0000`, display cluster F1 `0.8947`, mean clip p95 chunk `34.54 ms`.
+
+### ADDED: continuous-stream decoder replay benchmark, 2026-06-04
+
+- User result:
+  - The decoder-only `test_experiment.py` sweep was disappointing and likely measured the older chunk-upload replay path rather than the newer continuous stream hypothesis decoder.
+  - The real live improvement came from `ContinuousLiveStreamSession` attack-group note-birth gating, so benchmark coverage needed to move there.
+- Added `backend/tune_continuous_stream_decoder.py`:
+  - Replays benchmark audio as small PCM packets through `ContinuousLiveStreamSession`.
+  - Uses live app defaults by default:
+    - `40 ms` packets;
+    - `1.8 s` context;
+    - `70 ms` inference interval;
+    - `180 ms` trusted delay;
+    - `500 ms` commit delay;
+    - `2000 ms` lock delay.
+  - Measures both surfaces:
+    - `score`: mirrors the app's accumulated score notes (`active`, `committed`, `locked`);
+    - `preview`: includes unstable `heard`/`candidate` notes as well.
+  - Sweeps continuous decoder constants directly:
+    - `STREAM_ATTACK_GROUP_RESCUE_SEC`;
+    - `STREAM_ATTACK_GROUP_RESCUE_MIN_CONFIDENCE`;
+    - `STREAM_MIN_REPEAT_SEC`;
+    - `STREAM_WEAK_BIRTH_HIGH_CONFIDENCE`;
+    - `STREAM_HARMONIC_SUPPRESS_MAX_CONFIDENCE`;
+    - `STREAM_CONTINUITY_BOUNDARY_SEC`.
+  - Writes per-candidate JSON/log files and a ranked Markdown/JSON summary under `backend/benchmark_artifacts/continuous_decoder_*`.
+  - Ranks using score-quality submetrics directly:
+    - note precision/recall/F1;
+    - offset F1;
+    - cluster F1 and cluster Jaccard;
+    - strict onset F1;
+    - boundary recall;
+    - duplicate rate;
+    - p95 inference timing.
+  - Redirects verbose model timing logs into per-candidate `.log` files by default; use `--show-model-logs` to print them.
+- Refactored defaults in `backend/main.py` without behavior change:
+  - Added `STREAM_ATTACK_GROUP_RESCUE_MIN_CONFIDENCE = 0.50`.
+  - Added `STREAM_HARMONIC_SUPPRESS_MAX_CONFIDENCE = 0.78`.
+  - Replaced the previous inline `0.50` and `0.78` checks with those named constants so the replay benchmark can sweep them.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\main.py backend\tune_continuous_stream_decoder.py` passed.
+  - Smoke-ran one candidate on `clip_001`:
+    - command: `backend\env\Scripts\python.exe backend\tune_continuous_stream_decoder.py --preset quick --clip-ids clip_001 --max-candidates 1 --tail-padding-sec 0.2`
+    - output: `backend/benchmark_artifacts/continuous_decoder_20260604_121331/continuous_decoder_summary.md`
+    - baseline smoke metrics on score surface: note F1 `0.6500`, recall `0.5000`, precision `0.9286`, cluster F1 `0.5333`, p95 inference `38.52 ms`.
+
+### CHANGED: ship 200ms same-pitch repeat suppression, 2026-06-04
+
+- User decision:
+  - Ship the cleanest continuous-stream benchmark win.
+  - Hold off on any cluster-cleaner/post-decoder grouping work for now.
+- Benchmark evidence:
+  - Source: `backend/benchmark_artifacts/continuous_decoder_20260604_121946/continuous_decoder_summary.md`.
+  - Candidate: `repeat_200ms`.
+  - Change: `STREAM_MIN_REPEAT_SEC = 0.20`.
+  - Score-surface aggregate on clips `clip_001`, `clip_002`, `clip_010`, `clip_017`, `clip_031`:
+    - note F1 `0.8768 -> 0.8802`;
+    - precision `0.8793 -> 0.8861`;
+    - recall unchanged at `0.8743`;
+    - cluster F1 `0.4508 -> 0.4586`;
+    - offset F1 `0.8462 -> 0.8495`;
+    - predicted notes `522 -> 518`;
+    - matched notes unchanged at `459`.
+  - Interpretation:
+    - The wider repeat suppression removed four likely false same-pitch rebirths without losing matched notes.
+- Implemented in `backend/main.py`:
+  - Changed `STREAM_MIN_REPEAT_SEC` from `0.16` to `0.20`.
+
+### CHANGED: make enhanced-model fine-tuning replay-safe, 2026-06-04
+
+- User problem:
+  - Hard-case-only fine-tuning produced a worse checkpoint than the prior enhanced model.
+  - Diagnosis: this was closer to narrow retraining than careful fine-tuning, with risk of catastrophic forgetting and a validation distribution that was no longer apples-to-apples.
+- Implemented in `backend/rhythm_training/train_enhanced_mel_transcriber.py`:
+  - Added mixed fine-tune sampling:
+    - general MAESTRO replay samples plus hard-case manifest samples;
+    - default hard-case sampling ratio `0.25`;
+    - configurable via `--finetune-hard-ratio` and `--finetune-samples-per-epoch`.
+  - Added source tagging for batches:
+    - `sample_source=0` for general replay;
+    - `sample_source=1` for hard-case manifest samples.
+  - Added teacher preservation during fine-tuning:
+    - default teacher is the init checkpoint;
+    - default preservation weight `0.20`;
+    - applies to general replay samples only, so hard cases can still adapt;
+    - preserves onset, offset, frame, velocity, and note-value outputs with configurable term weights.
+  - Added dual validation for fine-tuning:
+    - hard-case validation remains the primary target when a validation manifest is provided;
+    - optional general validation runs in parallel by default;
+    - checkpoint selection uses a weighted hard/general metric, defaulting to equal weight via `--finetune-general-val-weight 0.50`.
+  - Added fine-tune-safe defaults:
+    - `--lr` now defaults to `0.08` for `--finetune` and `1.0` otherwise;
+    - default fine-tune output remains `backend/rhythm_training/enhanced_mel_transcription_finetuned.pt`, so reruns overwrite the old fine-tune checkpoint unless `--model-path` is supplied.
+  - Fine-tune parameter groups remain available:
+    - `--finetune-scope heads|decoder|full`;
+    - head/decoder/backbone LR scales.
+- Validation:
+  - `backend\env\Scripts\python.exe -B -m py_compile backend\rhythm_training\train_enhanced_mel_transcriber.py` passed.
+  - `backend\env\Scripts\python.exe backend\rhythm_training\train_enhanced_mel_transcriber.py --benchmark --device cpu --benchmark-runs 1` passed.
+
+### CHANGED: diagnose enhanced score-duration accuracy and add pedal/sounding-score instrumentation, 2026-06-09
+
+- User goal:
+  - Test whether MAESTRO sustain-pedal data can improve displayed score durations without spending more 20-hour training runs on low-yield fine-tuning.
+- Implemented in `backend/rhythm_training/train_enhanced_mel_transcriber.py`:
+  - Added MAESTRO `CC64` sustain-pedal extraction:
+    - continuous pedal target `0..1`;
+    - binary sustain intervals using threshold `CC64 >= 64`.
+  - Added pedal-informed `sounding_frame` target:
+    - note sound extends through sustain-pedal release;
+    - extension is capped by the next same-pitch onset;
+    - unrelated pitches do not terminate held/sustained notes, preserving voicing-style holds.
+  - Added new model outputs:
+    - `pedal_head`;
+    - `sounding_frame_head`.
+  - Added new loss terms and CLI flags:
+    - `--pedal-weight`;
+    - `--sounding-frame-weight`.
+  - Added validation reporting for:
+    - `sound_f1`;
+    - `pedal_f1`;
+    - score-style F1.
+  - Added validation workload caps:
+    - `--max-val-samples`;
+    - `--val-sampling`;
+    - `--max-score-val-samples`;
+    - `--score-val-sampling`.
+  - Added score-duration policy support:
+    - `--score-duration-policy`;
+    - default policy set to `ioi_same_hand` after offline sweep.
+  - Added MIDI target caching and persistent DataLoader workers:
+    - per-piece MIDI parsing is cached;
+    - DataLoader workers persist across epochs so caches survive epoch boundaries.
+  - Made resume more robust when changing fine-tune scope:
+    - if optimizer/scheduler state does not fit the current parameter groups, resume now warns and uses a fresh optimizer/scheduler while still loading model weights.
+  - Fixed note-value loss/decoder alignment:
+    - note-value loss now trains only on frames where both onset target and physical frame target are active;
+    - note-value decode pooling now looks forward from onset instead of pooling pre-onset/sustain regions.
+- Added diagnostic scripts:
+  - `backend/rhythm_training/diagnose_score_duration_errors.py`
+    - dumps score-duration mismatches where pitch and score-grid onset match but duration class fails;
+    - writes JSON and CSV under `backend/rhythm_training/score_duration_diagnostics/`.
+  - `backend/rhythm_training/sweep_score_duration_policies.py`
+    - compares duration-assignment policies without retraining.
+  - `backend/rhythm_training/learn_score_duration_lookup.py`
+    - experimental lookup-table chooser for duration policy selection.
+- Offline findings:
+  - Fine-tuning did not meaningfully improve score duration:
+    - hard event F1 stayed near `0.949-0.950`;
+    - general event F1 stayed near `0.960-0.961`;
+    - score onset F1 stayed near `0.903-0.904`;
+    - score duration accuracy stayed near `0.136-0.157` when using the note-value head.
+  - Diagnostic run on 512 hard-validation samples:
+    - score F1 `0.1416`;
+    - score onset F1 `0.9028`;
+    - duration accuracy `0.1569`.
+  - Duration target analysis:
+    - GT score class matched physical duration about `19.8%`;
+    - GT score class matched sounding/pedal duration about `54.4%`;
+    - model decoded duration matched GT class about `21.2%`.
+  - Policy sweep on 512 hard-validation samples:
+    - `head`: F1 `0.1416`, duration accuracy `0.1569`;
+    - `physical_duration`: F1 `0.1812`, duration accuracy `0.2007`;
+    - `sounding_duration`: F1 `0.1913`, duration accuracy `0.2120`;
+    - `sounding_same_pitch_cap`: F1 `0.1987`, duration accuracy `0.2201`;
+    - `hybrid_cleanup`: F1 `0.3469`, duration accuracy `0.3843`;
+    - `ioi_same_hand`: F1 `0.4506`, duration accuracy `0.4991`;
+    - oracle over available candidate policies: F1 `0.5334`, duration accuracy `0.5909`.
+  - Extra simple hybrids did not beat `ioi_same_hand`.
+  - Experimental lookup-table chooser on a 512-sample even/odd validation split improved held-out duration accuracy:
+    - `ioi_same_hand` baseline `0.4893`;
+    - best lookup (`ioi_head_sound:min4`) `0.5579`.
+    - Not promoted as default yet because train-to-validation lookup run timed out under current machine contention.
+- Current interpretation:
+  - The enhanced transcriber already finds the notes/onsets well.
+  - Displayed score duration is primarily a post-processing/notation problem, not a model fine-tuning problem.
+  - Best safe deployable policy so far:
+    - assign visible duration from next onset in the same hand;
+    - cap by next same-pitch onset.
+  - Remaining upside likely comes from a lightweight per-note chooser between IOI/sounding/head-derived candidates, not from further GPU fine-tuning.
+- Validation:
+  - `python -m py_compile backend/rhythm_training/train_enhanced_mel_transcriber.py backend/rhythm_training/diagnose_score_duration_errors.py backend/rhythm_training/sweep_score_duration_policies.py backend/rhythm_training/learn_score_duration_lookup.py` passed.
+  - `python diagnose_score_duration_errors.py --samples 512 --batch-size 8 --num-workers 4 --device cuda` completed and wrote `score_duration_diagnostics/score_duration_summary.json` plus `score_duration_diagnostics/score_duration_mismatches.csv`.
+  - `python sweep_score_duration_policies.py --samples 512 --batch-size 8 --num-workers 4 --device cuda` completed and wrote `score_duration_diagnostics/policy_sweep_summary.json`.
+  - `python learn_score_duration_lookup.py --samples 512 --batch-size 8 --num-workers 0 --device cuda --output-path score_duration_diagnostics/lookup_policy_summary_512.json` completed.
+
+## CHANGED: promote same-hand IOI score durations into live pipeline, 2026-06-09
+
+- Updated `backend/live_rhythm.py` so the main live score quantization path now uses the deployable score-duration policy found by diagnostics:
+  - default policy is `LIVE_SCORE_DURATION_POLICY=ioi_same_hand`;
+  - visible note duration is assigned from the next onset in the same hand;
+  - duration is capped by the next same-pitch onset when that happens first;
+  - hand falls back from `midi_note < 60` when no explicit `hand` field is present.
+- Applied the policy in both places that write score-facing durations:
+  - immediate/coarse live quantization now passes policy-aware `next_onset_seconds`;
+  - deferred Viterbi refinement keeps its refined onset/grid placement, then replaces only the visible duration fields with same-hand IOI duration where lookahead exists.
+- Added score-duration metadata to policy-adjusted notes:
+  - `duration_source='ioi_same_hand'`;
+  - `score_duration_seconds=<policy duration>`.
+- The policy can be disabled/restored to old adjacent-onset behavior with:
+  - `LIVE_SCORE_DURATION_POLICY=adjacent` or any value other than `ioi_same_hand`.
+- Validation:
+  - `python -m py_compile backend/live_rhythm.py backend/main.py` passed.
+  - Coarse smoke test confirmed an interleaved bass note at `0.0s` with treble notes at `0.25s/0.50s` and next bass onset at `1.0s` becomes a 2-beat half note instead of ending at the first treble onset.
+  - Deferred-refinement smoke test confirmed the same case keeps `duration_source=ioi_same_hand` after refinement instead of being overwritten by regular Viterbi duration.
+
+## CHANGED: add soft-polyphony rescue for quiet inner voices, 2026-06-09
+
+- Added a conservative rescue path to `backend/rhythm_training/train_enhanced_mel_transcriber.py`:
+  - primary enhanced decoding still uses the normal onset threshold;
+  - a secondary per-key pass can recover below-threshold local onset peaks when the same key has frame evidence, velocity evidence, and a local onset bump;
+  - rescued events are marked with `decode_source='soft_polyphony_rescue'` and `rescue_onset_delta`.
+- Threaded the rescue through `backend/gpu_ops.py` for the GPU enhanced mel transcriber:
+  - `soft_polyphony_rescue`;
+  - `soft_polyphony_onset_threshold`;
+  - `soft_polyphony_frame_threshold`;
+  - `soft_polyphony_min_velocity`;
+  - `soft_polyphony_min_delta`;
+  - `soft_polyphony_lookback_sec`;
+  - timing metadata now includes `soft_polyphony_rescued_events`.
+- Enabled the rescue in live enhanced mode in `backend/detect_note.py`:
+  - default `LIVE_ENHANCED_SOFT_POLYPHONY_RESCUE=1`;
+  - default `LIVE_ENHANCED_SOFT_POLYPHONY_ONSET=0.45`;
+  - default `LIVE_ENHANCED_SOFT_POLYPHONY_FRAME=0.35`;
+  - default `LIVE_ENHANCED_SOFT_POLYPHONY_MIN_VELOCITY=4`;
+  - default `LIVE_ENHANCED_SOFT_POLYPHONY_MIN_DELTA=0.05`;
+  - default `LIVE_ENHANCED_SOFT_POLYPHONY_LOOKBACK_SEC=0.08`.
+- Carried rescue markers into live converted payloads:
+  - single notes can include `decode_source`;
+  - chords can include `decode_sources` and `soft_polyphony_rescued_notes`.
+- Updated `backend/main.py` streaming continuity handling:
+  - live stream observations now preserve `decode_source`;
+  - `soft_polyphony_rescue` observations can pass the weak-birth-outside-attack gate, while harmonic-sustain suppression remains active.
+- Validation:
+  - `python -m py_compile backend/rhythm_training/train_enhanced_mel_transcriber.py backend/gpu_ops.py backend/detect_note.py backend/main.py` passed.
+  - Synthetic decoder smoke test confirmed a 0.50 onset peak under a 0.75 primary threshold is not emitted without rescue, but is emitted with rescue when frame/velocity evidence exists.
+  - Negative/control smoke tests confirmed low-frame candidates are not rescued and normal high-threshold primary onsets remain `decode_source='primary_onset'`.
+  - Direct `ContinuousLiveStreamSession` smoke import was blocked in this local shell by missing `uvicorn`; the module still compiles.
+
+## CHANGED: disable soft-polyphony rescue by default after live test, 2026-06-09
+
+- User live test showed the rescue increased note count but produced musically wrong events:
+  - incorrect onset timing;
+  - incorrect displayed note values;
+  - incorrect displayed durations.
+- Updated `backend/detect_note.py` so live enhanced mode now defaults to:
+  - `LIVE_ENHANCED_SOFT_POLYPHONY_RESCUE=0`.
+- Kept the rescue code behind the env flag for future controlled diagnostics, but removed it from the default/main behavior.
+- Current interpretation:
+  - below-threshold per-key onset rescue is too weakly anchored when used as an independent event creator;
+  - the better next experiment is likely an analysis/diagnostic pass that records inner-voice frame energy around expected onsets, not automatic event insertion.
+
+## ADDED: inner-voice enhanced-model evidence diagnostic, 2026-06-09
+
+- Added `backend/rhythm_training/diagnose_inner_voice_evidence.py`.
+- Purpose:
+  - inspect enhanced-mel onset/frame/velocity probabilities around missing quiet inner voices;
+  - distinguish whether an inner note was decoded, present as frame energy with weak onset, present as weak onset only, mistimed, or absent/buried;
+  - keep this as diagnostics only, with no live transcription behavior change.
+- CLI examples:
+  - `python backend/rhythm_training/diagnose_inner_voice_evidence.py --audio path/to/passage.wav`
+  - `python backend/rhythm_training/diagnose_inner_voice_evidence.py --audio path/to/passage.wav --start-sec 12.5 --duration-sec 8 --expected 64@0.82,67@1.31`
+- Outputs under `backend/rhythm_training/inner_voice_diagnostics/` by default:
+  - `inner_voice_summary.json`;
+  - `inner_voice_expected.csv`;
+  - `inner_voice_near_misses.csv`;
+  - `inner_voice_decoded_events.csv`.
+- Validation:
+  - `python -m py_compile backend/rhythm_training/diagnose_inner_voice_evidence.py` passed.
+  - `python backend/rhythm_training/diagnose_inner_voice_evidence.py --help` passed.
+
+## CHANGED: run inner-voice diagnostic on bad MAESTRO validation clips, 2026-06-09
+
+- Extended `backend/rhythm_training/diagnose_inner_voice_evidence.py` with precomputed segment mode:
+  - `--segment-id <id>`;
+  - `--split validation|train|test`.
+- Reason:
+  - raw-audio mode was blocked in the local shell because `librosa` is not installed;
+  - precomputed segment mode uses the same MAESTRO mel features already used for validation, so it can still inspect model probabilities for the exact clip.
+- Scanned 256 hard validation segments at live-ish thresholds:
+  - onset threshold `0.75`;
+  - offset threshold `0.35`;
+  - frame threshold `0.5`;
+  - min velocity `8`.
+- Worst useful segment found:
+  - segment id `1270`;
+  - MAESTRO audio: `backend/rhythm_training/maestro_midi/2008/MIDI-Unprocessed_07_R1_2008_01-04_ORIG_MID--AUDIO_07_R1_2008_wav--3.wav`;
+  - piece: Franz Liszt, `Transcendental Etude No. 12 "Chasse-neige"`;
+  - segment start: `100.0s`;
+  - event precision `0.978`;
+  - event recall `0.604`;
+  - event F1 `0.747`;
+  - `116` false negatives;
+  - `42` overlapping middle-register false negatives.
+- Ran:
+  - `python backend/rhythm_training/diagnose_inner_voice_evidence.py --segment-id 1270 --split validation --expected "74@0.6536458333333286,74@0.90234375,74@1.3033854166666572,62@1.3893229166666572,73@1.6953125,52@1.8125,55@2.0859375,52@2.088541666666657,73@2.1731770833333286,76@2.24609375,73@2.3125,55@2.3645833333333286" --output-dir inner_voice_diagnostics_sid1270 --device cuda --onset-threshold 0.75 --frame-threshold 0.5 --near-miss-onset 0.25 --max-candidates 250`
+- Outputs:
+  - `backend/rhythm_training/inner_voice_diagnostics_sid1270/inner_voice_summary.json`;
+  - `backend/rhythm_training/inner_voice_diagnostics_sid1270/inner_voice_expected.csv`;
+  - `backend/rhythm_training/inner_voice_diagnostics_sid1270/inner_voice_near_misses.csv`;
+  - `backend/rhythm_training/inner_voice_diagnostics_sid1270/inner_voice_decoded_events.csv`.
+- Findings on the 12 inspected overlapping middle-register false negatives:
+  - `7` were `frame_present_weak_onset`;
+  - `3` were `frame_present_no_onset`;
+  - `2` were `absent_or_buried`.
+- Interpretation:
+  - many missed inner notes are visible to the frame/velocity heads and have onset peaks just below the live threshold;
+  - the earlier automatic rescue failed because it created standalone events from weak candidates without sequence-level timing/duration context;
+  - a better next experiment is not simple threshold lowering, but a sequence-aware candidate lattice/decoder that can include weak per-key candidates when they align with nearby decoded attacks or score-grid positions.
+
+## ADDED: calibrated lattice-candidate experiment for inner voices, 2026-06-09
+
+- Added `backend/rhythm_training/train_lattice_candidate_calibrator.py`.
+- Purpose:
+  - replace arbitrary weak-note scoring with a learned probability `P(real note | weak candidate context)`;
+  - choose the acceptance threshold from a held-out precision/recall curve;
+  - evaluate event-F1 impact before any live-pipeline wiring.
+- Candidate features:
+  - onset peak;
+  - frame peak;
+  - velocity peak/int;
+  - local onset delta;
+  - previous onset level;
+  - distance to nearest primary onset cluster;
+  - primary cluster size;
+  - pitch distance to anchor cluster;
+  - same-pitch recent primary flag;
+  - harmonic-to-anchor flag;
+  - active-frame-before value;
+  - middle-register flag;
+  - normalized pitch.
+- Candidate acceptance:
+  - train a `StandardScaler + LogisticRegression(class_weight='balanced')`;
+  - choose threshold from validation precision/recall;
+  - accepted weak events are snapped to the nearest primary onset cluster;
+  - max additions per anchor and max anchor distance still bound the search space.
+- Important implementation fixes:
+  - relative manifest paths now resolve from `backend/rhythm_training`;
+  - hard-case manifest `selection` order is preserved;
+  - `EnhancedPrecomputedMelDataset` sorting is overridden in the experiment so train/eval split follows hard-case ranking order.
+- Main held-out hard-ranked experiment:
+  - command:
+    - `python backend/rhythm_training/train_lattice_candidate_calibrator.py --segment-manifest mel_hard_case_manifest_validation_pedal_onset_v2.json --max-segments 256 --train-fraction 0.5 --output-dir lattice_candidate_calibrator_hard256_ordered_p75 --device cuda --target-precision 0.75 --progress-every 64`
+  - trained on first 128 hard-ranked validation segments;
+  - evaluated on next 128 hard-ranked validation segments;
+  - candidate AP `0.676`;
+  - candidate ROC-AUC `0.747`;
+  - chosen threshold `0.7287`;
+  - primary event F1 `0.9136`, precision `0.9878`, recall `0.8497`;
+  - lattice event F1 `0.9225`, precision `0.9792`, recall `0.8720`;
+  - delta F1 `+0.0089`;
+  - delta recall `+0.0222`;
+  - delta precision `-0.0086`;
+  - additions: `496` total, `3.88` per segment average.
+- Safer held-out operating point:
+  - command:
+    - `python backend/rhythm_training/train_lattice_candidate_calibrator.py --segment-manifest mel_hard_case_manifest_validation_pedal_onset_v2.json --max-segments 256 --train-fraction 0.5 --output-dir lattice_candidate_calibrator_hard256_ordered_p85 --device cuda --target-precision 0.85 --progress-every 128`
+  - chosen threshold `0.7752`;
+  - lattice event F1 `0.9196`;
+  - delta F1 `+0.0061`;
+  - delta recall `+0.0126`;
+  - delta precision `-0.0026`;
+  - additions: `247` total, `1.93` per segment average.
+- Specific held-out bad clip `sid=1270` under the `p75` experiment:
+  - primary F1 `0.7442`;
+  - lattice F1 `0.7753`;
+  - primary recall `0.6007`;
+  - lattice recall `0.6416`;
+  - primary precision `0.9778`;
+  - lattice precision `0.9792`;
+  - added `12` events.
+- Interpretation:
+  - the calibrated lattice approach is meaningfully better than arbitrary rescue;
+  - it improves recall on hard inner-voice/dense clips while preserving high event precision;
+  - still not ready for live default because score/duration quality of added events needs visual/audio inspection and downstream notation evaluation.
+
+## CHANGED: lower live enhanced onset default after hard-case sweep, 2026-06-09
+
+- Updated `backend/detect_note.py` live enhanced mode:
+  - default `LIVE_ENHANCED_ONSET_BASE` changed from `0.75` to `0.60`.
+- Reason:
+  - hard-case sweep on the top 256 MAESTRO validation segments showed the old `0.75` threshold was over-prioritizing precision and missing many inner/dense notes.
+- Sweep results:
+  - threshold `0.75`: precision `0.9859`, recall `0.8519`, F1 `0.9140`;
+  - threshold `0.65`: precision `0.9711`, recall `0.8842`, F1 `0.9257`;
+  - threshold `0.60`: precision `0.9636`, recall `0.8928`, F1 `0.9268`.
+- Expected tradeoff versus old default:
+  - about `+1.28` event-F1 points;
+  - about `+4.09` recall points;
+  - about `-2.23` precision points.
+- The env override remains available:
+  - `LIVE_ENHANCED_ONSET_BASE=0.65` for a more conservative recall boost;
+  - `LIVE_ENHANCED_ONSET_BASE=0.75` to restore the old behavior.
+- Validation:
+  - `python -m py_compile backend/detect_note.py` passed.
+
+## CHANGED: voice-lane score durations in main live pipeline, 2026-06-09
+
+- Added neutral pitch-lane voice assignment in `backend/live_rhythm.py`:
+  - treble notes split into high/mid/low lanes;
+  - bass notes split into low/mid/high lanes;
+  - events now carry `voice_id`, `voice_index`, and `voice_assignment` when enabled.
+- Changed the live score duration default:
+  - `LIVE_SCORE_DURATION_POLICY=ioi_same_voice`;
+  - previous same-hand behavior can be restored with `LIVE_SCORE_DURATION_POLICY=ioi_same_hand`;
+  - voice assignment can be disabled with `LIVE_VOICE_ASSIGNMENT=off`.
+- Applied same-voice IOI duration policy in both coarse live quantization and deferred refinement:
+  - duration is capped by the next onset in the same voice lane;
+  - repeated same-pitch onsets still cap the duration to avoid overlap.
+- Updated `components/PianoSheetMusic.tsx` so score-facing retiming uses backend `voice_id` when present, falling back to hand IOI when not present.
+- Updated chord handling so split-staff chord events prefer the staff-specific `voice_ids` entry before chord-level `voice_id`.
+- Validation:
+  - `python -m py_compile backend/live_rhythm.py` passed;
+  - `npx.cmd tsc --noEmit` passed;
+  - synthetic live-rhythm smoke test passed: a held high treble note at `0.00s` extended to the next high-lane onset at `1.00s`, while middle treble notes used middle-lane IOI.
+
+## CHANGED: MusicXML voice lanes for overlapping same-staff notes, 2026-06-09
+
+- Updated `components/PianoSheetMusic.tsx` so backend `voice_id` now maps to real MusicXML voice numbers:
+  - treble lanes map to voices `1`, `3`, and `5`;
+  - bass lanes map to voices `2`, `4`, and `6`;
+  - notes, chords, rests, forwards, and generated ties preserve the mapped voice number.
+- Changed same-staff chord merging to require the same `voiceNumber`:
+  - simultaneous events in different lanes are no longer forced into one chord;
+  - same-lane simultaneous notes can still merge as a chord.
+- Changed measure clamping to track current end time per voice:
+  - a held melody no longer pushes a later inner-voice event to the end of the melody;
+  - different voices can overlap on the same staff.
+- Added MusicXML `<backup>` emission when a later event starts before the current XML cursor:
+  - this lets the score return to the correct onset for inner-voice notes after writing a held note.
+- Validation:
+  - `npx.cmd tsc --noEmit` passed;
+  - `git diff --check -- components/PianoSheetMusic.tsx` passed apart from the repo's normal CRLF warning.
+
+## CHANGED: wire calibrated lattice inner-voice rescue into the live path, 2026-06-09
+
+- User problem:
+  - Quiet inner voices played under held outer notes were "not recognized at all" in the live score.
+- Root-cause diagnosis (live continuity gating, not the model):
+  - Inner voices reach the enhanced-mel decoder fine (prior diagnostics: `frame_present_weak_onset`).
+  - They were then dropped by two gates in `ContinuousLiveStreamSession._filter_stream_continuity` (`backend/main.py`):
+    - `harmonic_sustain`: a weak note 7-36 semitones above a held/recent note with interval mod 12 in {0,4,7} and `confidence < 0.78` is suppressed as ring-out. Inner voices are frequently an octave/third/fifth above a held outer note.
+    - `weak_birth_outside_attack`: a weak-attack note not within `STREAM_ATTACK_GROUP_RESCUE_SEC` of a fresh strong attack is suppressed unless `confidence >= STREAM_WEAK_BIRTH_HIGH_CONFIDENCE` (0.86). An inner voice under an already-attacked held note is by definition outside a fresh attack cluster.
+  - This also explains why lowering `LIVE_ENHANCED_ONSET_BASE` 0.75->0.60 alone did not help: the decode-stage recall win was undone by these downstream gates.
+- Decision (from the user): wire the offline-validated lattice calibrator into the live path rather than loosen the gates ad hoc.
+- Implementation:
+  - Added `backend/rhythm_training/export_lattice_calibrator_json.py`:
+    - exports a trained `lattice_candidate_calibrator.pkl` to a dependency-free JSON (scaler mean/scale, logistic coef/intercept, calibrated threshold, candidate-generation knobs).
+    - promoted `hard256_ordered_p75` (threshold `0.7287`) to `backend/rhythm_training/lattice_candidate_calibrator.json`.
+  - Added `backend/lattice_candidate_decoder.py`:
+    - pure-numpy runtime port of the trainer's candidate generation, 14-feature extraction, scoring, and anchor-snapping acceptance.
+    - reproduces `Pipeline(StandardScaler, LogisticRegression).predict_proba` from the exported weights (verified max abs diff vs sklearn `3.5e-18`).
+    - accepted events are marked `decode_source='lattice_calibrated'` with `lattice_probability`.
+  - `backend/rhythm_training/train_enhanced_mel_transcriber.py`:
+    - `decode_enhanced_note_events(...)` gained `lattice_rescue` / `lattice_model_path` params; after primary decode it appends calibrated lattice events and assigns them note-value class/name/confidence like primary events.
+  - `backend/gpu_ops.py`:
+    - `GpuEnhancedMelTranscriber.transcribe(...)` threads `lattice_rescue` / `lattice_model_path` and reports `lattice_rescued_events`.
+  - `backend/detect_note.py` (live enhanced path in `analyze_audio_live_neural`):
+    - default `LIVE_ENHANCED_LATTICE_RESCUE=1`; optional `LIVE_LATTICE_MODEL` override;
+    - timing surfaces `neural_lattice_rescue` and `neural_lattice_rescued_events`.
+  - `backend/main.py`:
+    - `lattice_calibrated` observations now bypass BOTH the `harmonic_sustain` and `weak_birth_outside_attack` gates (calibrated rescues are deliberate, anchor-snapped below-threshold events).
+- Known caveat / follow-up:
+  - The shipped calibrator was trained with `primary_onset_threshold=0.75`, but the live default is now `0.60`, so at runtime the weak-candidate pool (0.25-0.60) is narrower and anchor features are computed against a denser primary set. Calibration may drift; consider retraining at `primary_onset_threshold=0.60` if live recall is short.
+- Validation:
+  - `python -m py_compile main.py gpu_ops.py detect_note.py lattice_candidate_decoder.py rhythm_training/train_enhanced_mel_transcriber.py rhythm_training/export_lattice_calibrator_json.py` passed.
+  - Runtime-vs-trainer parity test (synthetic probs, forced acceptance): identical accepted events on midi/onset/offset/velocity.
+  - End-to-end `decode_enhanced_note_events(..., lattice_rescue=True)`: emits `lattice_calibrated` events carrying note-value metadata alongside primary events.
+  - Not yet run: continuous-stream benchmark (`backend/tune_continuous_stream_decoder.py`) and a real live recording check.
+
+## FINDING: lattice rescue is inert at primary 0.60; gates are not the live culprit either, 2026-06-09
+
+- Ran the continuous-stream benchmark (score surface) on the dense/inner-voice clips `clip_017`, `clip_031`.
+- Lattice on vs off was identical: note F1 `0.8186`, recall `0.8919`, cluster F1 `0.0699` (only p95 inference jitter differed).
+- Direct instrumentation on `clip_017` audio: the live enhanced path generated `23` weak candidates; max calibrated score `0.648`, median `0.371`; `0` candidates cleared the shipped threshold `0.7287`. So nothing was rescued.
+- Root cause: the shipped calibrator was trained with `primary_onset_threshold=0.75`, but live runs at `0.60`. The `0.60` primary already captures the recoverable inner voices as primary events, leaving only a weak, low-precision sub-0.60 candidate pool.
+- Retrained the calibrator at `primary_onset_threshold=0.60` (`lattice_candidate_calibrator_p60_p75`, target precision 0.75):
+  - candidate AP `0.676 -> 0.406`; ROC-AUC `0.747 -> 0.651`.
+  - chosen threshold `0.7343` with eval recall `0.0049` (4 additions on 128 eval segments).
+  - Confirms: almost no high-precision lattice headroom remains at the live operating point.
+- Gate-relaxation diagnostic on the same clips (temporary tuner candidates, since reverted):
+  - baseline: recall `0.8919`, precision `0.7564`, F1 `0.8186`; suppressed `137` (weak_birth `71`, harmonic `14`).
+  - gates fully off: recall `0.9054`, precision `0.7263`, F1 `0.8060`; suppressed `50`.
+  - Removing `85` suppressions added only `4` true matched notes (`264 -> 268`) for `+20` predictions. The gates were suppressing almost entirely false onsets; they are not the inner-voice culprit on these clips.
+- Interpretation:
+  - On the benchmark clips, inner-voice note recall is already `~0.89`; neither the lattice rescue nor gate relaxation materially improves it.
+  - The benchmark does not reproduce the user's "not recognized at all" report, so tuning against MAESTRO clips is optimizing against the wrong evidence.
+  - Note also `cluster_f1 ~ 0.07` on these clips: pitches are found but onset-cluster/display structure is badly wrong, which can read as "inner voice missing" in the displayed score even when the note is matched.
+- Decisions:
+  - Flipped `LIVE_ENHANCED_LATTICE_RESCUE` default to `0` (inert + costs candidate generation at primary 0.60). Plumbing, model JSON, exporter, and runtime decoder are kept for retraining/diagnostics.
+  - Next step is to capture a real recording where the user's inner voices fail and run `backend/rhythm_training/diagnose_inner_voice_evidence.py --audio <wav>` on it, rather than continue tuning against the benchmark.
+- Artifacts:
+  - `backend/benchmark_artifacts/lattice_eval_off/`, `.../lattice_eval_on/`, `.../lattice_eval_gatediag/`
+  - `backend/rhythm_training/lattice_candidate_calibrator_p60_p75/`
+
+## ROOT CAUSE: live RMS attack birth gate kills soft inner voices, 2026-06-09
+
+- Reproduced the user's failure on real audio (`backend/rhythm_training/test_inner_voice.wav`, 34.6s) instead of MAESTRO.
+- Added tooling:
+  - `backend/transcribe_wav_to_midi.py`: high-accuracy offline full-file transcription with the enhanced model (whole-file inference, RTF 0.02x). Produced `backend/rhythm_training/test_inner_voice.mid` (237 notes, 196 in inner band 52-76, 156 onsets entering under >=2 held notes). The model detects inner voices well offline.
+  - `backend/diff_offline_vs_live.py`: replays a WAV through `ContinuousLiveStreamSession` (real live path) and diffs emitted notes against a reference MIDI, with per-gate suppression totals and gate-override flags (`--relax-gates`, `--weak-birth-conf`, `--harmonic-max-conf`).
+- Findings on `test_inner_voice.wav` (reference = offline model MIDI, 237 notes):
+  - baseline live (weak_birth 0.86 / harmonic 0.78): recall vs model `0.46`, live score notes `189`, 128 missing (121 inner-band, 95 inner-voice-like). Suppression over replay: `weak_birth_outside_attack=1809`, `harmonic_sustain=1277`.
+  - harmonic gate off only: unchanged at `0.46` (weak_birth absorbs it).
+  - weak_birth gate off only: recall `0.80`, notes `325` (harmonic still removes 1332).
+  - both gates off: recall `0.996` (236/237) BUT notes `189 -> 476` (precision ~`0.50`).
+  - weak_birth threshold `0.78/0.70/0.60`: no change vs `0.86`. The missing inner voices have model confidence `<0.60`, the same region as decode noise, so a confidence threshold cannot separate them.
+- Mechanism:
+  - `weak_attack` is computed from audio RMS around the onset (`ContinuousLiveStreamSession._attack_metrics`: `attack_ratio = post_rms / pre_rms`). A quiet note added on top of loud held notes makes almost no RMS bump, so a soft inner voice is ALWAYS `weak_attack`.
+  - With `confidence < STREAM_WEAK_BIRTH_HIGH_CONFIDENCE` and no fresh attack group, `weak_birth_outside_attack` suppresses it. The RMS attack heuristic physically cannot see a soft note under sustained louder notes, even though the model's onset head does.
+  - The gates exist to clean noisier per-window live decode (vs full-context offline), so simply disabling them recovers recall but doubles the note count (precision collapse).
+- Interpretation / next step:
+  - The fix must replace the single-window RMS-attack + confidence birth gate with something that trusts the model's own onset/frame evidence and uses temporal persistence (multi-window agreement) to reject noise. This is an architectural change to the live birth/promotion path with a real precision tradeoff; approach to be decided with the user.
+  - MAESTRO benchmark must not be used as the sole validation surface for this (it does not reproduce the failure); use `diff_offline_vs_live.py` against the offline reference, watching both recall AND live note count (precision).
+
+## CHANGED: frame-evidence birth + persistence display gate for soft inner voices, 2026-06-09
+
+- Fix for the root cause above (live RMS-attack birth gate deleting soft inner voices). Approach chosen by user: combine model frame evidence at birth with temporal persistence before display.
+- Discriminator validation (gates-off replay of `test_inner_voice.wav`, real vs noise live notes):
+  - observation count (persistence): real median `22`, noise median `1`.
+  - decoded duration (frame sustain): real median `0.160s`, noise median `0.050s` (single-frame blips).
+  - model confidence does NOT separate them (real `0.426` vs noise `0.415`), confirming confidence/RMS-attack is the wrong signal.
+- Implemented in `backend/main.py` (`ContinuousLiveStreamSession`):
+  - Added constants `STREAM_FRAME_EVIDENCE_SEC=0.08`, `STREAM_MIN_DISPLAY_OBSERVATIONS=3`, `STREAM_DISPLAY_FRAME_EVIDENCE_SEC=0.15`.
+  - Birth (`_filter_stream_continuity`): a weak-attack observation whose decoded sustain `>= STREAM_FRAME_EVIDENCE_SEC` now bypasses BOTH the `harmonic_sustain` and `weak_birth_outside_attack` gates, so real soft notes are born instead of deleted.
+  - Display (`_update_hypotheses`): candidate->active and candidate/active->committed promotion now also require `observations >= STREAM_MIN_DISPLAY_OBSERVATIONS` OR sustain `>= STREAM_DISPLAY_FRAME_EVIDENCE_SEC`. Single-window noise stays a hidden candidate and never reaches the score.
+  - Aging (`_age_hypotheses`): stale `active` notes are now aged out like `candidate` (>1.0s unseen), so non-persistent notes promoted to active cannot leak onto the score surface.
+- Validation on `test_inner_voice.wav` (`backend/diff_offline_vs_live.py`, reference = offline model MIDI, 237 notes):
+  - baseline (broken): recall `0.46`, live score notes `189`.
+  - both gates off: recall `0.996`, live score notes `476` (precision ~`0.50`).
+  - combined fix: recall `0.992` (235/237, 0 inner-voice-like missing), live score notes `242` (precision ~`0.97`).
+- No regression on MAESTRO continuous-stream benchmark (`clip_017`,`clip_031`, score surface):
+  - note F1 `0.8186 -> 0.8993`; precision `0.7564 -> 0.9250`; recall `0.8919 -> 0.8750`; cluster F1 `0.0699 -> 0.2812`; duplicates/100 `0.0`.
+  - 5-clip aggregate (`clip_001,002,010,017,031`): note F1 `0.9138`, recall `0.8781`, cluster F1 `0.5914`, p95 inference `26 ms`.
+  - The persistence/frame-evidence display gate removes live-decode noise generally, so it improves precision and display-cluster structure as a side effect rather than regressing the normal case.
+- New tooling kept: `backend/transcribe_wav_to_midi.py`, `backend/diff_offline_vs_live.py`.
+- Validation: `python -m py_compile backend/main.py` passed.
+- Full-manifest A/B (all 48 clips, continuous-stream score surface, fix-off via temporary `innervoice_fix_off` override since reverted):
+  - note F1: `0.7840 -> 0.8921` (`+0.108`)
+  - precision: `0.7705 -> 0.9667` (`+0.196`)
+  - recall: `0.7980 -> 0.8281` (`+0.030`)
+  - cluster F1: `0.4312 -> 0.6510` (`+0.220`)
+  - duplicates/100: `0.2817 -> 0.0262` (`-0.255`)
+  - Result files: `backend/benchmark_artifacts/innervoice_fix_fullmanifest/`, `backend/benchmark_artifacts/innervoice_fix_off_fullmanifest/`.
+  - Both recall AND precision improved suite-wide; this is a general live-path quality win, not just an inner-voice repair.
+- Note: `test_experiment.py` does NOT exercise this fix (it simulates the older `live_rhythm.LiveTranscriptionSession` chunk path, not `ContinuousLiveStreamSession`); use `tune_continuous_stream_decoder.py` to benchmark this change.

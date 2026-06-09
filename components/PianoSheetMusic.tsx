@@ -25,6 +25,9 @@ interface NoteResult {
   duration_seconds?: number;
   offset_frame?: number;
   hand?: "bass" | "treble"; // Neural output: bass/treble hand assignment
+  voice_id?: string;
+  voice_index?: number;
+  voice_assignment?: string;
   note_value?: "whole" | "half" | "quarter" | "eighth" | "16th" | "32nd";
   note_divisions?: number;
   duration_source?: string;
@@ -71,6 +74,11 @@ interface ChordResult {
   root_midi?: number;
   method?: string; // Detection method ('neural', 'bic', etc.)
   hand?: "bass" | "treble"; // Neural output: bass/treble hand assignment
+  voice_id?: string;
+  voice_ids?: string[];
+  voice_index?: number;
+  voice_indices?: number[];
+  voice_assignment?: string;
   note_value?: "whole" | "half" | "quarter" | "eighth" | "16th" | "32nd";
   note_divisions?: number;
   duration_source?: string;
@@ -706,6 +714,7 @@ function generateMeasureXmls(
     tieType?: "start" | "stop" | "continue",
     isChord?: boolean,
     dotted?: boolean,
+    voiceNumber: number = staff,
   ): string => {
     const chordTag = isChord ? "<chord/>" : "";
     const dotXml = dotted ? "<dot/>" : "";
@@ -724,7 +733,7 @@ function generateMeasureXmls(
         '<notations><tied type="stop"/><tied type="start"/></notations>';
     }
 
-    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration>${tieXml}<voice>${staff}</voice><type>${noteType}</type>${dotXml}<staff>${staff}</staff>${notationsXml}</note>`;
+    return `<note>${chordTag}${pitchXml}<duration>${duration}</duration>${tieXml}<voice>${voiceNumber}</voice><type>${noteType}</type>${dotXml}<staff>${staff}</staff>${notationsXml}</note>`;
   };
 
   // Compute per-segment tie type for multi-segment splits.
@@ -826,6 +835,7 @@ function generateMeasureXmls(
   const generateRestXml = (
     beats: number,
     staff: number,
+    voiceNumber: number = staff,
   ): { xml: string[]; beatsEmitted: number } => {
     const rests: string[] = [];
     // Round to nearest 1/24 beat (divisions-exact) to avoid float drift
@@ -844,7 +854,7 @@ function generateMeasureXmls(
       for (const rv of restValues) {
         if (remaining >= rv.beats - 0.001) {
           rests.push(
-            `<note><rest/><duration>${rv.duration}</duration><voice>${staff}</voice><type>${rv.type}</type><staff>${staff}</staff></note>`,
+            `<note><rest/><duration>${rv.duration}</duration><voice>${voiceNumber}</voice><type>${rv.type}</type><staff>${staff}</staff></note>`,
           );
           remaining = Math.round((remaining - rv.beats) * 24) / 24;
           found = true;
@@ -858,11 +868,30 @@ function generateMeasureXmls(
     if (remaining > 0.001) {
       const fwdDiv = Math.round(remaining * 24);
       if (fwdDiv > 0) {
-        rests.push(`<forward><duration>${fwdDiv}</duration></forward>`);
+        rests.push(
+          `<forward><duration>${fwdDiv}</duration><voice>${voiceNumber}</voice><staff>${staff}</staff></forward>`,
+        );
         remaining = Math.round((remaining - fwdDiv / 24) * 24) / 24;
       }
     }
     return { xml: rests, beatsEmitted: totalRounded - remaining };
+  };
+
+  const generateForwardXml = (
+    beats: number,
+    staff: number,
+    voiceNumber: number = staff,
+  ): { xml: string[]; beatsEmitted: number } => {
+    const duration = Math.max(0, Math.round(beats * 24));
+    if (duration <= 0) {
+      return { xml: [], beatsEmitted: 0 };
+    }
+    return {
+      xml: [
+        `<forward><duration>${duration}</duration><voice>${voiceNumber}</voice><staff>${staff}</staff></forward>`,
+      ],
+      beatsEmitted: duration / 24,
+    };
   };
 
   // Determine staff for a MIDI note
@@ -871,10 +900,26 @@ function generateMeasureXmls(
     return octave < 4 ? 2 : 1;
   };
 
+  const scoreVoiceNumberFromId = (
+    staff: number,
+    voiceId?: string,
+  ): number => {
+    if (!voiceId) return staff;
+    const match = String(voiceId).match(/voice_(\d+)/);
+    const index = match ? Number.parseInt(match[1], 10) : 0;
+    if (!Number.isFinite(index)) return staff;
+    const trebleVoices = [1, 3, 5];
+    const bassVoices = [2, 4, 6];
+    return staff === 1
+      ? trebleVoices[index] || trebleVoices[0]
+      : bassVoices[index] || bassVoices[0];
+  };
+
   // Convert note to XML with voice (supports triplets)
   const noteToXmlWithVoice = (
     n: NoteResult,
     isChordNote: boolean = false,
+    voiceNumber?: number,
   ): string => {
     const {
       step: baseStep,
@@ -882,6 +927,7 @@ function generateMeasureXmls(
       octave,
     } = midiToStepOctaveForKey(n.midi_note, fifths);
     const staff = getStaff(n.midi_note);
+    const xmlVoice = voiceNumber || staff;
     const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
     const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
     const durationSpec = getDurationSpec(
@@ -929,10 +975,10 @@ function generateMeasureXmls(
     if (n.ornament === "grace") {
       const graceType =
         n.grace_type === "appoggiatura" ? "<grace/>" : '<grace slash="yes"/>';
-      return `<note>${graceType}${chordTag}${pitchXml}<voice>${staff}</voice><type>eighth</type><staff>${staff}</staff></note>`;
+      return `<note>${graceType}${chordTag}${pitchXml}<voice>${xmlVoice}</voice><type>eighth</type><staff>${staff}</staff></note>`;
     }
 
-    return `<note>${chordTag}${pitchXml}<duration>${durationSpec.duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${notationsXml}</note>`;
+    return `<note>${chordTag}${pitchXml}<duration>${durationSpec.duration}</duration><voice>${xmlVoice}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${notationsXml}</note>`;
   };
 
   // Helper to construct chord note MIDI list from ChordResult
@@ -1002,6 +1048,7 @@ function generateMeasureXmls(
     tripletPosition?: "start" | "middle" | "end",
     actualNotes: number = 3,
     normalNotes: number = 2,
+    voiceNumber: number = staff,
   ): string[] => {
     const durationSpec = getDurationSpec(
       preferredBeats,
@@ -1036,7 +1083,7 @@ function generateMeasureXmls(
       const tripletNotationsXml = first
         ? getTripletNotations(tripletPosition, actualNotes, normalNotes)
         : "";
-      const noteXml = `<note>${chordTag}${pitchInner}<duration>${durationSpec.duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
+      const noteXml = `<note>${chordTag}${pitchInner}<duration>${durationSpec.duration}</duration><voice>${voiceNumber}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
       xmlParts.push(noteXml);
       first = false;
     }
@@ -1051,6 +1098,8 @@ function generateMeasureXmls(
     beats: number;
     xml: string[];
     midiNotes: number[]; // Store MIDI notes for tie generation
+    voiceId?: string;
+    voiceNumber: number;
     // Triplet metadata for cross-measure handling
     triplet?: boolean;
     tripletPosition?: "start" | "middle" | "end";
@@ -1087,6 +1136,7 @@ function generateMeasureXmls(
     }
 
     const staff = getStaff(n.midi_note);
+    const voiceNumber = scoreVoiceNumberFromId(staff, n.voice_id);
     // Grace notes have 0 beats - they don't take up time in the measure
     // Grace notes also cannot have triplet markings
     const isGrace = n.ornament === "grace";
@@ -1097,7 +1147,7 @@ function generateMeasureXmls(
       n.triplet,
     );
     const beats = isGrace ? 0 : durationSpec.beats;
-    const xml = [noteToXmlWithVoice(n, false)];
+    const xml = [noteToXmlWithVoice(n, false, voiceNumber)];
     timeline.push({
       time,
       beatStart,
@@ -1105,6 +1155,8 @@ function generateMeasureXmls(
       beats,
       xml,
       midiNotes: [n.midi_note],
+      voiceId: n.voice_id,
+      voiceNumber,
       triplet: isGrace ? false : n.triplet,
       tripletPosition: isGrace ? undefined : n.triplet_position,
       tripletType: isGrace ? undefined : n.triplet_type || n.note_value,
@@ -1149,6 +1201,16 @@ function generateMeasureXmls(
     );
     const beats = durationSpec.beats;
 
+    const staffVoiceIds = (staff: number): string[] =>
+      c.voice_ids?.filter((_, index) => getStaff(midiList[index]) === staff) ||
+      [];
+    const trebleVoiceIds = staffVoiceIds(1);
+    const bassVoiceIds = staffVoiceIds(2);
+    const trebleVoiceId = trebleVoiceIds[0] || c.voice_id;
+    const bassVoiceId = bassVoiceIds[0] || c.voice_id;
+    const trebleVoiceNumber = scoreVoiceNumberFromId(1, trebleVoiceId);
+    const bassVoiceNumber = scoreVoiceNumberFromId(2, bassVoiceId);
+
     // Split chord by staff (with triplet info)
     const trebleXml = chordMidiToXml(
       midiList,
@@ -1160,6 +1222,7 @@ function generateMeasureXmls(
       c.triplet_position,
       c.actual_notes,
       c.normal_notes,
+      trebleVoiceNumber,
     );
     const bassXml = chordMidiToXml(
       midiList,
@@ -1171,6 +1234,7 @@ function generateMeasureXmls(
       c.triplet_position,
       c.actual_notes,
       c.normal_notes,
+      bassVoiceNumber,
     );
 
     if (trebleXml.length > 0) {
@@ -1182,6 +1246,8 @@ function generateMeasureXmls(
         beats,
         xml: trebleXml,
         midiNotes: trebleMidiNotes,
+        voiceId: trebleVoiceId,
+        voiceNumber: trebleVoiceNumber,
         triplet,
         tripletPosition: c.triplet_position,
         tripletType: c.triplet_type || noteType,
@@ -1198,6 +1264,8 @@ function generateMeasureXmls(
         beats,
         xml: bassXml,
         midiNotes: bassMidiNotes,
+        voiceId: bassVoiceId,
+        voiceNumber: bassVoiceNumber,
         triplet,
         tripletPosition: c.triplet_position,
         tripletType: c.triplet_type || noteType,
@@ -1212,10 +1280,18 @@ function generateMeasureXmls(
 
   // Group events by backend beat position for rendering. Raw time still protects
   // against merging same-staff sequential notes into chords.
-  const CROSS_STAFF_TIME_TOLERANCE = 0.025;
-  const SAME_STAFF_TOLERANCE = 0.005; // 5ms — perceptual simultaneity threshold
-  const BEAT_GROUP_TOLERANCE = 1 / 48;
-  const SAME_STAFF_BEAT_TOLERANCE = 1 / 96;
+  // Goebl & Parncutt found real-piano onset order becomes reliable around
+  // 30ms, so use that as the current notation simultaneity experiment.
+  const CROSS_STAFF_TIME_TOLERANCE = 0.03;
+  const SAME_STAFF_TOLERANCE = 0.03;
+  const BEAT_GROUP_TOLERANCE = Math.max(
+    1 / 48,
+    (CROSS_STAFF_TIME_TOLERANCE / 60) * bpm,
+  );
+  const SAME_STAFF_BEAT_TOLERANCE = Math.max(
+    1 / 96,
+    (SAME_STAFF_TOLERANCE / 60) * bpm,
+  );
   type TimeGroup = {
     time: number;
     beatStart: number;
@@ -1320,13 +1396,49 @@ function generateMeasureXmls(
     return estimateGroupIoiBeats(groupIndex);
   };
 
+  const estimateVoiceIoiBeats = (
+    groupIndex: number,
+    staffKey: "treble" | "bass",
+    voiceId?: string,
+  ): number => {
+    if (!voiceId) {
+      return estimateHandIoiBeats(groupIndex, staffKey);
+    }
+
+    const current = timeGroups[groupIndex];
+    const next = timeGroups
+      .slice(groupIndex + 1)
+      .find(
+        (candidate) =>
+          candidate[staffKey].some((event) => event.voiceId === voiceId) &&
+          candidate.beatStart - current.beatStart > BEAT_GROUP_TOLERANCE,
+      );
+    if (next) {
+      return next.beatStart - current.beatStart;
+    }
+
+    const previous = [...timeGroups]
+      .slice(0, groupIndex)
+      .reverse()
+      .find(
+        (candidate) =>
+          candidate[staffKey].some((event) => event.voiceId === voiceId) &&
+          current.beatStart - candidate.beatStart > BEAT_GROUP_TOLERANCE,
+      );
+    if (previous) {
+      return current.beatStart - previous.beatStart;
+    }
+
+    return estimateHandIoiBeats(groupIndex, staffKey);
+  };
+
   for (let groupIndex = 0; groupIndex < timeGroups.length; groupIndex++) {
     for (const staffKey of ["treble", "bass"] as const) {
-      const durationSpec = getIoiDurationSpec(
-        estimateHandIoiBeats(groupIndex, staffKey),
-      );
       for (const ev of timeGroups[groupIndex][staffKey]) {
         if (ev.beats <= 0) continue;
+        const durationSpec = getIoiDurationSpec(
+          estimateVoiceIoiBeats(groupIndex, staffKey, ev.voiceId),
+        );
         ev.beats = durationSpec.beats;
         ev.xml = retimeXmlToDurationSpec(ev.xml, durationSpec);
         ev.triplet = false;
@@ -1409,7 +1521,7 @@ function generateMeasureXmls(
 
   // Merge simultaneous events on the same staff into chords
   // Events within a time group are considered simultaneous
-  const CHORD_MERGE_TOLERANCE = 0;
+  const CHORD_MERGE_TOLERANCE = SAME_STAFF_TOLERANCE;
 
   for (const group of timeGroups) {
     // For treble: sub-group by actual time, only merge within each sub-group
@@ -1419,7 +1531,10 @@ function generateMeasureXmls(
       for (const ev of group.treble) {
         let found = false;
         for (const sg of subGroups) {
-          if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE) {
+          if (
+            Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE &&
+            sg[0].voiceNumber === ev.voiceNumber
+          ) {
             sg.push(ev);
             found = true;
             break;
@@ -1461,6 +1576,8 @@ function generateMeasureXmls(
             beats: maxBeats,
             xml: mergedXml,
             midiNotes: mergedMidiNotes,
+            voiceId: sg[0].voiceId,
+            voiceNumber: sg[0].voiceNumber,
             triplet: sg[0].triplet,
             tripletPosition: sg[0].tripletPosition,
             tripletType: sg[0].tripletType,
@@ -1478,7 +1595,10 @@ function generateMeasureXmls(
       for (const ev of group.bass) {
         let found = false;
         for (const sg of subGroups) {
-          if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE) {
+          if (
+            Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE &&
+            sg[0].voiceNumber === ev.voiceNumber
+          ) {
             sg.push(ev);
             found = true;
             break;
@@ -1518,6 +1638,8 @@ function generateMeasureXmls(
             beats: maxBeats,
             xml: mergedXml,
             midiNotes: mergedMidiNotes,
+            voiceId: sg[0].voiceId,
+            voiceNumber: sg[0].voiceNumber,
             triplet: sg[0].triplet,
             tripletPosition: sg[0].tripletPosition,
             tripletType: sg[0].tripletType,
@@ -1637,6 +1759,7 @@ function generateMeasureXmls(
     beats: number;
     midiNotes: number[];
     staff: number;
+    voiceNumber: number;
     time: number; // original onset time in seconds, for chord merge decisions
   };
   type MeasureData = {
@@ -1653,6 +1776,7 @@ function generateMeasureXmls(
     midiNotes: number[];
     remainingBeats: number;
     staff: number;
+    voiceNumber: number;
   };
   let pendingTrebleTies: PendingTie[] = [];
   let pendingBassTies: PendingTie[] = [];
@@ -1688,6 +1812,7 @@ function generateMeasureXmls(
               segTie,
               !first,
               seg.dotted,
+              tie.voiceNumber,
             ),
           );
           first = false;
@@ -1700,6 +1825,7 @@ function generateMeasureXmls(
         beats: beatsThisMeasure,
         midiNotes: tie.midiNotes,
         staff: 1,
+        voiceNumber: tie.voiceNumber,
         time: -1,
       });
 
@@ -1739,6 +1865,7 @@ function generateMeasureXmls(
               segTie,
               !first,
               seg.dotted,
+              tie.voiceNumber,
             ),
           );
           first = false;
@@ -1751,6 +1878,7 @@ function generateMeasureXmls(
         beats: beatsThisMeasure,
         midiNotes: tie.midiNotes,
         staff: 2,
+        voiceNumber: tie.voiceNumber,
         time: -1,
       });
 
@@ -1775,6 +1903,7 @@ function generateMeasureXmls(
         beats: ev.beats,
         midiNotes: ev.midiNotes || [],
         staff: ev.staff,
+        voiceNumber: ev.voiceNumber,
         time: ev.time,
       });
     } else {
@@ -1808,6 +1937,7 @@ function generateMeasureXmls(
                 segTie,
                 !first,
                 seg.dotted,
+                ev.voiceNumber,
               ),
             );
             first = false;
@@ -1820,6 +1950,7 @@ function generateMeasureXmls(
           beats: beatsThisMeasure,
           midiNotes: ev.midiNotes,
           staff: ev.staff,
+          voiceNumber: ev.voiceNumber,
           time: ev.time,
         });
 
@@ -1828,6 +1959,7 @@ function generateMeasureXmls(
           midiNotes: ev.midiNotes,
           remainingBeats: beatsRemaining,
           staff: ev.staff,
+          voiceNumber: ev.voiceNumber,
         });
       } else {
         // No room in this measure, just queue the whole thing
@@ -1835,6 +1967,7 @@ function generateMeasureXmls(
           midiNotes: ev.midiNotes || [],
           remainingBeats: ev.beats,
           staff: ev.staff,
+          voiceNumber: ev.voiceNumber,
         });
       }
     }
@@ -2026,6 +2159,7 @@ function generateMeasureXmls(
           beats: maxBeats,
           midiNotes: mergedMidi,
           staff: group[0].staff,
+          voiceNumber: group[0].voiceNumber,
           time: group[0].time,
         });
       };
@@ -2039,8 +2173,9 @@ function generateMeasureXmls(
         const sameBeatPos =
           Math.abs(ev.beatPos - currentGroup[0].beatPos) < 0.001;
         const sameTime =
-          Math.abs(ev.time - currentGroup[0].time) < SAME_STAFF_TOLERANCE; // 5ms
-        if (sameBeatPos && sameTime) {
+          Math.abs(ev.time - currentGroup[0].time) < SAME_STAFF_TOLERANCE;
+        const sameVoice = ev.voiceNumber === currentGroup[0].voiceNumber;
+        if (sameBeatPos && sameTime && sameVoice) {
           // Same beat position - add to current group
           currentGroup.push(ev);
         } else {
@@ -2065,6 +2200,7 @@ function generateMeasureXmls(
       midiNotes: number[];
       remainingBeats: number;
       staff: number;
+      voiceNumber: number;
     };
     const clampEventsToMeasure = (
       events: MeasureEventData[],
@@ -2073,12 +2209,13 @@ function generateMeasureXmls(
 
       const result: MeasureEventData[] = [];
       const overflows: ClampOverflow[] = [];
-      let currentBeatEnd = 0; // Track where the last note ended
+      const currentBeatEndByVoice = new Map<number, number>();
 
       for (const ev of events) {
         // Start position is either the original beatPos or where the last note ended
-        // (use max to not overlap if original position is behind current end)
-        const startPos = Math.max(ev.beatPos, currentBeatEnd);
+        // in the same voice. Different voices may overlap on the same staff.
+        const voiceEnd = currentBeatEndByVoice.get(ev.voiceNumber) || 0;
+        const startPos = Math.max(ev.beatPos, voiceEnd);
 
         if (startPos >= BEATS_PER_MEASURE - 0.001) {
           // No room left in this measure. Don't drop the note — carry the
@@ -2089,6 +2226,7 @@ function generateMeasureXmls(
               midiNotes: ev.midiNotes,
               remainingBeats: ev.beats,
               staff: ev.staff,
+              voiceNumber: ev.voiceNumber,
             });
           }
           continue;
@@ -2100,7 +2238,7 @@ function generateMeasureXmls(
         if (ev.beats <= remaining + 0.001) {
           // Event fits - add with updated position
           result.push({ ...ev, beatPos: startPos });
-          currentBeatEnd = startPos + ev.beats;
+          currentBeatEndByVoice.set(ev.voiceNumber, startPos + ev.beats);
         } else {
           // Event needs to be truncated - use the remaining space
           const truncatedBeats = remaining;
@@ -2112,6 +2250,7 @@ function generateMeasureXmls(
                 midiNotes: ev.midiNotes,
                 remainingBeats: ev.beats,
                 staff: ev.staff,
+                voiceNumber: ev.voiceNumber,
               });
             }
             continue;
@@ -2146,6 +2285,7 @@ function generateMeasureXmls(
                   segTie,
                   !first,
                   seg.dotted,
+                  ev.voiceNumber,
                 ),
               );
               first = false;
@@ -2158,6 +2298,7 @@ function generateMeasureXmls(
             beats: truncatedBeats,
             midiNotes: ev.midiNotes,
             staff: ev.staff,
+            voiceNumber: ev.voiceNumber,
             time: ev.time,
           });
 
@@ -2168,10 +2309,11 @@ function generateMeasureXmls(
               midiNotes: ev.midiNotes,
               remainingBeats: overflowBeats,
               staff: ev.staff,
+              voiceNumber: ev.voiceNumber,
             });
           }
 
-          currentBeatEnd = BEATS_PER_MEASURE;
+          currentBeatEndByVoice.set(ev.voiceNumber, BEATS_PER_MEASURE);
         }
       }
 
@@ -2194,8 +2336,10 @@ function generateMeasureXmls(
       const gap = ev.beatPos - trebleBeatPos;
 
       if (gap < -0.001) {
-        // Negative gap: rounding caused trebleBeatPos to overshoot.
-        // Snap back to avoid compounding drift.
+        const backupDivisions = Math.round((trebleBeatPos - ev.beatPos) * 24);
+        if (backupDivisions > 0) {
+          measureContent += `<backup><duration>${backupDivisions}</duration></backup>`;
+        }
         trebleBeatPos = ev.beatPos;
       } else if (gap > MIN_REST_GAP) {
         // Add a rest for the gap — use actual emitted beats for tracking
@@ -2249,8 +2393,10 @@ function generateMeasureXmls(
       const gap = ev.beatPos - bassBeatPos;
 
       if (gap < -0.001) {
-        // Negative gap: rounding caused bassBeatPos to overshoot.
-        // Snap back to avoid compounding drift.
+        const backupDivisions = Math.round((bassBeatPos - ev.beatPos) * 24);
+        if (backupDivisions > 0) {
+          measureContent += `<backup><duration>${backupDivisions}</duration></backup>`;
+        }
         bassBeatPos = ev.beatPos;
       } else if (gap > MIN_REST_GAP) {
         // Add a rest for the gap — use actual emitted beats for tracking

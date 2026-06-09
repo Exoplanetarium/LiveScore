@@ -1,0 +1,13 @@
+midi_note,note_name,query_time_sec,peak_time_sec,time_error_sec,onset_peak,frame_peak,velocity_peak,velocity_int,decoded,diagnosis
+74,D5,0.6536,0.656,0.0024,0.4427,0.5497,0.4872,62,False,frame_present_no_onset
+74,D5,0.9023,0.896,-0.0063,0.2693,0.5538,0.468,59,False,frame_present_no_onset
+74,D5,1.3034,1.312,0.0086,0.5237,0.6226,0.4754,60,False,frame_present_weak_onset
+62,D4,1.3893,1.392,0.0027,0.587,0.6871,0.7115,90,False,frame_present_weak_onset
+73,C#5,1.6953,1.728,0.0327,0.1802,0.6211,0.527,67,False,frame_present_no_onset
+52,E3,1.8125,1.808,-0.0045,0.7291,0.8694,0.4917,62,False,frame_present_weak_onset
+55,G3,2.0859,2.08,-0.0059,0.0931,0.4686,0.5566,71,False,absent_or_buried
+52,E3,2.0885,2.112,0.0235,0.0461,0.453,0.4891,62,False,absent_or_buried
+73,C#5,2.1732,2.176,0.0028,0.6794,0.7989,0.55,70,False,frame_present_weak_onset
+76,E5,2.2461,2.112,-0.1341,0.6552,0.9059,0.5603,71,False,frame_present_weak_onset
+73,C#5,2.3125,2.192,-0.1205,0.6502,0.6734,0.5017,64,False,frame_present_weak_onset
+55,G3,2.3646,2.368,0.0034,0.6221,0.6342,0.5761,73,False,frame_present_weak_onset

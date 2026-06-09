@@ -184,6 +184,25 @@ interface LiveStreamNotePayload {
   last_seen_time?: number;
 }
 
+interface LiveStreamDebugSample {
+  midi?: number;
+  onset?: number;
+  offset?: number;
+  confidence?: number;
+  source?: string;
+  attack_ratio?: number;
+  attack_delta?: number;
+  strong_attack?: boolean;
+  reason?: string;
+  id?: number;
+  audio_time?: number;
+  base_midi?: number;
+  interval?: number;
+  existing_midi?: number;
+  existing_onset_time?: number;
+  repeat_gap_ms?: number;
+}
+
 interface LiveStreamUpdate {
   type: string;
   session?: {
@@ -220,6 +239,29 @@ interface LiveStreamUpdate {
       neural_model?: string;
       live_onset_threshold?: number;
       live_onset_threshold_profile?: string;
+    };
+    continuity_filter?: {
+      input?: number;
+      kept?: number;
+      suppressed?: number;
+      same_pitch_boundary?: number;
+      implausible_repeat?: number;
+      harmonic_sustain?: number;
+      weak_birth_outside_attack?: number;
+      attack_groups?: number;
+      registered_attack_groups?: number;
+      total_suppressed?: number;
+      suppressed_samples?: LiveStreamDebugSample[];
+    };
+    hypothesis_update?: {
+      input?: number;
+      created?: number;
+      matched?: number;
+      stale_skipped?: number;
+      promoted_active?: number;
+      promoted_committed?: number;
+      promoted_locked?: number;
+      birth_samples?: LiveStreamDebugSample[];
     };
   };
   warmup?: {
@@ -617,6 +659,15 @@ export default function LiveTranscriptionScreen() {
   const liveStreamRecordingStartedAtRef = useRef<number | null>(null);
   const liveStreamFirstPacketSentAtRef = useRef<number | null>(null);
   const lastLiveStreamLatencyLogAtRef = useRef(0);
+  const liveDebugBirthsRef = useRef(0);
+  const liveDebugMatchedRef = useRef(0);
+  const liveDebugStaleSkippedRef = useRef(0);
+  const liveDebugSuppressedRef = useRef(0);
+  const liveDebugPromotedActiveRef = useRef(0);
+  const liveDebugPromotedCommittedRef = useRef(0);
+  const liveDebugPromotedLockedRef = useRef(0);
+  const liveDebugBirthSamplesRef = useRef<LiveStreamDebugSample[]>([]);
+  const liveDebugSuppressedSamplesRef = useRef<LiveStreamDebugSample[]>([]);
   // Track concurrent uploads so the spinner only clears when the queue drains.
   const inFlightUploadsRef = useRef(0);
   const [hasStoppedRecording, setHasStoppedRecording] = useState(false);
@@ -945,6 +996,32 @@ export default function LiveTranscriptionScreen() {
 
       if (data.type === "live_stream_update") {
         if (data.inference?.ran) {
+          const hypothesisUpdate = data.inference.hypothesis_update;
+          const continuityFilter = data.inference.continuity_filter;
+          liveDebugBirthsRef.current += hypothesisUpdate?.created ?? 0;
+          liveDebugMatchedRef.current += hypothesisUpdate?.matched ?? 0;
+          liveDebugStaleSkippedRef.current +=
+            hypothesisUpdate?.stale_skipped ?? 0;
+          liveDebugSuppressedRef.current += continuityFilter?.suppressed ?? 0;
+          liveDebugPromotedActiveRef.current +=
+            hypothesisUpdate?.promoted_active ?? 0;
+          liveDebugPromotedCommittedRef.current +=
+            hypothesisUpdate?.promoted_committed ?? 0;
+          liveDebugPromotedLockedRef.current +=
+            hypothesisUpdate?.promoted_locked ?? 0;
+          if (hypothesisUpdate?.birth_samples?.length) {
+            liveDebugBirthSamplesRef.current = [
+              ...liveDebugBirthSamplesRef.current,
+              ...hypothesisUpdate.birth_samples,
+            ].slice(-12);
+          }
+          if (continuityFilter?.suppressed_samples?.length) {
+            liveDebugSuppressedSamplesRef.current = [
+              ...liveDebugSuppressedSamplesRef.current,
+              ...continuityFilter.suppressed_samples,
+            ].slice(-12);
+          }
+
           const nowMs = Date.now();
           const backendAudioTimeMs =
             ((data.session?.audio_time_sec ??
@@ -980,10 +1057,30 @@ export default function LiveTranscriptionScreen() {
             const previewMaxQueueWaitMs =
               maxLivePreviewQueueWaitMsRef.current;
             const previewDataLagMs = lastLivePreviewDataLagMsRef.current;
+            const noteBirths = liveDebugBirthsRef.current;
+            const noteMatches = liveDebugMatchedRef.current;
+            const noteStaleSkipped = liveDebugStaleSkippedRef.current;
+            const noteSuppressed = liveDebugSuppressedRef.current;
+            const notePromotedActive = liveDebugPromotedActiveRef.current;
+            const notePromotedCommitted =
+              liveDebugPromotedCommittedRef.current;
+            const notePromotedLocked = liveDebugPromotedLockedRef.current;
+            const noteBirthSamples = liveDebugBirthSamplesRef.current;
+            const noteSuppressedSamples =
+              liveDebugSuppressedSamplesRef.current;
             coalescedLivePreviewUpdatesRef.current = 0;
             droppedLivePreviewUpdatesRef.current = 0;
             livePreviewFlushCountRef.current = 0;
             maxLivePreviewQueueWaitMsRef.current = 0;
+            liveDebugBirthsRef.current = 0;
+            liveDebugMatchedRef.current = 0;
+            liveDebugStaleSkippedRef.current = 0;
+            liveDebugSuppressedRef.current = 0;
+            liveDebugPromotedActiveRef.current = 0;
+            liveDebugPromotedCommittedRef.current = 0;
+            liveDebugPromotedLockedRef.current = 0;
+            liveDebugBirthSamplesRef.current = [];
+            liveDebugSuppressedSamplesRef.current = [];
             console.log("[LiveStream] latency", {
               wallElapsedMs,
               packetElapsedMs:
@@ -1035,6 +1132,30 @@ export default function LiveTranscriptionScreen() {
                 data.inference.analysis_summary?.live_onset_threshold,
               onsetProfile:
                 data.inference.analysis_summary?.live_onset_threshold_profile,
+              continuitySuppressed: continuityFilter?.suppressed,
+              continuitySamePitchBoundary:
+                continuityFilter?.same_pitch_boundary,
+              continuityImplausibleRepeat:
+                continuityFilter?.implausible_repeat,
+              continuityHarmonicSustain:
+                continuityFilter?.harmonic_sustain,
+              continuityWeakBirthOutsideAttack:
+                continuityFilter?.weak_birth_outside_attack,
+              continuityAttackGroups: continuityFilter?.attack_groups,
+              continuityRegisteredAttackGroups:
+                continuityFilter?.registered_attack_groups,
+              continuityTotalSuppressed:
+                continuityFilter?.total_suppressed,
+              noteBirths,
+              noteMatches,
+              noteStaleSkipped,
+              noteSuppressed,
+              notePromotedActive,
+              notePromotedCommitted,
+              notePromotedLocked,
+              noteBirthSamples,
+              noteSuppressedSamples,
+              liveCounts: data.counts,
             });
           }
 
@@ -1118,6 +1239,15 @@ export default function LiveTranscriptionScreen() {
       liveStreamFirstPacketSentAtRef.current = null;
       liveStreamNotePayloadsRef.current = new Map();
       liveStreamAnalysisSignatureRef.current = "";
+      liveDebugBirthsRef.current = 0;
+      liveDebugMatchedRef.current = 0;
+      liveDebugStaleSkippedRef.current = 0;
+      liveDebugSuppressedRef.current = 0;
+      liveDebugPromotedActiveRef.current = 0;
+      liveDebugPromotedCommittedRef.current = 0;
+      liveDebugPromotedLockedRef.current = 0;
+      liveDebugBirthSamplesRef.current = [];
+      liveDebugSuppressedSamplesRef.current = [];
       clearLivePreviewQueue();
       setLivePreviewResult(null);
 
@@ -1313,6 +1443,15 @@ export default function LiveTranscriptionScreen() {
       liveStreamRecordingStartedAtRef.current = null;
       liveStreamFirstPacketSentAtRef.current = null;
       lastLiveStreamLatencyLogAtRef.current = 0;
+      liveDebugBirthsRef.current = 0;
+      liveDebugMatchedRef.current = 0;
+      liveDebugStaleSkippedRef.current = 0;
+      liveDebugSuppressedRef.current = 0;
+      liveDebugPromotedActiveRef.current = 0;
+      liveDebugPromotedCommittedRef.current = 0;
+      liveDebugPromotedLockedRef.current = 0;
+      liveDebugBirthSamplesRef.current = [];
+      liveDebugSuppressedSamplesRef.current = [];
       recordingTimerStartedAtRef.current = null;
       currentChunkStartedAtRef.current = null;
       chunkSequenceRef.current = 0;

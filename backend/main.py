@@ -276,6 +276,40 @@ def _note_payload_from_hypothesis(hypothesis: Dict) -> Dict:
     }
 
 
+STREAM_ATTACK_PRE_SEC = 0.08
+STREAM_ATTACK_POST_SEC = 0.08
+STREAM_ATTACK_GAP_SEC = 0.012
+STREAM_ATTACK_RATIO_STRONG = 1.45
+STREAM_ATTACK_DELTA_STRONG = 0.010
+STREAM_CONTINUITY_BOUNDARY_SEC = 0.30
+STREAM_SAME_PITCH_RECENT_SEC = 0.45
+STREAM_MIN_REPEAT_SEC = 0.20
+STREAM_HARMONIC_RECENT_SEC = 1.20
+STREAM_HARMONIC_INTERVALS = {0, 4, 7}
+STREAM_DEBUG_SAMPLE_LIMIT = 12
+STREAM_ATTACK_GROUP_MERGE_SEC = 0.12
+STREAM_ATTACK_GROUP_RESCUE_SEC = 0.25
+STREAM_ATTACK_GROUP_KEEP_SEC = 3.0
+STREAM_ATTACK_GROUP_RESCUE_MIN_CONFIDENCE = 0.50
+STREAM_HARMONIC_SUPPRESS_MAX_CONFIDENCE = 0.78
+STREAM_WEAK_BIRTH_HIGH_CONFIDENCE = 0.86
+
+# Soft inner voices sounded under held louder notes produce almost no audio-RMS
+# attack, so the RMS-based weak-attack heuristic cannot see them and the
+# weak-birth / harmonic-sustain gates delete real notes. The model's frame head
+# does see them: a real note sustains for several frames (decoded duration well
+# above the single-frame floor), while live-decode noise is a 1-frame blip.
+# STREAM_FRAME_EVIDENCE_SEC lets a weak-attack observation be *born* when the
+# model sustains it; persistence then decides whether it reaches the score.
+STREAM_FRAME_EVIDENCE_SEC = 0.08
+# A born hypothesis only reaches the displayed (committed) surface once it is
+# either re-observed across enough overlapping windows (real notes recur many
+# times; noise is seen once or twice) OR carries strong frame evidence. This is
+# what rejects the noise that floods in when the birth gates are merely relaxed.
+STREAM_MIN_DISPLAY_OBSERVATIONS = 3
+STREAM_DISPLAY_FRAME_EVIDENCE_SEC = 0.15
+
+
 class ContinuousLiveStreamSession:
     """Continuous packet-driven live transcription state.
 
@@ -312,8 +346,10 @@ class ContinuousLiveStreamSession:
         self.first_audio_wall_time: Optional[float] = None
         self.next_note_id = 1
         self.hypotheses: List[Dict] = []
+        self.attack_groups: List[Dict] = []
         self.received_packet_count = 0
         self.skipped_inference_count = 0
+        self.continuity_filter_total: Dict[str, int] = defaultdict(int)
         self.last_packet_sequence: Optional[int] = None
         self.last_client_sent_at_ms: Optional[float] = None
         self.last_server_received_at_ms: Optional[float] = None
@@ -428,10 +464,14 @@ class ContinuousLiveStreamSession:
                 )
 
             window_start_sec = float(window_start_sample) / float(self.sample_rate)
-            observations = self._observations_from_result(result, window_start_sec)
+            observations = self._observations_from_result(result, window_start_sec, window_audio)
             with self._lock:
+                observations, continuity_filter = self._filter_stream_continuity(
+                    observations,
+                    window_start_sec,
+                )
                 trusted_cutoff_sec = max(0.0, self.current_time_sec - self.trusted_delay_sec)
-                self._update_hypotheses(observations, trusted_cutoff_sec)
+                hypothesis_update = self._update_hypotheses(observations, trusted_cutoff_sec)
                 self._age_hypotheses()
 
             return self._build_update(
@@ -444,6 +484,8 @@ class ContinuousLiveStreamSession:
                 stream_backlog_sec=stream_backlog_sec,
                 neural_timing=result.get("_timing_ms") or {},
                 analysis_summary=result.get("analysis_summary") or {},
+                continuity_filter=continuity_filter,
+                hypothesis_update=hypothesis_update,
             )
 
     def warmup_live_path(self) -> Dict:
@@ -470,19 +512,22 @@ class ContinuousLiveStreamSession:
             "error": result.get("error"),
         })
 
-    def _observations_from_result(self, result: Dict, window_start_sec: float) -> List[Dict]:
+    def _observations_from_result(self, result: Dict, window_start_sec: float, window_audio: np.ndarray) -> List[Dict]:
         observations: List[Dict] = []
 
         for note in result.get("notes") or []:
             onset = window_start_sec + float(note.get("time_seconds", 0.0) or 0.0)
             duration = float(note.get("duration_seconds", 0.0) or 0.0)
             offset = window_start_sec + float(note.get("offset_seconds", note.get("time_seconds", 0.0) + duration) or 0.0)
+            attack = self._attack_metrics(window_audio, onset - window_start_sec)
             observations.append({
                 "midi_note": int(note.get("midi_note", 0) or 0),
                 "onset_time": onset,
                 "offset_time": max(offset, onset + max(duration, 0.04)),
                 "confidence": float(note.get("confidence", 0.0) or 0.0),
                 "source": "note",
+                "decode_source": note.get("decode_source"),
+                **attack,
             })
 
         for chord in result.get("chords") or []:
@@ -490,17 +535,357 @@ class ContinuousLiveStreamSession:
             duration = float(chord.get("duration_seconds", 0.0) or 0.0)
             offset = window_start_sec + float(chord.get("offset_seconds", chord.get("time_seconds", 0.0) + duration) or 0.0)
             confidence = float(chord.get("confidence", 0.0) or 0.0)
-            for midi_note in chord.get("midi_notes") or []:
+            attack = self._attack_metrics(window_audio, onset - window_start_sec)
+            decode_sources = chord.get("decode_sources") or []
+            for idx, midi_note in enumerate(chord.get("midi_notes") or []):
                 observations.append({
                     "midi_note": int(midi_note),
                     "onset_time": onset,
                     "offset_time": max(offset, onset + max(duration, 0.04)),
                     "confidence": confidence,
                     "source": "chord_member",
+                    "decode_source": decode_sources[idx] if idx < len(decode_sources) else None,
+                    **attack,
                 })
 
         observations.sort(key=lambda item: (item["onset_time"], item["midi_note"]))
         return observations
+
+    def _attack_metrics(self, window_audio: np.ndarray, local_onset_sec: float) -> Dict:
+        onset_sample = int(round(float(local_onset_sec) * self.sample_rate))
+        if window_audio.size == 0 or onset_sample < 0 or onset_sample >= window_audio.size:
+            return {
+                "attack_ratio": 1.0,
+                "attack_delta": 0.0,
+                "has_strong_attack": False,
+            }
+
+        pre_start = max(0, onset_sample - int(round(STREAM_ATTACK_PRE_SEC * self.sample_rate)))
+        pre_end = max(pre_start, onset_sample - int(round(STREAM_ATTACK_GAP_SEC * self.sample_rate)))
+        post_start = onset_sample
+        post_end = min(window_audio.size, onset_sample + int(round(STREAM_ATTACK_POST_SEC * self.sample_rate)))
+        pre = window_audio[pre_start:pre_end]
+        post = window_audio[post_start:post_end]
+        if pre.size == 0 or post.size == 0:
+            return {
+                "attack_ratio": 1.0,
+                "attack_delta": 0.0,
+                "has_strong_attack": False,
+            }
+
+        pre_rms = float(np.sqrt(np.mean(np.square(pre, dtype=np.float32))) + 1e-6)
+        post_rms = float(np.sqrt(np.mean(np.square(post, dtype=np.float32))) + 1e-6)
+        attack_ratio = post_rms / pre_rms
+        attack_delta = post_rms - pre_rms
+        return {
+            "attack_ratio": float(attack_ratio),
+            "attack_delta": float(attack_delta),
+            "has_strong_attack": bool(
+                attack_ratio >= STREAM_ATTACK_RATIO_STRONG
+                or attack_delta >= STREAM_ATTACK_DELTA_STRONG
+            ),
+        }
+
+    def _append_observation_debug_sample(
+        self,
+        target: List[Dict],
+        observation: Dict,
+        reason: Optional[str] = None,
+        extra: Optional[Dict] = None,
+    ) -> None:
+        if len(target) >= STREAM_DEBUG_SAMPLE_LIMIT:
+            return
+        onset = float(observation.get("onset_time", 0.0) or 0.0)
+        sample = {
+            "midi": int(observation.get("midi_note", 0) or 0),
+            "onset": round(onset, 4),
+            "offset": round(float(observation.get("offset_time", onset) or onset), 4),
+            "confidence": round(float(observation.get("confidence", 0.0) or 0.0), 3),
+            "source": str(observation.get("source") or "unknown"),
+            "attack_ratio": round(float(observation.get("attack_ratio", 1.0) or 1.0), 3),
+            "attack_delta": round(float(observation.get("attack_delta", 0.0) or 0.0), 4),
+            "strong_attack": bool(observation.get("has_strong_attack")),
+        }
+        if reason:
+            sample["reason"] = reason
+        if extra:
+            sample.update(extra)
+        if observation.get("decode_source"):
+            sample["decode_source"] = str(observation.get("decode_source"))
+        target.append(sample)
+
+    def _same_pitch_recent_hypothesis(self, pitch: int, onset: float) -> Optional[Dict]:
+        best: Optional[Dict] = None
+        best_gap: Optional[float] = None
+        for hypothesis in self.hypotheses:
+            if int(hypothesis.get("midi_note", -1)) != pitch:
+                continue
+            hyp_onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
+            hyp_offset = float(hypothesis.get("offset_time", hyp_onset) or hyp_onset)
+            hyp_last_seen = float(hypothesis.get("last_seen_time", hyp_onset) or hyp_onset)
+            if hyp_onset > onset + 0.06:
+                continue
+            overlap_gap = onset - hyp_offset
+            seen_gap = self.current_time_sec - hyp_last_seen
+            repeat_gap = onset - hyp_onset
+            is_recent = (
+                overlap_gap <= STREAM_SAME_PITCH_RECENT_SEC
+                or seen_gap <= STREAM_SAME_PITCH_RECENT_SEC
+                or repeat_gap <= STREAM_MIN_REPEAT_SEC
+            )
+            if not is_recent:
+                continue
+            score_gap = max(0.0, min(overlap_gap, seen_gap, repeat_gap))
+            if best_gap is None or score_gap < best_gap:
+                best = hypothesis
+                best_gap = score_gap
+        return best
+
+    def _lower_harmonic_explainer(self, pitch: int, onset: float) -> Optional[Dict]:
+        best: Optional[Dict] = None
+        best_interval: Optional[int] = None
+        now_sec = self.current_time_sec
+        for hypothesis in self.hypotheses:
+            base_pitch = int(hypothesis.get("midi_note", -1))
+            interval = pitch - base_pitch
+            if interval < 7 or interval > 36:
+                continue
+            if interval % 12 not in STREAM_HARMONIC_INTERVALS:
+                continue
+
+            hyp_onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
+            hyp_offset = float(hypothesis.get("offset_time", hyp_onset) or hyp_onset)
+            hyp_last_seen = float(hypothesis.get("last_seen_time", hyp_onset) or hyp_onset)
+            is_sounding = hyp_offset >= onset - STREAM_HARMONIC_RECENT_SEC
+            was_recently_seen = now_sec - hyp_last_seen <= STREAM_HARMONIC_RECENT_SEC
+            if not (is_sounding or was_recently_seen):
+                continue
+            if best_interval is None or interval < best_interval:
+                best = hypothesis
+                best_interval = interval
+        return best
+
+    def _prune_attack_groups(self) -> None:
+        now_sec = self.current_time_sec
+        self.attack_groups = [
+            group
+            for group in self.attack_groups
+            if now_sec - float(group.get("last_seen_time", group.get("time", 0.0)) or 0.0)
+            <= STREAM_ATTACK_GROUP_KEEP_SEC
+        ]
+
+    def _register_attack_groups(self, observations: List[Dict]) -> int:
+        self._prune_attack_groups()
+        registered = 0
+        for observation in observations:
+            if not bool(observation.get("has_strong_attack")):
+                continue
+            onset = float(observation.get("onset_time", 0.0) or 0.0)
+            pitch = int(observation.get("midi_note", 0) or 0)
+            strength = max(
+                float(observation.get("attack_ratio", 1.0) or 1.0),
+                1.0 + (float(observation.get("attack_delta", 0.0) or 0.0) * 100.0),
+            )
+            best = None
+            best_error = None
+            for group in self.attack_groups:
+                error = abs(float(group.get("time", 0.0) or 0.0) - onset)
+                if error <= STREAM_ATTACK_GROUP_MERGE_SEC and (
+                    best_error is None or error < best_error
+                ):
+                    best = group
+                    best_error = error
+            if best is None:
+                self.attack_groups.append({
+                    "time": onset,
+                    "strength": strength,
+                    "pitches": {pitch},
+                    "last_seen_time": self.current_time_sec,
+                })
+                registered += 1
+            else:
+                count = int(best.get("count", len(best.get("pitches", [])) or 1) or 1)
+                best["time"] = ((float(best.get("time", onset) or onset) * count) + onset) / float(count + 1)
+                best["strength"] = max(float(best.get("strength", 0.0) or 0.0), strength)
+                pitches = best.get("pitches")
+                if not isinstance(pitches, set):
+                    pitches = set(pitches or [])
+                pitches.add(pitch)
+                best["pitches"] = pitches
+                best["count"] = count + 1
+                best["last_seen_time"] = self.current_time_sec
+        return registered
+
+    def _nearest_attack_group(self, onset: float) -> Optional[Dict]:
+        self._prune_attack_groups()
+        best = None
+        best_error = None
+        for group in self.attack_groups:
+            error = abs(float(group.get("time", 0.0) or 0.0) - onset)
+            if error <= STREAM_ATTACK_GROUP_RESCUE_SEC and (
+                best_error is None or error < best_error
+            ):
+                best = group
+                best_error = error
+        return best
+
+    def _filter_stream_continuity(
+        self,
+        observations: List[Dict],
+        window_start_sec: float,
+    ) -> Tuple[List[Dict], Dict]:
+        stats = {
+            "input": len(observations),
+            "kept": 0,
+            "suppressed": 0,
+            "same_pitch_boundary": 0,
+            "implausible_repeat": 0,
+            "harmonic_sustain": 0,
+            "weak_birth_outside_attack": 0,
+            "attack_groups": len(self.attack_groups),
+            "registered_attack_groups": 0,
+            "suppressed_samples": [],
+            "total_suppressed": int(self.continuity_filter_total.get("suppressed", 0)),
+        }
+        if not observations:
+            self._prune_attack_groups()
+            stats["attack_groups"] = len(self.attack_groups)
+            return observations, stats
+
+        stats["registered_attack_groups"] = self._register_attack_groups(observations)
+        stats["attack_groups"] = len(self.attack_groups)
+
+        kept: List[Dict] = []
+        for observation in observations:
+            pitch = int(observation.get("midi_note", 0) or 0)
+            onset = float(observation.get("onset_time", 0.0) or 0.0)
+            local_onset = onset - window_start_sec
+            strong_attack = bool(observation.get("has_strong_attack"))
+            attack_ratio = float(observation.get("attack_ratio", 1.0) or 1.0)
+            attack_delta = float(observation.get("attack_delta", 0.0) or 0.0)
+            weak_attack = (
+                not strong_attack
+                and attack_ratio < STREAM_ATTACK_RATIO_STRONG
+                and attack_delta < STREAM_ATTACK_DELTA_STRONG
+            )
+
+            if self._match_hypothesis(observation) is not None:
+                kept.append(observation)
+                continue
+
+            same_pitch = self._same_pitch_recent_hypothesis(pitch, onset)
+            if same_pitch is not None and weak_attack:
+                hyp_onset = float(same_pitch.get("onset_time", onset) or onset)
+                repeat_gap = onset - hyp_onset
+                if local_onset <= STREAM_CONTINUITY_BOUNDARY_SEC:
+                    stats["same_pitch_boundary"] += 1
+                    stats["suppressed"] += 1
+                    self._append_observation_debug_sample(
+                        stats["suppressed_samples"],
+                        observation,
+                        reason="same_pitch_boundary",
+                        extra={
+                            "existing_midi": int(same_pitch.get("midi_note", pitch) or pitch),
+                            "existing_onset_time": round(hyp_onset, 4),
+                        },
+                    )
+                    continue
+                if repeat_gap <= STREAM_MIN_REPEAT_SEC:
+                    stats["implausible_repeat"] += 1
+                    stats["suppressed"] += 1
+                    self._append_observation_debug_sample(
+                        stats["suppressed_samples"],
+                        observation,
+                        reason="implausible_repeat",
+                        extra={
+                            "existing_midi": int(same_pitch.get("midi_note", pitch) or pitch),
+                            "repeat_gap_ms": int(round(max(0.0, repeat_gap) * 1000.0)),
+                        },
+                    )
+                    continue
+
+            confidence = float(observation.get("confidence", 0.0) or 0.0)
+            attack_group = self._nearest_attack_group(onset)
+
+            decode_source = str(observation.get("decode_source") or "")
+            # Calibrated inner-voice rescues are deliberate below-threshold events
+            # snapped onto a real attack cluster, so they must bypass both the
+            # harmonic-sustain and weak-birth gates that exist to kill incidental
+            # ring-out. Without this they are dropped exactly like the misses we
+            # are trying to recover (quiet voices above a held outer note).
+            lattice_rescued = decode_source == "lattice_calibrated"
+
+            # Model frame evidence: a quiet inner voice the model sustains for
+            # several frames is real even though its audio-RMS attack is weak.
+            # This is the only signal that lets such notes be born; persistence
+            # (below, at promotion time) then keeps noise out of the score.
+            note_duration = float(observation.get("offset_time", onset) or onset) - onset
+            has_frame_evidence = note_duration >= STREAM_FRAME_EVIDENCE_SEC
+
+            harmonic_base = self._lower_harmonic_explainer(pitch, onset)
+            if (
+                harmonic_base is not None
+                and attack_group is None
+                and weak_attack
+                and not lattice_rescued
+                and not has_frame_evidence
+                and confidence < STREAM_HARMONIC_SUPPRESS_MAX_CONFIDENCE
+            ):
+                stats["harmonic_sustain"] += 1
+                stats["suppressed"] += 1
+                self._append_observation_debug_sample(
+                    stats["suppressed_samples"],
+                    observation,
+                    reason="harmonic_sustain",
+                    extra={
+                        "base_midi": int(harmonic_base.get("midi_note", 0) or 0),
+                        "interval": int(pitch - int(harmonic_base.get("midi_note", pitch) or pitch)),
+                    },
+                )
+                continue
+
+            source = str(observation.get("source") or "")
+            can_rescue_from_decode = decode_source in {
+                "soft_polyphony_rescue",
+                "lattice_calibrated",
+            }
+            can_rescue_from_attack_group = (
+                attack_group is not None
+                and (
+                    source == "chord_member"
+                    or confidence >= STREAM_ATTACK_GROUP_RESCUE_MIN_CONFIDENCE
+                )
+            )
+            if (
+                weak_attack
+                and not can_rescue_from_decode
+                and not can_rescue_from_attack_group
+                and not has_frame_evidence
+                and confidence < STREAM_WEAK_BIRTH_HIGH_CONFIDENCE
+            ):
+                stats["weak_birth_outside_attack"] += 1
+                stats["suppressed"] += 1
+                extra = {}
+                if attack_group is not None:
+                    extra["attack_group_time"] = round(float(attack_group.get("time", 0.0) or 0.0), 4)
+                    extra["attack_group_dt_ms"] = int(round(abs(onset - float(attack_group.get("time", 0.0) or 0.0)) * 1000.0))
+                self._append_observation_debug_sample(
+                    stats["suppressed_samples"],
+                    observation,
+                    reason="weak_birth_outside_attack",
+                    extra=extra,
+                )
+                continue
+
+            kept.append(observation)
+
+        stats["kept"] = len(kept)
+        for key, value in stats.items():
+            if key == "suppressed_samples":
+                continue
+            self.continuity_filter_total[key] += int(value)
+        stats["total_suppressed"] = int(self.continuity_filter_total.get("suppressed", 0))
+        return kept, stats
 
     def _match_hypothesis(self, observation: Dict, tolerance_sec: float = 0.06) -> Optional[Dict]:
         pitch = int(observation["midi_note"])
@@ -516,11 +901,22 @@ class ContinuousLiveStreamSession:
                 best_error = error
         return best
 
-    def _update_hypotheses(self, observations: List[Dict], trusted_cutoff_sec: float) -> None:
+    def _update_hypotheses(self, observations: List[Dict], trusted_cutoff_sec: float) -> Dict:
         now_sec = self.current_time_sec
+        stats = {
+            "input": len(observations),
+            "created": 0,
+            "matched": 0,
+            "stale_skipped": 0,
+            "promoted_active": 0,
+            "promoted_committed": 0,
+            "promoted_locked": 0,
+            "birth_samples": [],
+        }
         for observation in observations:
             onset = float(observation["onset_time"])
             if onset < max(0.0, now_sec - self.context_sec - 0.25):
+                stats["stale_skipped"] += 1
                 continue
 
             hypothesis = self._match_hypothesis(observation)
@@ -538,6 +934,18 @@ class ContinuousLiveStreamSession:
                 }
                 self.next_note_id += 1
                 self.hypotheses.append(hypothesis)
+                stats["created"] += 1
+                self._append_observation_debug_sample(
+                    stats["birth_samples"],
+                    observation,
+                    reason="created",
+                    extra={
+                        "id": int(hypothesis["id"]),
+                        "audio_time": round(now_sec, 4),
+                    },
+                )
+            else:
+                stats["matched"] += 1
 
             observations_count = int(hypothesis.get("observations", 0) or 0) + 1
             old_conf = float(hypothesis.get("confidence", 0.0) or 0.0)
@@ -550,18 +958,48 @@ class ContinuousLiveStreamSession:
             hypothesis["observations"] = observations_count
             hypothesis["last_seen_time"] = now_sec
 
-            if onset <= trusted_cutoff_sec and str(hypothesis.get("state")) == "candidate":
+            # Persistence/frame-evidence gate for reaching any displayed surface.
+            # Real notes are re-observed across many overlapping windows or carry
+            # strong frame evidence; single-window decode noise has neither, so it
+            # stays a (hidden) candidate and ages out instead of entering the score.
+            display_duration = (
+                float(hypothesis.get("offset_time", onset) or onset)
+                - float(hypothesis.get("onset_time", onset) or onset)
+            )
+            display_ready = (
+                observations_count >= STREAM_MIN_DISPLAY_OBSERVATIONS
+                or display_duration >= STREAM_DISPLAY_FRAME_EVIDENCE_SEC
+            )
+            if (
+                onset <= trusted_cutoff_sec
+                and str(hypothesis.get("state")) == "candidate"
+                and display_ready
+            ):
                 hypothesis["state"] = "active"
+                stats["promoted_active"] += 1
 
         for hypothesis in self.hypotheses:
             state = str(hypothesis.get("state") or "candidate")
             onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
-            if state in {"candidate", "active"} and onset <= now_sec - self.commit_delay_sec:
+            obs = int(hypothesis.get("observations", 0) or 0)
+            dur = float(hypothesis.get("offset_time", onset) or onset) - onset
+            display_ready = (
+                obs >= STREAM_MIN_DISPLAY_OBSERVATIONS
+                or dur >= STREAM_DISPLAY_FRAME_EVIDENCE_SEC
+            )
+            if (
+                state in {"candidate", "active"}
+                and onset <= now_sec - self.commit_delay_sec
+                and display_ready
+            ):
                 hypothesis["state"] = "committed"
                 hypothesis["committed_time"] = now_sec
+                stats["promoted_committed"] += 1
             if state == "committed" and onset <= now_sec - self.lock_delay_sec:
                 hypothesis["state"] = "locked"
                 hypothesis["locked_time"] = now_sec
+                stats["promoted_locked"] += 1
+        return stats
 
     def _age_hypotheses(self) -> None:
         now_sec = self.current_time_sec
@@ -570,7 +1008,7 @@ class ContinuousLiveStreamSession:
             state = str(hypothesis.get("state") or "candidate")
             last_seen = float(hypothesis.get("last_seen_time", 0.0) or 0.0)
             onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
-            if state == "candidate" and (now_sec - last_seen) > 1.0:
+            if state in {"candidate", "active"} and (now_sec - last_seen) > 1.0:
                 continue
             if state in {"committed", "locked"} and onset < now_sec - 60.0:
                 continue

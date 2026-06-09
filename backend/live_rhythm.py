@@ -92,6 +92,8 @@ LIVE_TEMPO_NATURAL_MAX_BPM = 160.0
 # tempo error and the tracker collapses to 193/230/240 on busy passages. Fold the
 # estimate back into the natural range as a prior. Env-gated for A/B testing.
 LIVE_TEMPO_OCTAVE_GUARD = os.environ.get("LIVE_TEMPO_OCTAVE_GUARD", "1") != "0"
+LIVE_SCORE_DURATION_POLICY = os.environ.get("LIVE_SCORE_DURATION_POLICY", "ioi_same_voice")
+LIVE_VOICE_ASSIGNMENT = os.environ.get("LIVE_VOICE_ASSIGNMENT", "pitch_lanes")
 DISPLAY_EVENT_DEDUPE_TOLERANCE_SEC = 0.05
 DISPLAY_EVENT_GROUP_TOLERANCE_SEC = 0.03
 DISPLAY_CHORD_RECONCILE_TOLERANCE_SEC = 0.01
@@ -157,6 +159,133 @@ def _cluster_live_onset_times(
 def _note_name_from_midi(midi_note: int) -> str:
     octave = (int(midi_note) // 12) - 1
     return f"{MIDI_NOTE_NAMES[int(midi_note) % 12]}{octave}"
+
+
+def _event_midi_pitch(event: Dict) -> Optional[int]:
+    try:
+        if event.get('midi_note') is not None:
+            return int(event.get('midi_note'))
+        midi_notes = event.get('midi_notes') or []
+        if midi_notes:
+            return int(min(int(note) for note in midi_notes))
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _event_hand(event: Dict) -> str:
+    hand = str(event.get('hand') or '').lower()
+    if hand in ('bass', 'treble'):
+        return hand
+    pitch = _event_midi_pitch(event)
+    return 'bass' if pitch is not None and pitch < 60 else 'treble'
+
+
+def _voice_id_from_pitch(hand: str, pitch: Optional[int]) -> Tuple[str, int]:
+    if pitch is None:
+        index = 1
+    elif hand == 'treble':
+        if pitch >= 72:
+            index = 0
+        elif pitch >= 60:
+            index = 1
+        else:
+            index = 2
+    else:
+        if pitch < 48:
+            index = 0
+        elif pitch < 60:
+            index = 1
+        else:
+            index = 2
+    return f"{hand}_voice_{index}", index
+
+
+def _event_voice_id(event: Dict) -> str:
+    voice_id = event.get('voice_id')
+    if voice_id:
+        return str(voice_id)
+    hand = _event_hand(event)
+    pitch = _event_midi_pitch(event)
+    return _voice_id_from_pitch(hand, pitch)[0]
+
+
+def assign_voice_ids(events: List[Dict]) -> List[Dict]:
+    """Assign neutral notation lanes used by score-duration policies."""
+    if LIVE_VOICE_ASSIGNMENT == 'off':
+        return events
+    for event in events or []:
+        hand = _event_hand(event)
+        pitch = _event_midi_pitch(event)
+        voice_id, voice_index = _voice_id_from_pitch(hand, pitch)
+        event.setdefault('voice_id', voice_id)
+        event.setdefault('voice_index', voice_index)
+        event.setdefault('voice_assignment', LIVE_VOICE_ASSIGNMENT)
+
+        midi_notes = event.get('midi_notes') or []
+        if midi_notes:
+            voice_ids = []
+            voice_indices = []
+            for midi_note in midi_notes:
+                try:
+                    midi_value = int(midi_note)
+                except (TypeError, ValueError):
+                    continue
+                note_hand = 'bass' if midi_value < 60 else 'treble'
+                note_voice_id, note_voice_index = _voice_id_from_pitch(note_hand, midi_value)
+                voice_ids.append(note_voice_id)
+                voice_indices.append(note_voice_index)
+            if voice_ids:
+                event.setdefault('voice_ids', voice_ids)
+                event.setdefault('voice_indices', voice_indices)
+    return events
+
+
+def _next_policy_onset(events: List[Dict], index: int, tolerance_sec: float = 1e-4) -> Optional[float]:
+    if LIVE_SCORE_DURATION_POLICY not in ('ioi_same_hand', 'ioi_same_voice'):
+        if index + 1 < len(events):
+            try:
+                return float(events[index + 1].get('time_seconds', 0.0) or 0.0)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    current = events[index]
+    try:
+        onset = float(current.get('time_seconds', 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+
+    hand = _event_hand(current)
+    voice_id = _event_voice_id(current)
+    pitch = _event_midi_pitch(current)
+    next_policy_onset = None
+    next_same_pitch = None
+    for candidate in events[index + 1:]:
+        try:
+            cand_onset = float(candidate.get('time_seconds', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if cand_onset - onset <= tolerance_sec:
+            continue
+        same_policy_lane = (
+            _event_voice_id(candidate) == voice_id
+            if LIVE_SCORE_DURATION_POLICY == 'ioi_same_voice'
+            else _event_hand(candidate) == hand
+        )
+        if next_policy_onset is None and same_policy_lane:
+            next_policy_onset = cand_onset
+        cand_pitch = _event_midi_pitch(candidate)
+        if pitch is not None and cand_pitch == pitch and next_same_pitch is None:
+            next_same_pitch = cand_onset
+        if next_policy_onset is not None and next_same_pitch is not None:
+            break
+
+    if next_policy_onset is None:
+        return next_same_pitch
+    if next_same_pitch is not None:
+        return min(next_policy_onset, next_same_pitch)
+    return next_policy_onset
 
 
 def _display_event_time(event: Dict) -> float:
@@ -329,6 +458,8 @@ def _expand_display_chords_to_note_events(chords: List[Dict]) -> List[Dict]:
         chord_dict = dict(chord)
         midi_notes = chord_dict.get('midi_notes') or []
         note_names = list(chord_dict.get('note_names') or [])
+        voice_ids = list(chord_dict.get('voice_ids') or [])
+        voice_indices = list(chord_dict.get('voice_indices') or [])
 
         for note_index, midi_note in enumerate(midi_notes):
             try:
@@ -343,6 +474,10 @@ def _expand_display_chords_to_note_events(chords: List[Dict]) -> List[Dict]:
                 if note_index < len(note_names)
                 else _note_name_from_midi(midi_value)
             )
+            if note_index < len(voice_ids):
+                note_event['voice_id'] = voice_ids[note_index]
+            if note_index < len(voice_indices):
+                note_event['voice_index'] = voice_indices[note_index]
             note_event['_display_source'] = 'chord_member'
             note_events.append(note_event)
 
@@ -433,6 +568,8 @@ def _build_display_surface(
 ) -> Dict[str, List[Dict]]:
     sanitized_notes: List[Dict] = [_sanitize_display_event(note) for note in (notes or [])]
     sanitized_chords: List[Dict] = [_sanitize_display_event(chord) for chord in (chords or [])]
+    assign_voice_ids(sanitized_notes)
+    assign_voice_ids(sanitized_chords)
 
     generated_notes: List[Dict] = []
     reconciled_chords: List[Dict] = []
@@ -817,6 +954,12 @@ def quantize_coarse(
     beat_dur = 60.0 / max(bpm, 1.0)
     duration = float(note.get('duration_seconds', 0.0) or 0.0)
     onset = float(note.get('time_seconds', 0.0) or 0.0)
+    policy_duration = None
+    if next_onset_seconds is not None:
+        try:
+            policy_duration = max(0.0, float(next_onset_seconds) - onset)
+        except (TypeError, ValueError):
+            policy_duration = None
 
     used_grid = False
     note_type = 'quarter'
@@ -836,6 +979,8 @@ def quantize_coarse(
                 used_grid = True
 
     if not used_grid:
+        if policy_duration is not None and policy_duration > 0:
+            duration = policy_duration
         if duration <= 0:
             duration = beat_dur
         beats = duration / beat_dur
@@ -858,6 +1003,9 @@ def quantize_coarse(
     note['is_triplet'] = False
     note['triplet'] = False
     note['quantization_method'] = 'coarse_grid' if used_grid else 'coarse_live'
+    if policy_duration is not None and policy_duration > 0:
+        note['duration_source'] = LIVE_SCORE_DURATION_POLICY
+        note['score_duration_seconds'] = round(policy_duration, 4)
     raw_beats = (duration / beat_dur) if duration > 0 else best_beats
     note['raw_beats'] = raw_beats
     note['quantization_confidence'] = max(
@@ -875,14 +1023,10 @@ def quantize_batch_coarse(
     bpm: float,
     grid: Optional[BeatGrid] = None,
 ) -> List[Dict]:
+    assign_voice_ids(notes)
     for i, note in enumerate(notes):
         prev_notes = notes[max(0, i - 4):i] if i > 0 else None
-        next_onset = None
-        if i + 1 < len(notes):
-            try:
-                next_onset = float(notes[i + 1].get('time_seconds', 0.0) or 0.0)
-            except (TypeError, ValueError):
-                next_onset = None
+        next_onset = _next_policy_onset(notes, i)
         quantize_coarse(
             note, bpm, prev_notes, grid=grid, next_onset_seconds=next_onset
         )
@@ -1035,6 +1179,62 @@ def apply_window_decode(
 # Deferred Refinement (Stage 2 - Background)
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _apply_score_duration_policy_to_quantized_window(
+    notes: List[Dict],
+    bpm: float,
+    grid: Optional[BeatGrid],
+) -> None:
+    """Replace visible score durations with policy IOIs while preserving onset decode."""
+    if LIVE_SCORE_DURATION_POLICY not in ('ioi_same_hand', 'ioi_same_voice'):
+        return
+    if not notes:
+        return
+
+    assign_voice_ids(notes)
+    beat_dur = 60.0 / max(bpm, 1.0)
+    for i, note in enumerate(notes):
+        next_onset = _next_policy_onset(notes, i)
+        if next_onset is None:
+            continue
+        try:
+            onset = float(note.get('time_seconds', 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        policy_duration = float(next_onset) - onset
+        if policy_duration <= 0:
+            continue
+
+        start_idx = note.get('start_grid_idx')
+        if grid is not None and start_idx is not None:
+            try:
+                units = max(1, grid.snap_idx(next_onset) - int(start_idx))
+            except (TypeError, ValueError):
+                units = 0
+            if units > 0:
+                note_type, beats, dotted, is_triplet = _units_to_musical(
+                    units, grid.subdivision
+                )
+            else:
+                note_type, beats, dotted, is_triplet = _fraction_snap(
+                    policy_duration / beat_dur,
+                    max_denom=8,
+                )
+        else:
+            note_type, beats, dotted, is_triplet = _fraction_snap(
+                policy_duration / beat_dur,
+                max_denom=8,
+            )
+
+        note['note_value'] = note_type
+        note['note_divisions'] = beats
+        note['dotted'] = dotted
+        note['is_triplet'] = is_triplet
+        note['triplet'] = is_triplet
+        note['duration_source'] = LIVE_SCORE_DURATION_POLICY
+        note['score_duration_seconds'] = round(policy_duration, 4)
+        note['quantization_method'] = f"refined_deferred_{LIVE_SCORE_DURATION_POLICY}"
+
+
 @dataclass
 class DeferredRefinementState:
     """Beats-adaptive refinement buffer. Delays and lookahead scale with BPM."""
@@ -1133,6 +1333,11 @@ class DeferredRefinementState:
         )
         decode = decode_window_dual(onsets, grid, last_note_duration=last_dur)
         apply_window_decode(window, decode, quantization_method='refined_deferred')
+        _apply_score_duration_policy_to_quantized_window(
+            window,
+            bpm,
+            decode.get('grid'),
+        )
 
         newly_refined: List[Dict] = []
         for offset, note in enumerate(window):

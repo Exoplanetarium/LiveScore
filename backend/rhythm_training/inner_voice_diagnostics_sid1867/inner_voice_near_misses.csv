@@ -1,0 +1,8 @@
+midi_note,note_name,time_sec,onset_peak,frame_peak,velocity_peak,velocity_int,candidate_type,score
+72,C5,9.984,0.6517,0.6919,0.3728,47,weak_onset_frame_present,1.2292
+60,C4,1.28,0.5443,0.5873,0.1544,20,weak_onset_frame_present,0.994
+73,C#5,9.984,0.2911,0.7862,0.3513,45,weak_onset_frame_present,0.9292
+64,E4,2.24,0.4711,0.6098,0.1226,16,weak_onset_frame_present,0.9285
+72,C5,7.648,0.3214,0.6517,0.4446,56,weak_onset_frame_present,0.8888
+72,C5,5.2,0.3272,0.6244,0.4084,52,weak_onset_frame_present,0.8664
+65,F4,3.2,0.2816,0.5253,0.1529,19,weak_onset_frame_present,0.6875

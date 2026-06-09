@@ -1,0 +1,13 @@
+midi_note,note_name,query_time_sec,peak_time_sec,time_error_sec,onset_peak,frame_peak,velocity_peak,velocity_int,decoded,diagnosis
+60,C4,1.3138,1.28,-0.0338,0.5443,0.6014,0.1768,22,False,frame_present_weak_onset
+55,G3,1.3242,1.28,-0.0442,0.0034,0.1387,0.1486,19,False,absent_or_buried
+64,E4,2.2188,2.24,0.0213,0.4711,0.6098,0.1352,17,False,frame_present_weak_onset
+60,C4,2.2331,2.224,-0.0091,0.2456,0.461,0.1642,21,False,absent_or_buried
+55,G3,2.2487,2.24,-0.0087,0.0787,0.3647,0.1475,19,False,absent_or_buried
+64,E4,2.9701,2.96,-0.0101,0.0027,0.1248,0.1757,22,False,absent_or_buried
+60,C4,2.974,2.96,-0.014,0.1046,0.3813,0.1967,25,False,absent_or_buried
+70,A#4,3.0169,2.96,-0.0569,0.0069,0.3764,0.3122,40,False,absent_or_buried
+60,C4,3.1875,3.184,-0.0035,0.1769,0.4541,0.1897,24,False,absent_or_buried
+65,F4,3.2409,3.2,-0.0409,0.2816,0.5502,0.1819,23,False,frame_present_no_onset
+72,C5,5.1875,5.2,0.0125,0.3272,0.6244,0.4363,55,False,frame_present_no_onset
+72,C5,7.6562,7.648,-0.0083,0.3214,0.6517,0.4595,58,False,frame_present_no_onset

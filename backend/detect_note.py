@@ -8612,6 +8612,8 @@ def _convert_neural_note_events_to_results(note_events, split_midi=60):
                 note_dict['note_value_confidence'] = group[0].get('note_value_confidence', 0.5)
                 note_dict['note_value_source'] = 'ensemble'
                 _normalize_ensemble_note_value(note_dict)
+            if group[0].get('decode_source'):
+                note_dict['decode_source'] = group[0].get('decode_source')
             notes.append(note_dict)
             continue
 
@@ -8632,6 +8634,16 @@ def _convert_neural_note_events_to_results(note_events, split_midi=60):
         }
         sorted_group = sorted(group, key=lambda event: int(event['midi_note']))
         chord_dict['note_probabilities'] = [float(event.get('onset_prob', 0.5)) for event in sorted_group]
+        decode_sources = [
+            str(event.get('decode_source'))
+            for event in sorted_group
+            if event.get('decode_source')
+        ]
+        if decode_sources:
+            chord_dict['decode_sources'] = decode_sources
+            chord_dict['soft_polyphony_rescued_notes'] = sum(
+                1 for source in decode_sources if source == 'soft_polyphony_rescue'
+            )
         nv_events = [event for event in group if 'note_value_name' in event]
         if nv_events:
             best_nv = max(nv_events, key=lambda event: event.get('note_value_confidence', 0))
@@ -8774,9 +8786,9 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             timings['neural_resample'] = (time.perf_counter() - t0) * 1000
 
             try:
-                _enhanced_base_thr = float(os.environ.get('LIVE_ENHANCED_ONSET_BASE', '0.75'))
+                _enhanced_base_thr = float(os.environ.get('LIVE_ENHANCED_ONSET_BASE', '0.60'))
             except (TypeError, ValueError):
-                _enhanced_base_thr = 0.75
+                _enhanced_base_thr = 0.60
             try:
                 _enhanced_offset_thr = float(os.environ.get('LIVE_ENHANCED_OFFSET_BASE', '0.35'))
             except (TypeError, ValueError):
@@ -8793,6 +8805,56 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 _enhanced_merge_gap_sec = float(os.environ.get('LIVE_ENHANCED_MERGE_GAP_SEC', '0.0'))
             except (TypeError, ValueError):
                 _enhanced_merge_gap_sec = 0.0
+            _enhanced_soft_polyphony_raw = str(
+                os.environ.get('LIVE_ENHANCED_SOFT_POLYPHONY_RESCUE', '0')
+            ).strip().lower()
+            _enhanced_soft_polyphony_rescue = _enhanced_soft_polyphony_raw in {
+                '1', 'true', 'yes', 'y', 'on'
+            }
+            try:
+                _enhanced_soft_polyphony_onset_thr = float(
+                    os.environ.get('LIVE_ENHANCED_SOFT_POLYPHONY_ONSET', '0.45')
+                )
+            except (TypeError, ValueError):
+                _enhanced_soft_polyphony_onset_thr = 0.45
+            try:
+                _enhanced_soft_polyphony_frame_thr = float(
+                    os.environ.get('LIVE_ENHANCED_SOFT_POLYPHONY_FRAME', '0.35')
+                )
+            except (TypeError, ValueError):
+                _enhanced_soft_polyphony_frame_thr = 0.35
+            try:
+                _enhanced_soft_polyphony_min_velocity = int(
+                    os.environ.get('LIVE_ENHANCED_SOFT_POLYPHONY_MIN_VELOCITY', '4')
+                )
+            except (TypeError, ValueError):
+                _enhanced_soft_polyphony_min_velocity = 4
+            try:
+                _enhanced_soft_polyphony_min_delta = float(
+                    os.environ.get('LIVE_ENHANCED_SOFT_POLYPHONY_MIN_DELTA', '0.05')
+                )
+            except (TypeError, ValueError):
+                _enhanced_soft_polyphony_min_delta = 0.05
+            try:
+                _enhanced_soft_polyphony_lookback_sec = float(
+                    os.environ.get('LIVE_ENHANCED_SOFT_POLYPHONY_LOOKBACK_SEC', '0.08')
+                )
+            except (TypeError, ValueError):
+                _enhanced_soft_polyphony_lookback_sec = 0.08
+            # Default off: at the live primary onset threshold (0.60) the weak
+            # candidate pool no longer clears the calibrated acceptance threshold
+            # (the 0.60 primary already absorbs recoverable inner voices), so the
+            # rescue is inert and only costs candidate-generation time. Kept behind
+            # the flag for retraining/diagnostics. See live-change-log 2026-06-09.
+            _enhanced_lattice_raw = str(
+                os.environ.get('LIVE_ENHANCED_LATTICE_RESCUE', '0')
+            ).strip().lower()
+            _enhanced_lattice_rescue = _enhanced_lattice_raw in {
+                '1', 'true', 'yes', 'y', 'on'
+            }
+            _enhanced_lattice_model_path = (
+                os.environ.get('LIVE_LATTICE_MODEL') or None
+            )
             _enhanced_filter_harmonics_raw = str(
                 os.environ.get('LIVE_ENHANCED_FILTER_HARMONICS', '0')
             ).strip().lower()
@@ -8815,6 +8877,13 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             timings['neural_filter_harmonics'] = bool(_enhanced_filter_harmonics)
             timings['neural_duplicate_window_sec'] = _enhanced_duplicate_window_sec
             timings['neural_merge_gap_sec'] = _enhanced_merge_gap_sec
+            timings['neural_soft_polyphony_rescue'] = bool(_enhanced_soft_polyphony_rescue)
+            timings['neural_soft_polyphony_onset_threshold'] = _enhanced_soft_polyphony_onset_thr
+            timings['neural_soft_polyphony_frame_threshold'] = _enhanced_soft_polyphony_frame_thr
+            timings['neural_soft_polyphony_min_velocity'] = _enhanced_soft_polyphony_min_velocity
+            timings['neural_soft_polyphony_min_delta'] = _enhanced_soft_polyphony_min_delta
+            timings['neural_soft_polyphony_lookback_sec'] = _enhanced_soft_polyphony_lookback_sec
+            timings['neural_lattice_rescue'] = bool(_enhanced_lattice_rescue)
             timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
             timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
             timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
@@ -8828,10 +8897,24 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 min_velocity=_enhanced_min_velocity,
                 duplicate_window_sec=_enhanced_duplicate_window_sec,
                 merge_gap_sec=_enhanced_merge_gap_sec,
+                soft_polyphony_rescue=_enhanced_soft_polyphony_rescue,
+                soft_polyphony_onset_threshold=_enhanced_soft_polyphony_onset_thr,
+                soft_polyphony_frame_threshold=_enhanced_soft_polyphony_frame_thr,
+                soft_polyphony_min_velocity=_enhanced_soft_polyphony_min_velocity,
+                soft_polyphony_min_delta=_enhanced_soft_polyphony_min_delta,
+                soft_polyphony_lookback_sec=_enhanced_soft_polyphony_lookback_sec,
+                lattice_rescue=_enhanced_lattice_rescue,
+                lattice_model_path=_enhanced_lattice_model_path,
                 filter_harmonics=_enhanced_filter_harmonics,
             )
             timings['neural_transcribe'] = (time.perf_counter() - t0) * 1000
             inference_detail = transcribed_dict.get('_inference_timing_ms') or {}
+            timings['neural_soft_polyphony_rescued_events'] = int(
+                inference_detail.get('soft_polyphony_rescued_events', 0) or 0
+            )
+            timings['neural_lattice_rescued_events'] = int(
+                inference_detail.get('lattice_rescued_events', 0) or 0
+            )
             note_events = transcribed_dict.get('est_note_events', [])
 
     if model_name is None and USE_GPU:
