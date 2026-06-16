@@ -1,0 +1,2576 @@
+{
+  "model_path": "backend\\rhythm_training\\enhanced_mel_transcription_livewindow_distill.pt",
+  "samples": 512,
+  "policies": {
+    "head": {
+      "precision": 0.1436185801157594,
+      "recall": 0.14001535686862734,
+      "f1": 0.14179408121377612,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.15743715364227773,
+      "duration_matched": 7841,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 17241
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 12087
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 8819
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 4417
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 3020
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 1964
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1049
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 534
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 371
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 302
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 5590
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 3950
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 3641
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3152
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 3064
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 2933
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 2024
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 1952
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 1904
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1773
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1485
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 1372
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1194
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1189
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1018
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 837
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 830
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 739
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 728
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 640
+        }
+      ]
+    },
+    "physical_duration": {
+      "precision": 0.181679976555059,
+      "recall": 0.1771218371100516,
+      "f1": 0.17937195403130285,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.19916070998313387,
+      "duration_matched": 9919,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 25033
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 7094
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4251
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 2864
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 2563
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 2519
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1962
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1653
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 991
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 516
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 249
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 109
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4655
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4223
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3559
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3168
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2983
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2473
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1640
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1410
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1054
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1021
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 940
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 867
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 847
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 715
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 705
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 678
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 675
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 648
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 619
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 615
+        }
+      ]
+    },
+    "sounding_duration": {
+      "precision": 0.19210198549344273,
+      "recall": 0.18728236995767933,
+      "f1": 0.18966156405689122,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.21058549514095254,
+      "duration_matched": 10488,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 24934
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 7116
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4235
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 2591
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 2502
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 1602
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1582
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 1400
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1263
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1012
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 997
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 570
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4628
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4208
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3545
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3166
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2968
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2468
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1631
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1422
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1073
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1020
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 938
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 865
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 842
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 702
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 686
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 684
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 644
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 615
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 611
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 594
+        }
+      ]
+    },
+    "sounding_same_pitch_cap": {
+      "precision": 0.20213935086819548,
+      "recall": 0.19706790950161604,
+      "f1": 0.1995714169462101,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.22158862741948437,
+      "duration_matched": 11036,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 24952
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 7162
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4186
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 2594
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 2501
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1695
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 1615
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1509
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 1399
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1083
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 794
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 314
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4638
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4209
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3546
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3167
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2968
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2470
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1632
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1455
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1078
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1021
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 939
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 866
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 840
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 697
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 690
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 689
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 658
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 644
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 616
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 613
+        }
+      ]
+    },
+    "ioi_same_hand": {
+      "precision": 0.45455711041101915,
+      "recall": 0.4431528008428421,
+      "f1": 0.4487825167047931,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.4982933097743153,
+      "duration_matched": 24817,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 23817
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4603
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 4581
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 4512
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 4108
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 3275
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1982
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1450
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 794
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 358
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 210
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 114
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 5338
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 3378
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 3262
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 3083
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 2979
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 2693
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2652
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2567
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2337
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2194
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2017
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1764
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 1626
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1559
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1321
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 1206
+        },
+        {
+          "gt_class": 9,
+          "gt_name": "dotted_half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1024
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 749
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 685
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 620
+        }
+      ]
+    },
+    "hybrid_cleanup": {
+      "precision": 0.3487984467726573,
+      "recall": 0.3400474991518009,
+      "f1": 0.344367387903831,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.3823588466789816,
+      "duration_matched": 19043,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 15638
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 6877
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 5801
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 5220
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 4787
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 3512
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1830
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1768
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1740
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 1470
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 827
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 334
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4036
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 2964
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 2913
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2768
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 2651
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1984
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 1824
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1568
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1343
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1299
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1287
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 997
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 994
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 982
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 857
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 797
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 766
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 749
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 660
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 645
+        }
+      ]
+    },
+    "consensus_or_ioi": {
+      "precision": 0.20798226976335263,
+      "recall": 0.20276423635292226,
+      "f1": 0.20534010868287567,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.2279937354429363,
+      "duration_matched": 11355,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 25626
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 7134
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4197
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 2705
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 2520
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 1930
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1282
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1281
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1205
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 1049
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 604
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 271
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4890
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4219
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3560
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3209
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2982
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2494
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1667
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1450
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1056
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1023
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1018
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 866
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 843
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 748
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 740
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 714
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 707
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 684
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 629
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 617
+        }
+      ]
+    },
+    "confident_head_or_ioi": {
+      "precision": 0.43646054656018757,
+      "recall": 0.42551025874537957,
+      "f1": 0.43091584762697,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.47845554573929805,
+      "duration_matched": 23829,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 25404
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 4483
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 4108
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4060
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 3566
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 3275
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1982
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1450
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 794
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 374
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 194
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 114
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 5944
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 3352
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 3083
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 2693
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2596
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2575
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 2494
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2406
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2344
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2205
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 2179
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2018
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1681
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 1626
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1562
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 1206
+        },
+        {
+          "gt_class": 9,
+          "gt_name": "dotted_half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1028
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 740
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 685
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 618
+        }
+      ]
+    },
+    "sounding_if_longer_else_ioi": {
+      "precision": 0.39947981537108945,
+      "recall": 0.38945733111908715,
+      "f1": 0.39440491152562906,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.43791663320215246,
+      "duration_matched": 21810,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 13095
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 7266
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 6529
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 5392
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 4895
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 3451
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 2130
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1961
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1863
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 1524
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 1063
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 635
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3573
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 3213
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 3056
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 2931
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 2799
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 2174
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1931
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1467
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 1445
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1316
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1268
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 1267
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 1028
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 1008
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 966
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 965
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 786
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 627
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 585
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 538
+        }
+      ]
+    },
+    "sounding_if_much_longer_else_ioi": {
+      "precision": 0.43285222360612496,
+      "recall": 0.4219924644202782,
+      "f1": 0.42735336401529883,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.4745000401574171,
+      "duration_matched": 23632,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 16381
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 6231
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 5420
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 4888
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 4432
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 3471
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 2129
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1996
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1772
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 1441
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 1042
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 601
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 4344
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 3340
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 3167
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 3012
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 2924
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2428
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 2319
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1772
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1722
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1575
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 1406
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1284
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 1199
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1192
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 874
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 843
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 728
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 681
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 571
+        },
+        {
+          "gt_class": 9,
+          "gt_name": "dotted_half",
+          "pred_class": 9,
+          "pred_name": "dotted_half",
+          "count": 551
+        }
+      ]
+    },
+    "bass_sounding_treble_ioi": {
+      "precision": 0.3387427650377317,
+      "recall": 0.33024410278387883,
+      "f1": 0.33443945134135644,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.3713356356919123,
+      "duration_matched": 18494,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 26209
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 5711
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 4369
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 3522
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 3088
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 2362
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 1268
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1006
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 848
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 646
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 475
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 300
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 5357
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3588
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 3085
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 2940
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2904
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2410
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 2295
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 2228
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 2135
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 1777
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1735
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1722
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 1600
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1389
+        },
+        {
+          "gt_class": 9,
+          "gt_name": "dotted_half",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 895
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 867
+        },
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 836
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 648
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 537
+        },
+        {
+          "gt_class": 10,
+          "gt_name": "whole",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 494
+        }
+      ]
+    },
+    "oracle_any_candidate": {
+      "precision": 0.5418162502747454,
+      "recall": 0.5282227103087445,
+      "f1": 0.5349331356185069,
+      "onset_f1": 0.9006392578460537,
+      "duration_accuracy": 0.5939482772468074,
+      "duration_matched": 29581,
+      "onset_matched": 49804,
+      "predicted": 54596,
+      "ground_truth": 56001,
+      "pred_hist": [
+        {
+          "class": 0,
+          "name": "32nd",
+          "count": 16351
+        },
+        {
+          "class": 1,
+          "name": "dotted_32nd",
+          "count": 6760
+        },
+        {
+          "class": 2,
+          "name": "16th",
+          "count": 5460
+        },
+        {
+          "class": 3,
+          "name": "dotted_16th",
+          "count": 5178
+        },
+        {
+          "class": 4,
+          "name": "eighth",
+          "count": 4958
+        },
+        {
+          "class": 5,
+          "name": "dotted_eighth",
+          "count": 3768
+        },
+        {
+          "class": 6,
+          "name": "quarter",
+          "count": 2220
+        },
+        {
+          "class": 7,
+          "name": "dotted_quarter",
+          "count": 1933
+        },
+        {
+          "class": 8,
+          "name": "half",
+          "count": 1462
+        },
+        {
+          "class": 9,
+          "name": "dotted_half",
+          "count": 935
+        },
+        {
+          "class": 10,
+          "name": "whole",
+          "count": 516
+        },
+        {
+          "class": 11,
+          "name": "dotted_whole",
+          "count": 263
+        }
+      ],
+      "confusion_top": [
+        {
+          "gt_class": 0,
+          "gt_name": "32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 6698
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 4258
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 3,
+          "pred_name": "dotted_16th",
+          "count": 3537
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 2,
+          "pred_name": "16th",
+          "count": 3234
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 4,
+          "pred_name": "eighth",
+          "count": 3224
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 5,
+          "pred_name": "dotted_eighth",
+          "count": 2884
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1980
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 6,
+          "pred_name": "quarter",
+          "count": 1814
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 7,
+          "pred_name": "dotted_quarter",
+          "count": 1577
+        },
+        {
+          "gt_class": 2,
+          "gt_name": "16th",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1551
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1339
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 1288
+        },
+        {
+          "gt_class": 8,
+          "gt_name": "half",
+          "pred_class": 8,
+          "pred_name": "half",
+          "count": 1156
+        },
+        {
+          "gt_class": 6,
+          "gt_name": "quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 993
+        },
+        {
+          "gt_class": 1,
+          "gt_name": "dotted_32nd",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 859
+        },
+        {
+          "gt_class": 9,
+          "gt_name": "dotted_half",
+          "pred_class": 9,
+          "pred_name": "dotted_half",
+          "count": 659
+        },
+        {
+          "gt_class": 7,
+          "gt_name": "dotted_quarter",
+          "pred_class": 0,
+          "pred_name": "32nd",
+          "count": 645
+        },
+        {
+          "gt_class": 3,
+          "gt_name": "dotted_16th",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 533
+        },
+        {
+          "gt_class": 4,
+          "gt_name": "eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 497
+        },
+        {
+          "gt_class": 5,
+          "gt_name": "dotted_eighth",
+          "pred_class": 1,
+          "pred_name": "dotted_32nd",
+          "count": 489
+        }
+      ]
+    }
+  }
+}

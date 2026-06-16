@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 import uuid
 from contextlib import contextmanager, nullcontext, redirect_stdout
@@ -48,13 +49,23 @@ DEFAULT_OUTPUT_ROOT = ROOT / "benchmark_artifacts"
 Candidate = Dict[str, Any]
 
 
-def _candidate(name: str, attrs: Mapping[str, Any], notes: str) -> Candidate:
-    return {"name": name, "attrs": dict(attrs), "notes": notes}
+def _candidate(
+    name: str,
+    attrs: Mapping[str, Any],
+    notes: str,
+    env: Mapping[str, str] | None = None,
+) -> Candidate:
+    return {"name": name, "attrs": dict(attrs), "notes": notes, "env": dict(env or {})}
 
 
 def build_candidates(preset: str) -> List[Candidate]:
     candidates = [
         _candidate("baseline_current", {}, "Current continuous stream decoder settings."),
+        _candidate(
+            "gates_on",
+            {"STREAM_RMS_BIRTH_GATES": True},
+            "Legacy RMS-attack birth gates re-enabled (pre-2026-06-12 behaviour).",
+        ),
         _candidate(
             "rescue_020",
             {"STREAM_ATTACK_GROUP_RESCUE_SEC": 0.20},
@@ -94,6 +105,65 @@ def build_candidates(preset: str) -> List[Candidate]:
             "repeat_200ms",
             {"STREAM_MIN_REPEAT_SEC": 0.20},
             "More same-pitch repeat suppression for pedal/ring-out false rebirths.",
+        ),
+        _candidate(
+            "onset_055",
+            {},
+            "Lower enhanced onset threshold; persistence gate handles extra noise.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.55"},
+        ),
+        _candidate(
+            "onset_050",
+            {},
+            "Lower enhanced onset threshold further for recall.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.50"},
+        ),
+        _candidate(
+            "onset_045",
+            {},
+            "Aggressive recall threshold; relies on persistence gate for precision.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.45"},
+        ),
+        _candidate(
+            "birth_gates_off",
+            {"STREAM_ATTACK_RATIO_STRONG": 0.0, "STREAM_ATTACK_DELTA_STRONG": -1.0},
+            "Treat every observation as strong-attack so RMS birth gates never fire; persistence gate is the only noise filter.",
+        ),
+        _candidate(
+            "display_obs_2",
+            {"STREAM_MIN_DISPLAY_OBSERVATIONS": 2},
+            "Allow display after 2 observations instead of 3.",
+        ),
+        _candidate(
+            "frame_evidence_50ms",
+            {"STREAM_FRAME_EVIDENCE_SEC": 0.05, "STREAM_DISPLAY_FRAME_EVIDENCE_SEC": 0.10},
+            "Lower frame-evidence birth/display sustain requirements for short notes.",
+        ),
+        _candidate(
+            "ship_default",
+            {},
+            "New defaults: RMS birth gates off (persistence display gate only).",
+        ),
+        _candidate(
+            "ship_legacy_gates",
+            {"STREAM_RMS_BIRTH_GATES": True},
+            "Old behavior reference: RMS birth gates on.",
+        ),
+        _candidate(
+            "ship_obs2",
+            {"STREAM_MIN_DISPLAY_OBSERVATIONS": 2},
+            "Gates-off default plus 2-observation display gate.",
+        ),
+        _candidate(
+            "ship_disp_frame_100ms",
+            {"STREAM_DISPLAY_FRAME_EVIDENCE_SEC": 0.10},
+            "Gates-off default plus 100ms display frame-evidence sustain.",
+        ),
+        _candidate(
+            "ship_onset055",
+            {},
+            "Gates-off default plus lower decode onset threshold.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.55"},
         ),
     ]
 
@@ -153,18 +223,27 @@ def build_candidates(preset: str) -> List[Candidate]:
 
 
 @contextmanager
-def override_live_attrs(attrs: Mapping[str, Any]) -> Iterator[None]:
+def override_live_attrs(attrs: Mapping[str, Any], env: Mapping[str, str] | None = None) -> Iterator[None]:
     originals: Dict[str, Any] = {}
+    env_originals: Dict[str, str | None] = {}
     try:
         for key, value in attrs.items():
             if not hasattr(live_main, key):
                 raise AttributeError(f"backend.main has no tunable attribute {key!r}")
             originals[key] = getattr(live_main, key)
             setattr(live_main, key, value)
+        for key, value in (env or {}).items():
+            env_originals[key] = os.environ.get(key)
+            os.environ[key] = str(value)
         yield
     finally:
         for key, value in originals.items():
             setattr(live_main, key, value)
+        for key, value in env_originals.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 def load_manifest(path: Path, clip_ids: Sequence[str]) -> Dict[str, Dict]:
@@ -504,13 +583,13 @@ def run_candidate(
 ) -> Dict[str, Any]:
     started = time.perf_counter()
     clip_results: Dict[str, Any] = {}
-    with override_live_attrs(candidate.get("attrs") or {}):
+    with override_live_attrs(candidate.get("attrs") or {}, candidate.get("env") or {}):
         log_handle = None
         try:
             if log_path is not None and not args.show_model_logs:
                 log_handle = log_path.open("w", encoding="utf-8")
                 log_handle.write(f"# Candidate: {candidate['name']}\n")
-                log_handle.write(f"# Attrs: {json.dumps(candidate.get('attrs') or {}, sort_keys=True)}\n\n")
+                log_handle.write(f"# Attrs: {json.dumps(candidate.get('attrs') or {}, sort_keys=True, default=str)}\n\n")
             for clip_id, clip in clips.items():
                 print(f"  [{candidate['name']}] {clip_id}")
                 log_context = redirect_stdout(log_handle) if log_handle is not None else nullcontext()

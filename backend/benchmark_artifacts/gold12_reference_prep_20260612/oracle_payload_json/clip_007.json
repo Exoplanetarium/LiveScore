@@ -1,0 +1,143 @@
+{
+  "clip_id": "clip_007",
+  "benchmark_clip_id": "clip_007",
+  "title": "Transcendental Etude No. 11 \"Harmonies du Soir\"",
+  "bpm": 120.0,
+  "notes": [
+    {
+      "time_seconds": 0.0,
+      "onset_time": 0.0,
+      "offset_time": 6.0,
+      "duration_seconds": 6.0,
+      "duration": 6.0,
+      "midi_note": 32,
+      "velocity": 52,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.0,
+      "onset_time": 0.0,
+      "offset_time": 6.0,
+      "duration_seconds": 6.0,
+      "duration": 6.0,
+      "midi_note": 44,
+      "velocity": 49,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.870455,
+      "onset_time": 3.870455,
+      "offset_time": 4.188636,
+      "duration_seconds": 0.318182,
+      "duration": 0.318182,
+      "midi_note": 69,
+      "velocity": 48,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.888636,
+      "onset_time": 3.888636,
+      "offset_time": 4.620455,
+      "duration_seconds": 0.731818,
+      "duration": 0.731818,
+      "midi_note": 64,
+      "velocity": 39,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.895455,
+      "onset_time": 3.895455,
+      "offset_time": 4.636364,
+      "duration_seconds": 0.740909,
+      "duration": 0.740909,
+      "midi_note": 61,
+      "velocity": 35,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.525,
+      "onset_time": 4.525,
+      "offset_time": 5.029545,
+      "duration_seconds": 0.504545,
+      "duration": 0.504545,
+      "midi_note": 66,
+      "velocity": 54,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.536364,
+      "onset_time": 4.536364,
+      "offset_time": 4.813636,
+      "duration_seconds": 0.277273,
+      "duration": 0.277273,
+      "midi_note": 62,
+      "velocity": 42,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.043182,
+      "onset_time": 5.043182,
+      "offset_time": 5.611364,
+      "duration_seconds": 0.568182,
+      "duration": 0.568182,
+      "midi_note": 64,
+      "velocity": 53,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.059091,
+      "onset_time": 5.059091,
+      "offset_time": 5.254545,
+      "duration_seconds": 0.195455,
+      "duration": 0.195455,
+      "midi_note": 57,
+      "velocity": 44,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.063636,
+      "onset_time": 5.063636,
+      "offset_time": 5.654545,
+      "duration_seconds": 0.590909,
+      "duration": 0.590909,
+      "midi_note": 61,
+      "velocity": 42,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.552273,
+      "onset_time": 5.552273,
+      "offset_time": 6.0,
+      "duration_seconds": 0.447727,
+      "duration": 0.447727,
+      "midi_note": 66,
+      "velocity": 62,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.559091,
+      "onset_time": 5.559091,
+      "offset_time": 6.0,
+      "duration_seconds": 0.440909,
+      "duration": 0.440909,
+      "midi_note": 62,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    }
+  ],
+  "chords": [],
+  "source_midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\midi_excerpt\\clip_007__Transcendental Etude No. 11 _Harmonies du Soir_.mid",
+  "oracle_kind": "maestro_gt_midi_through_generateMusicXML"
+}

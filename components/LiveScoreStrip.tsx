@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo } from "react";
 import { StyleSheet, View, useWindowDimensions } from "react-native";
 import Animated, {
-  useAnimatedStyle,
-  useFrameCallback,
-  useSharedValue,
+    useAnimatedStyle,
+    useFrameCallback,
+    useSharedValue,
 } from "react-native-reanimated";
 import Svg, { Circle, Line, Text as SvgText } from "react-native-svg";
 
@@ -128,6 +128,7 @@ function noteColor(state: NoteState) {
 function buildDrawableNotes(
   results: AnalysisResultLike | null | undefined,
   bpm: number,
+  beatOffset: number = 0,
 ): DrawableNote[] {
   const secondsPerBeat = 60 / Math.max(40, Math.min(240, bpm || 120));
   const rawNotes: DrawableNote[] = [];
@@ -139,7 +140,7 @@ function buildDrawableNotes(
         : note.time_seconds / secondsPerBeat;
     rawNotes.push({
       id: `n-${index}-${note.midi_note}-${Math.round(beat * 48)}`,
-      beat,
+      beat: beat + beatOffset,
       midi: note.midi_note,
       confidence: note.confidence,
       state: getStateFromMethod(note.method),
@@ -154,7 +155,7 @@ function buildDrawableNotes(
     chord.midi_notes?.forEach((midi, noteIndex) => {
       rawNotes.push({
         id: `c-${chordIndex}-${noteIndex}-${midi}-${Math.round(beat * 48)}`,
-        beat,
+        beat: beat + beatOffset,
         midi,
         confidence: chord.confidence,
         state: getStateFromMethod(chord.method),
@@ -182,7 +183,7 @@ function buildDrawableNotes(
   );
 }
 
-export default function LiveScoreStrip({
+function LiveScoreStrip({
   results,
   bpm = 120,
   localElapsedSeconds,
@@ -209,15 +210,18 @@ export default function LiveScoreStrip({
         ? results.analysis_summary.duration_seconds / secondsPerBeat
         : 0;
     const localBeat =
-      typeof localStartedAtMs === "number" &&
-      Number.isFinite(localStartedAtMs)
+      typeof localStartedAtMs === "number" && Number.isFinite(localStartedAtMs)
         ? Math.max(0, (Date.now() - localStartedAtMs) / 1000) / secondsPerBeat
         : typeof localElapsedSeconds === "number" &&
             Number.isFinite(localElapsedSeconds)
           ? localElapsedSeconds / secondsPerBeat
           : 0;
+    const noteLeadBeats =
+      isRecording && localBeat > 0 && audioBeat > 0
+        ? Math.max(0, localBeat - audioBeat)
+        : 0;
     const cursorBeat = localBeat > 0 || isRecording ? localBeat : audioBeat;
-    const allNotes = buildDrawableNotes(results, resolvedBpm);
+    const allNotes = buildDrawableNotes(results, resolvedBpm, noteLeadBeats);
     const latestNoteBeat = allNotes.length
       ? Math.max(...allNotes.map((note) => note.beat))
       : 0;
@@ -243,6 +247,7 @@ export default function LiveScoreStrip({
       currentMeasure,
       endBeat,
       firstMeasure,
+      noteLeadBeats,
       noteRadius,
       startBeat,
       totalBeats: endBeat - startBeat,
@@ -302,13 +307,15 @@ export default function LiveScoreStrip({
     const localStartedAtMs = localStartedAtMsValue.value;
     const nowBeat =
       isRecordingValue.value && localStartedAtMs > 0
-        ? Math.max(0, (nowMs - localStartedAtMs) / 1000) *
-          (bpmValue.value / 60)
+        ? Math.max(0, (nowMs - localStartedAtMs) / 1000) * (bpmValue.value / 60)
         : cursorBeatValue.value +
           (isRecordingValue.value
             ? (elapsedMs / 1000) * (bpmValue.value / 60)
             : 0);
-    const totalBeats = Math.max(0.001, endBeatValue.value - startBeatValue.value);
+    const totalBeats = Math.max(
+      0.001,
+      endBeatValue.value - startBeatValue.value,
+    );
     const stripRight = widthValue.value - PAD_X;
     const stripUsable = Math.max(1, stripRight - PAD_X);
     cursorX.value =
@@ -358,9 +365,7 @@ export default function LiveScoreStrip({
         )}
 
         {[0, 1, 2].map((measure) => {
-          const x = xForBeat(
-            model.startBeat + measure * model.beatsPerMeasure,
-          );
+          const x = xForBeat(model.startBeat + measure * model.beatsPerMeasure);
           return (
             <React.Fragment key={`measure-${measure}`}>
               <Line
@@ -512,3 +517,28 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(239, 68, 68, 0.94)",
   },
 });
+
+function areStripPropsEqual(
+  prev: LiveScoreStripProps,
+  next: LiveScoreStripProps,
+) {
+  const prevUsesLocalClock =
+    typeof prev.localStartedAtMs === "number" &&
+    Number.isFinite(prev.localStartedAtMs);
+  const nextUsesLocalClock =
+    typeof next.localStartedAtMs === "number" &&
+    Number.isFinite(next.localStartedAtMs);
+
+  return (
+    prev.results === next.results &&
+    prev.bpm === next.bpm &&
+    prev.localStartedAtMs === next.localStartedAtMs &&
+    prev.isRecording === next.isRecording &&
+    prev.timeSignature === next.timeSignature &&
+    (prevUsesLocalClock && nextUsesLocalClock
+      ? true
+      : prev.localElapsedSeconds === next.localElapsedSeconds)
+  );
+}
+
+export default React.memo(LiveScoreStrip, areStripPropsEqual);

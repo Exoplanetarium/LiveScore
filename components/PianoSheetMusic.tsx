@@ -1,10 +1,10 @@
 import * as ScreenOrientation from "expo-screen-orientation";
 import React, {
-    useCallback,
-    useEffect,
-    useMemo,
-    useRef,
-    useState,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
 } from "react";
 import { Alert, StyleSheet, TouchableOpacity, View } from "react-native";
 import { WebView, WebViewMessageEvent } from "react-native-webview";
@@ -135,6 +135,7 @@ interface PianoSheetMusicProps {
   timeSignature?: "4/4" | "3/4" | "6/8"; // Time signature for measure grouping
   keySignature?: number; // MusicXML fifths value: -7 (Cb) to +7 (C#), default 0 (C)
   compact?: boolean;
+  showCompactPlaybackOverlay?: boolean;
   viewportHeight?: number;
   /**
    * Version number for live refinement updates.
@@ -542,11 +543,7 @@ function generateMeasureXmls(
 
   const getIoiDurationSpec = (ioiBeats?: number): DurationSpec => {
     const fallback = getDurationSpec(1, "quarter", false, false);
-    if (
-      ioiBeats === undefined ||
-      !Number.isFinite(ioiBeats) ||
-      ioiBeats <= 0
-    ) {
+    if (ioiBeats === undefined || !Number.isFinite(ioiBeats) || ioiBeats <= 0) {
       return fallback;
     }
 
@@ -877,33 +874,13 @@ function generateMeasureXmls(
     return { xml: rests, beatsEmitted: totalRounded - remaining };
   };
 
-  const generateForwardXml = (
-    beats: number,
-    staff: number,
-    voiceNumber: number = staff,
-  ): { xml: string[]; beatsEmitted: number } => {
-    const duration = Math.max(0, Math.round(beats * 24));
-    if (duration <= 0) {
-      return { xml: [], beatsEmitted: 0 };
-    }
-    return {
-      xml: [
-        `<forward><duration>${duration}</duration><voice>${voiceNumber}</voice><staff>${staff}</staff></forward>`,
-      ],
-      beatsEmitted: duration / 24,
-    };
-  };
-
   // Determine staff for a MIDI note
   const getStaff = (midi: number): number => {
     const octave = Math.floor(midi / 12) - 1;
     return octave < 4 ? 2 : 1;
   };
 
-  const scoreVoiceNumberFromId = (
-    staff: number,
-    voiceId?: string,
-  ): number => {
+  const scoreVoiceNumberFromId = (staff: number, voiceId?: string): number => {
     if (!voiceId) return staff;
     const match = String(voiceId).match(/voice_(\d+)/);
     const index = match ? Number.parseInt(match[1], 10) : 0;
@@ -1288,9 +1265,14 @@ function generateMeasureXmls(
     1 / 48,
     (CROSS_STAFF_TIME_TOLERANCE / 60) * bpm,
   );
-  const SAME_STAFF_BEAT_TOLERANCE = Math.max(
-    1 / 96,
-    (SAME_STAFF_TOLERANCE / 60) * bpm,
+  // The live backend's beat mapper serializes near-simultaneous onsets,
+  // spreading chord members ~1/12 beat apart even when their raw times are
+  // within the acoustic simultaneity window. When raw time says "same onset",
+  // tolerate that forced serialization up to a 16th note so transcription
+  // jitter cannot scatter one chord across several printed onsets.
+  const FORCED_SERIALIZATION_BEAT_TOLERANCE = Math.max(
+    BEAT_GROUP_TOLERANCE,
+    0.26,
   );
   type TimeGroup = {
     time: number;
@@ -1305,17 +1287,14 @@ function generateMeasureXmls(
       const beatDelta = Math.abs(g.beatStart - ev.beatStart);
       const timeDelta = Math.abs(g.time - ev.time);
       if (
-        beatDelta < BEAT_GROUP_TOLERANCE &&
+        beatDelta < FORCED_SERIALIZATION_BEAT_TOLERANCE &&
         timeDelta < CROSS_STAFF_TIME_TOLERANCE
       ) {
         const sameStaffEvents = ev.staff === 1 ? g.treble : g.bass;
         if (sameStaffEvents.length > 0) {
-          return (
-            beatDelta < SAME_STAFF_BEAT_TOLERANCE &&
-            timeDelta < SAME_STAFF_TOLERANCE
-          );
+          return timeDelta < SAME_STAFF_TOLERANCE;
         }
-        return true;
+        return beatDelta < BEAT_GROUP_TOLERANCE || timeDelta < SAME_STAFF_TOLERANCE;
       }
       return false;
     });
@@ -2049,10 +2028,7 @@ function generateMeasureXmls(
     const measureNum = mIdx + 1;
     let measureContent = "";
 
-    if (
-      measureNum > 1 &&
-      (measureNum - 1) % STABLE_MEASURES_PER_SYSTEM === 0
-    ) {
+    if (measureNum > 1 && (measureNum - 1) % STABLE_MEASURES_PER_SYSTEM === 0) {
       measureContent += '<print new-system="yes"/>';
     }
 
@@ -2546,6 +2522,7 @@ export default function PianoSheetMusic({
   timeSignature = "4/4",
   keySignature = 0,
   compact = false,
+  showCompactPlaybackOverlay = true,
   viewportHeight,
   refinementVersion,
   onScoreRendered,
@@ -3355,8 +3332,8 @@ export default function PianoSheetMusic({
             styles.scoreSection,
             compact
               ? {
-                  flex: 1,
-                  minHeight: compactViewportHeight,
+                  flex: 0,
+                  minHeight: 0,
                   marginBottom: 0,
                   borderWidth: 0,
                   borderRadius: 0,
@@ -3364,13 +3341,59 @@ export default function PianoSheetMusic({
               : null,
           ]}
         >
+          {compact && !isLandscape && showCompactPlaybackOverlay ? (
+            <View
+              pointerEvents="box-none"
+              style={styles.compactPlaybackOverlay}
+            >
+              <View style={styles.compactPlaybackBar}>
+                <ThemedText style={styles.compactPlaybackBpm}>
+                  {playbackBPM} BPM
+                </ThemedText>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.compactPlaybackButton,
+                    isPlaying && !isPaused
+                      ? styles.compactPlaybackButtonActive
+                      : styles.compactPlaybackButtonPrimary,
+                    !hasPlayableScore && !isPlaying && !isPaused
+                      ? styles.compactPlaybackButtonDisabled
+                      : null,
+                  ]}
+                  onPress={handlePlayPause}
+                  disabled={!hasPlayableScore && !isPlaying && !isPaused}
+                >
+                  <ThemedText style={styles.compactPlaybackButtonText}>
+                    {isPlaying ? (isPaused ? "Resume" : "Pause") : "Play"}
+                  </ThemedText>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  style={[
+                    styles.compactPlaybackButton,
+                    styles.compactPlaybackButtonSecondary,
+                    !isPlaying && !isPaused
+                      ? styles.compactPlaybackButtonDisabled
+                      : null,
+                  ]}
+                  onPress={handleStopPlayback}
+                  disabled={!isPlaying && !isPaused}
+                >
+                  <ThemedText style={styles.compactPlaybackButtonText}>
+                    Stop
+                  </ThemedText>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : null}
           <View
             style={[
               styles.webviewFrame,
               compact
                 ? {
-                    flex: 1,
-                    minHeight: compactViewportHeight,
+                    height: compactViewportHeight,
+                    minHeight: 0,
                   }
                 : null,
             ]}
@@ -3392,60 +3415,13 @@ export default function PianoSheetMusic({
                 isLandscape ? styles.landscapeWebview : styles.webview,
                 compact
                   ? {
-                      flex: 1,
-                      height: undefined,
+                      height: compactViewportHeight,
                     }
                   : null,
               ]}
               nestedScrollEnabled
               scrollEnabled
             />
-            {compact && !isLandscape ? (
-              <View
-                pointerEvents="box-none"
-                style={styles.compactPlaybackOverlay}
-              >
-                <View style={styles.compactPlaybackBar}>
-                  <ThemedText style={styles.compactPlaybackBpm}>
-                    {playbackBPM} BPM
-                  </ThemedText>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={[
-                      styles.compactPlaybackButton,
-                      isPlaying && !isPaused
-                        ? styles.compactPlaybackButtonActive
-                        : styles.compactPlaybackButtonPrimary,
-                      !hasPlayableScore && !isPlaying && !isPaused
-                        ? styles.compactPlaybackButtonDisabled
-                        : null,
-                    ]}
-                    onPress={handlePlayPause}
-                    disabled={!hasPlayableScore && !isPlaying && !isPaused}
-                  >
-                    <ThemedText style={styles.compactPlaybackButtonText}>
-                      {isPlaying ? (isPaused ? "Resume" : "Pause") : "Play"}
-                    </ThemedText>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    activeOpacity={0.85}
-                    style={[
-                      styles.compactPlaybackButton,
-                      styles.compactPlaybackButtonSecondary,
-                      !isPlaying && !isPaused
-                        ? styles.compactPlaybackButtonDisabled
-                        : null,
-                    ]}
-                    onPress={handleStopPlayback}
-                    disabled={!isPlaying && !isPaused}
-                  >
-                    <ThemedText style={styles.compactPlaybackButtonText}>
-                      Stop
-                    </ThemedText>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            ) : null}
           </View>
         </View>
 
@@ -3537,7 +3513,6 @@ const styles = StyleSheet.create({
     maxWidth: "100%",
   },
   compactMainContainer: {
-    flex: 1,
     minHeight: 0,
   },
   title: {
@@ -3664,7 +3639,6 @@ const styles = StyleSheet.create({
     minHeight: 560,
     backgroundColor: "#fff",
     borderRadius: 12,
-    overflow: "hidden",
     marginBottom: 12,
     borderWidth: 1,
     borderColor: "#d8e1ea",
@@ -3677,10 +3651,14 @@ const styles = StyleSheet.create({
   },
   compactPlaybackOverlay: {
     position: "absolute",
-    top: 12,
-    right: 12,
-    zIndex: 3,
-    elevation: 6,
+    top: 0,
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    paddingTop: 8,
+    paddingBottom: 6,
+    zIndex: 2,
+    elevation: 2,
   },
   compactPlaybackBar: {
     flexDirection: "row",

@@ -1,0 +1,48 @@
+C:\Users\ToniH\Documents\GitHub\LiveScore\backend\env\Lib\site-packages\pretty_midi\instrument.py:11: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+[GPU] Using NVIDIA GeForce RTX 5070 Ti Laptop GPU
+[GPU] VRAM: 12.8 GB
+Running 3 continuous decoder candidates on 12 clips -> benchmark_artifacts\ideas12_snap_harmonic_b
+[continuous-tune] baseline_current
+  [baseline_current] clip_001
+  [baseline_current] clip_002
+  [baseline_current] clip_003
+  [baseline_current] clip_004
+  [baseline_current] clip_005
+  [baseline_current] clip_006
+  [baseline_current] clip_007
+  [baseline_current] clip_008
+  [baseline_current] clip_009
+  [baseline_current] clip_010
+  [baseline_current] clip_011
+  [baseline_current] clip_012
+[continuous-tune] harmonic_prior_triads_only
+  [harmonic_prior_triads_only] clip_001
+  [harmonic_prior_triads_only] clip_002
+  [harmonic_prior_triads_only] clip_003
+  [harmonic_prior_triads_only] clip_004
+  [harmonic_prior_triads_only] clip_005
+  [harmonic_prior_triads_only] clip_006
+  [harmonic_prior_triads_only] clip_007
+  [harmonic_prior_triads_only] clip_008
+  [harmonic_prior_triads_only] clip_009
+  [harmonic_prior_triads_only] clip_010
+  [harmonic_prior_triads_only] clip_011
+  [harmonic_prior_triads_only] clip_012
+[continuous-tune] snap15_harmonic_prior
+  [snap15_harmonic_prior] clip_001
+  [snap15_harmonic_prior] clip_002
+  [snap15_harmonic_prior] clip_003
+  [snap15_harmonic_prior] clip_004
+  [snap15_harmonic_prior] clip_005
+  [snap15_harmonic_prior] clip_006
+  [snap15_harmonic_prior] clip_007
+  [snap15_harmonic_prior] clip_008
+  [snap15_harmonic_prior] clip_009
+  [snap15_harmonic_prior] clip_010
+  [snap15_harmonic_prior] clip_011
+  [snap15_harmonic_prior] clip_012
+
+Saved summary JSON: benchmark_artifacts\ideas12_snap_harmonic_b\continuous_decoder_summary.json
+Saved summary Markdown: benchmark_artifacts\ideas12_snap_harmonic_b\continuous_decoder_summary.md
+Best candidate: harmonic_prior_triads_only note_f1=0.9086 recall=0.8645 cluster_f1=0.6819 p95_inference_ms=26.59

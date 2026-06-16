@@ -1,0 +1,32 @@
+{
+  "mode": "self_test",
+  "raw_summaries": [
+    {
+      "clip": "SELFTEST",
+      "dropped": 0,
+      "added": 0,
+      "shifted": 0,
+      "rawOnly": 0,
+      "xmlOnly": 0
+    }
+  ],
+  "comparisons": [
+    {
+      "label": "SELFTEST generated XML vs itself",
+      "reference_path": null,
+      "predicted_tokens": 4,
+      "reference_tokens": 4,
+      "exact_token_matched": 4,
+      "exact_token_precision": 1,
+      "exact_token_recall": 1,
+      "exact_token_f1": 1,
+      "score_edit_accuracy": 1,
+      "score_edit_cost": 0,
+      "score_reference_cost": 4.16,
+      "score_edit_exact_ops": 4,
+      "score_edit_substitutions": 0,
+      "score_edit_deletions": 0,
+      "score_edit_insertions": 0
+    }
+  ]
+}

@@ -1,0 +1,61 @@
+C:\Users\ToniH\Documents\GitHub\LiveScore\backend\env\Lib\site-packages\pretty_midi\instrument.py:11: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+[GPU] Using NVIDIA GeForce RTX 5070 Ti Laptop GPU
+[GPU] VRAM: 12.8 GB
+Running 4 continuous decoder candidates on 12 clips -> benchmark_artifacts\idea3_onset_sweep
+[continuous-tune] baseline_current
+  [baseline_current] clip_001
+  [baseline_current] clip_002
+  [baseline_current] clip_003
+  [baseline_current] clip_004
+  [baseline_current] clip_005
+  [baseline_current] clip_006
+  [baseline_current] clip_007
+  [baseline_current] clip_008
+  [baseline_current] clip_009
+  [baseline_current] clip_010
+  [baseline_current] clip_011
+  [baseline_current] clip_012
+[continuous-tune] onset_055
+  [onset_055] clip_001
+  [onset_055] clip_002
+  [onset_055] clip_003
+  [onset_055] clip_004
+  [onset_055] clip_005
+  [onset_055] clip_006
+  [onset_055] clip_007
+  [onset_055] clip_008
+  [onset_055] clip_009
+  [onset_055] clip_010
+  [onset_055] clip_011
+  [onset_055] clip_012
+[continuous-tune] onset_050
+  [onset_050] clip_001
+  [onset_050] clip_002
+  [onset_050] clip_003
+  [onset_050] clip_004
+  [onset_050] clip_005
+  [onset_050] clip_006
+  [onset_050] clip_007
+  [onset_050] clip_008
+  [onset_050] clip_009
+  [onset_050] clip_010
+  [onset_050] clip_011
+  [onset_050] clip_012
+[continuous-tune] onset_045
+  [onset_045] clip_001
+  [onset_045] clip_002
+  [onset_045] clip_003
+  [onset_045] clip_004
+  [onset_045] clip_005
+  [onset_045] clip_006
+  [onset_045] clip_007
+  [onset_045] clip_008
+  [onset_045] clip_009
+  [onset_045] clip_010
+  [onset_045] clip_011
+  [onset_045] clip_012
+
+Saved summary JSON: benchmark_artifacts\idea3_onset_sweep\continuous_decoder_summary.json
+Saved summary Markdown: benchmark_artifacts\idea3_onset_sweep\continuous_decoder_summary.md
+Best candidate: baseline_current note_f1=0.9085 recall=0.8566 cluster_f1=0.6881 p95_inference_ms=25.14

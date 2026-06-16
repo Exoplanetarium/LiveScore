@@ -316,6 +316,96 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         const matched = canonicalSpecs.find((spec) => Math.abs(spec.beats - preferredBeats) <= 1 / 48);
         return matched || fallback;
     };
+    const getIoiDurationSpec = (ioiBeats) => {
+        const fallback = getDurationSpec(1, "quarter", false, false);
+        if (ioiBeats === undefined || !Number.isFinite(ioiBeats) || ioiBeats <= 0) {
+            return fallback;
+        }
+        const roundedBeats = Math.max(0.125, Math.min(4, Math.round(ioiBeats * 24) / 24));
+        const simpleSpecs = [
+            {
+                beats: 4,
+                duration: 96,
+                noteType: "whole",
+                dotted: false,
+                triplet: false,
+            },
+            {
+                beats: 3,
+                duration: 72,
+                noteType: "half",
+                dotted: true,
+                triplet: false,
+            },
+            {
+                beats: 2,
+                duration: 48,
+                noteType: "half",
+                dotted: false,
+                triplet: false,
+            },
+            {
+                beats: 1.5,
+                duration: 36,
+                noteType: "quarter",
+                dotted: true,
+                triplet: false,
+            },
+            {
+                beats: 1,
+                duration: 24,
+                noteType: "quarter",
+                dotted: false,
+                triplet: false,
+            },
+            {
+                beats: 0.75,
+                duration: 18,
+                noteType: "eighth",
+                dotted: true,
+                triplet: false,
+            },
+            {
+                beats: 0.5,
+                duration: 12,
+                noteType: "eighth",
+                dotted: false,
+                triplet: false,
+            },
+            {
+                beats: 0.25,
+                duration: 6,
+                noteType: "16th",
+                dotted: false,
+                triplet: false,
+            },
+            {
+                beats: 0.125,
+                duration: 3,
+                noteType: "32nd",
+                dotted: false,
+                triplet: false,
+            },
+        ];
+        return simpleSpecs.reduce((best, spec) => {
+            const bestError = Math.abs(best.beats - roundedBeats);
+            const specError = Math.abs(spec.beats - roundedBeats);
+            return specError < bestError ? spec : best;
+        }, simpleSpecs[0]);
+    };
+    const retimeXmlToDurationSpec = (xmlArr, durationSpec) => {
+        const typeXml = `<type>${durationSpec.noteType}</type>${durationSpec.dotted ? "<dot/>" : ""}`;
+        return xmlArr.map((xml) => {
+            if (!xml.includes("<duration>")) {
+                return xml;
+            }
+            let updated = xml.replace(/<duration>\d+(?:\.\d+)?<\/duration>/, `<duration>${durationSpec.duration}</duration>`);
+            updated = updated.replace(/<type>[\s\S]*?<\/type>(?:<dot\/>)?(?:<time-modification>[\s\S]*?<\/time-modification>)?/, typeXml);
+            updated = updated.replace(/<tuplet[^>]*\/>/g, "");
+            updated = updated.replace(/<notations>\s*<\/notations>/g, "");
+            return updated;
+        });
+    };
     const splitBeatsIntoNoteTypes = (beats) => {
         const result = [];
         const noteValues = [
@@ -350,7 +440,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         }
         return result;
     };
-    const generateNoteXmlWithTie = (pitchXml, duration, noteType, staff, tieType, isChord, dotted) => {
+    const generateNoteXmlWithTie = (pitchXml, duration, noteType, staff, tieType, isChord, dotted, voiceNumber = staff) => {
         const chordTag = isChord ? "<chord/>" : "";
         const dotXml = dotted ? "<dot/>" : "";
         let tieXml = "";
@@ -368,7 +458,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             notationsXml =
                 '<notations><tied type="stop"/><tied type="start"/></notations>';
         }
-        return `<note>${chordTag}${pitchXml}<duration>${duration}</duration>${tieXml}<voice>${staff}</voice><type>${noteType}</type>${dotXml}<staff>${staff}</staff>${notationsXml}</note>`;
+        return `<note>${chordTag}${pitchXml}<duration>${duration}</duration>${tieXml}<voice>${voiceNumber}</voice><type>${noteType}</type>${dotXml}<staff>${staff}</staff>${notationsXml}</note>`;
     };
     const getSegmentTieType = (outerTieType, segIndex, totalSegments) => {
         if (totalSegments <= 1)
@@ -431,7 +521,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             return "";
         return `<time-modification><actual-notes>${actualNotes}</actual-notes><normal-notes>${normalNotes}</normal-notes></time-modification>`;
     };
-    const generateRestXml = (beats, staff) => {
+    const generateRestXml = (beats, staff, voiceNumber = staff) => {
         const rests = [];
         let remaining = Math.round(beats * 24) / 24;
         const totalRounded = remaining;
@@ -447,7 +537,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             let found = false;
             for (const rv of restValues) {
                 if (remaining >= rv.beats - 0.001) {
-                    rests.push(`<note><rest/><duration>${rv.duration}</duration><voice>${staff}</voice><type>${rv.type}</type><staff>${staff}</staff></note>`);
+                    rests.push(`<note><rest/><duration>${rv.duration}</duration><voice>${voiceNumber}</voice><type>${rv.type}</type><staff>${staff}</staff></note>`);
                     remaining = Math.round((remaining - rv.beats) * 24) / 24;
                     found = true;
                     break;
@@ -459,7 +549,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         if (remaining > 0.001) {
             const fwdDiv = Math.round(remaining * 24);
             if (fwdDiv > 0) {
-                rests.push(`<forward><duration>${fwdDiv}</duration></forward>`);
+                rests.push(`<forward><duration>${fwdDiv}</duration><voice>${voiceNumber}</voice><staff>${staff}</staff></forward>`);
                 remaining = Math.round((remaining - fwdDiv / 24) * 24) / 24;
             }
         }
@@ -469,9 +559,23 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         const octave = Math.floor(midi / 12) - 1;
         return octave < 4 ? 2 : 1;
     };
-    const noteToXmlWithVoice = (n, isChordNote = false) => {
+    const scoreVoiceNumberFromId = (staff, voiceId) => {
+        if (!voiceId)
+            return staff;
+        const match = String(voiceId).match(/voice_(\d+)/);
+        const index = match ? Number.parseInt(match[1], 10) : 0;
+        if (!Number.isFinite(index))
+            return staff;
+        const trebleVoices = [1, 3, 5];
+        const bassVoices = [2, 4, 6];
+        return staff === 1
+            ? trebleVoices[index] || trebleVoices[0]
+            : bassVoices[index] || bassVoices[0];
+    };
+    const noteToXmlWithVoice = (n, isChordNote = false, voiceNumber) => {
         const { step: baseStep, alter, octave, } = midiToStepOctaveForKey(n.midi_note, fifths);
         const staff = getStaff(n.midi_note);
+        const xmlVoice = voiceNumber || staff;
         const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
         const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
         const durationSpec = getDurationSpec(n.note_divisions, n.note_value, n.dotted, n.triplet);
@@ -497,9 +601,9 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         }
         if (n.ornament === "grace") {
             const graceType = n.grace_type === "appoggiatura" ? "<grace/>" : '<grace slash="yes"/>';
-            return `<note>${graceType}${chordTag}${pitchXml}<voice>${staff}</voice><type>eighth</type><staff>${staff}</staff></note>`;
+            return `<note>${graceType}${chordTag}${pitchXml}<voice>${xmlVoice}</voice><type>eighth</type><staff>${staff}</staff></note>`;
         }
-        return `<note>${chordTag}${pitchXml}<duration>${durationSpec.duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${notationsXml}</note>`;
+        return `<note>${chordTag}${pitchXml}<duration>${durationSpec.duration}</duration><voice>${xmlVoice}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${notationsXml}</note>`;
     };
     const chordToMidiList = (c) => {
         var _a;
@@ -562,7 +666,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         }
         return [];
     };
-    const chordMidiToXml = (midiList, noteType, dotted, staff, preferredBeats, triplet, tripletPosition, actualNotes = 3, normalNotes = 2) => {
+    const chordMidiToXml = (midiList, noteType, dotted, staff, preferredBeats, triplet, tripletPosition, actualNotes = 3, normalNotes = 2, voiceNumber = staff) => {
         const durationSpec = getDurationSpec(preferredBeats, noteType, dotted, triplet);
         const adjustedNoteType = getAdjustedNoteType(durationSpec.noteType);
         const dotXml = durationSpec.dotted ? "<dot/>" : "";
@@ -580,7 +684,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             const tripletNotationsXml = first
                 ? getTripletNotations(tripletPosition, actualNotes, normalNotes)
                 : "";
-            const noteXml = `<note>${chordTag}${pitchInner}<duration>${durationSpec.duration}</duration><voice>${staff}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
+            const noteXml = `<note>${chordTag}${pitchInner}<duration>${durationSpec.duration}</duration><voice>${voiceNumber}</voice><type>${adjustedNoteType}</type>${dotXml}${timeModXml}<staff>${staff}</staff>${tripletNotationsXml}</note>`;
             xmlParts.push(noteXml);
             first = false;
         }
@@ -604,10 +708,11 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             continue;
         }
         const staff = getStaff(n.midi_note);
+        const voiceNumber = scoreVoiceNumberFromId(staff, n.voice_id);
         const isGrace = n.ornament === "grace";
         const durationSpec = getDurationSpec(n.note_divisions, n.note_value, n.dotted, n.triplet);
         const beats = isGrace ? 0 : durationSpec.beats;
-        const xml = [noteToXmlWithVoice(n, false)];
+        const xml = [noteToXmlWithVoice(n, false, voiceNumber)];
         timeline.push({
             time,
             beatStart,
@@ -615,6 +720,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             beats,
             xml,
             midiNotes: [n.midi_note],
+            voiceId: n.voice_id,
+            voiceNumber,
             triplet: isGrace ? false : n.triplet,
             tripletPosition: isGrace ? undefined : n.triplet_position,
             tripletType: isGrace ? undefined : n.triplet_type || n.note_value,
@@ -657,8 +764,19 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         const triplet = c.triplet || false;
         const durationSpec = getDurationSpec(c.note_divisions, noteType, dotted, triplet);
         const beats = durationSpec.beats;
-        const trebleXml = chordMidiToXml(midiList, noteType, dotted, 1, c.note_divisions, triplet, c.triplet_position, c.actual_notes, c.normal_notes);
-        const bassXml = chordMidiToXml(midiList, noteType, dotted, 2, c.note_divisions, triplet, c.triplet_position, c.actual_notes, c.normal_notes);
+        const staffVoiceIds = (staff) => {
+            var _a;
+            return ((_a = c.voice_ids) === null || _a === void 0 ? void 0 : _a.filter((_, index) => getStaff(midiList[index]) === staff)) ||
+                [];
+        };
+        const trebleVoiceIds = staffVoiceIds(1);
+        const bassVoiceIds = staffVoiceIds(2);
+        const trebleVoiceId = trebleVoiceIds[0] || c.voice_id;
+        const bassVoiceId = bassVoiceIds[0] || c.voice_id;
+        const trebleVoiceNumber = scoreVoiceNumberFromId(1, trebleVoiceId);
+        const bassVoiceNumber = scoreVoiceNumberFromId(2, bassVoiceId);
+        const trebleXml = chordMidiToXml(midiList, noteType, dotted, 1, c.note_divisions, triplet, c.triplet_position, c.actual_notes, c.normal_notes, trebleVoiceNumber);
+        const bassXml = chordMidiToXml(midiList, noteType, dotted, 2, c.note_divisions, triplet, c.triplet_position, c.actual_notes, c.normal_notes, bassVoiceNumber);
         if (trebleXml.length > 0) {
             const trebleMidiNotes = midiList.filter((m) => getStaff(m) === 1);
             timeline.push({
@@ -668,6 +786,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 beats,
                 xml: trebleXml,
                 midiNotes: trebleMidiNotes,
+                voiceId: trebleVoiceId,
+                voiceNumber: trebleVoiceNumber,
                 triplet,
                 tripletPosition: c.triplet_position,
                 tripletType: c.triplet_type || noteType,
@@ -684,6 +804,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 beats,
                 xml: bassXml,
                 midiNotes: bassMidiNotes,
+                voiceId: bassVoiceId,
+                voiceNumber: bassVoiceNumber,
                 triplet,
                 tripletPosition: c.triplet_position,
                 tripletType: c.triplet_type || noteType,
@@ -693,23 +815,22 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         }
     }
     timeline.sort((a, b) => a.beatStart - b.beatStart || a.time - b.time);
-    const CROSS_STAFF_TIME_TOLERANCE = 0.025;
-    const SAME_STAFF_TOLERANCE = 0.005;
-    const BEAT_GROUP_TOLERANCE = 1 / 48;
-    const SAME_STAFF_BEAT_TOLERANCE = 1 / 96;
+    const CROSS_STAFF_TIME_TOLERANCE = 0.03;
+    const SAME_STAFF_TOLERANCE = 0.03;
+    const BEAT_GROUP_TOLERANCE = Math.max(1 / 48, (CROSS_STAFF_TIME_TOLERANCE / 60) * bpm);
+    const FORCED_SERIALIZATION_BEAT_TOLERANCE = Math.max(BEAT_GROUP_TOLERANCE, 0.26);
     const timeGroups = [];
     for (const ev of timeline) {
         let group = timeGroups.find((g) => {
             const beatDelta = Math.abs(g.beatStart - ev.beatStart);
             const timeDelta = Math.abs(g.time - ev.time);
-            if (beatDelta < BEAT_GROUP_TOLERANCE &&
+            if (beatDelta < FORCED_SERIALIZATION_BEAT_TOLERANCE &&
                 timeDelta < CROSS_STAFF_TIME_TOLERANCE) {
                 const sameStaffEvents = ev.staff === 1 ? g.treble : g.bass;
                 if (sameStaffEvents.length > 0) {
-                    return (beatDelta < SAME_STAFF_BEAT_TOLERANCE &&
-                        timeDelta < SAME_STAFF_TOLERANCE);
+                    return timeDelta < SAME_STAFF_TOLERANCE;
                 }
-                return true;
+                return beatDelta < BEAT_GROUP_TOLERANCE || timeDelta < SAME_STAFF_TOLERANCE;
             }
             return false;
         });
@@ -729,6 +850,80 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         }
     }
     timeGroups.sort((a, b) => a.beatStart - b.beatStart || a.time - b.time);
+    const estimateGroupIoiBeats = (groupIndex) => {
+        const current = timeGroups[groupIndex];
+        const next = timeGroups
+            .slice(groupIndex + 1)
+            .find((candidate) => candidate.beatStart - current.beatStart > BEAT_GROUP_TOLERANCE);
+        if (next) {
+            return next.beatStart - current.beatStart;
+        }
+        const previous = [...timeGroups]
+            .slice(0, groupIndex)
+            .reverse()
+            .find((candidate) => current.beatStart - candidate.beatStart > BEAT_GROUP_TOLERANCE);
+        if (previous) {
+            return current.beatStart - previous.beatStart;
+        }
+        return 1;
+    };
+    const estimateHandIoiBeats = (groupIndex, staffKey) => {
+        const current = timeGroups[groupIndex];
+        const next = timeGroups
+            .slice(groupIndex + 1)
+            .find((candidate) => candidate[staffKey].length > 0 &&
+            candidate.beatStart - current.beatStart > BEAT_GROUP_TOLERANCE);
+        if (next) {
+            return next.beatStart - current.beatStart;
+        }
+        const previous = [...timeGroups]
+            .slice(0, groupIndex)
+            .reverse()
+            .find((candidate) => candidate[staffKey].length > 0 &&
+            current.beatStart - candidate.beatStart > BEAT_GROUP_TOLERANCE);
+        if (previous) {
+            return current.beatStart - previous.beatStart;
+        }
+        return estimateGroupIoiBeats(groupIndex);
+    };
+    const estimateVoiceIoiBeats = (groupIndex, staffKey, voiceId) => {
+        if (!voiceId) {
+            return estimateHandIoiBeats(groupIndex, staffKey);
+        }
+        const current = timeGroups[groupIndex];
+        const next = timeGroups
+            .slice(groupIndex + 1)
+            .find((candidate) => candidate[staffKey].some((event) => event.voiceId === voiceId) &&
+            candidate.beatStart - current.beatStart > BEAT_GROUP_TOLERANCE);
+        if (next) {
+            return next.beatStart - current.beatStart;
+        }
+        const previous = [...timeGroups]
+            .slice(0, groupIndex)
+            .reverse()
+            .find((candidate) => candidate[staffKey].some((event) => event.voiceId === voiceId) &&
+            current.beatStart - candidate.beatStart > BEAT_GROUP_TOLERANCE);
+        if (previous) {
+            return current.beatStart - previous.beatStart;
+        }
+        return estimateHandIoiBeats(groupIndex, staffKey);
+    };
+    for (let groupIndex = 0; groupIndex < timeGroups.length; groupIndex++) {
+        for (const staffKey of ["treble", "bass"]) {
+            for (const ev of timeGroups[groupIndex][staffKey]) {
+                if (ev.beats <= 0)
+                    continue;
+                const durationSpec = getIoiDurationSpec(estimateVoiceIoiBeats(groupIndex, staffKey, ev.voiceId));
+                ev.beats = durationSpec.beats;
+                ev.xml = retimeXmlToDurationSpec(ev.xml, durationSpec);
+                ev.triplet = false;
+                ev.tripletPosition = undefined;
+                ev.tripletType = durationSpec.noteType;
+                ev.actualNotes = undefined;
+                ev.normalNotes = undefined;
+            }
+        }
+    }
     for (const group of timeGroups) {
         for (const staffKey of ["treble", "bass"]) {
             const events = group[staffKey];
@@ -786,14 +981,15 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             group[staffKey] = deduped;
         }
     }
-    const CHORD_MERGE_TOLERANCE = 0;
+    const CHORD_MERGE_TOLERANCE = SAME_STAFF_TOLERANCE;
     for (const group of timeGroups) {
         if (group.treble.length > 1) {
             const subGroups = [];
             for (const ev of group.treble) {
                 let found = false;
                 for (const sg of subGroups) {
-                    if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE) {
+                    if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE &&
+                        sg[0].voiceNumber === ev.voiceNumber) {
                         sg.push(ev);
                         found = true;
                         break;
@@ -834,6 +1030,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                         beats: maxBeats,
                         xml: mergedXml,
                         midiNotes: mergedMidiNotes,
+                        voiceId: sg[0].voiceId,
+                        voiceNumber: sg[0].voiceNumber,
                         triplet: sg[0].triplet,
                         tripletPosition: sg[0].tripletPosition,
                         tripletType: sg[0].tripletType,
@@ -849,7 +1047,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             for (const ev of group.bass) {
                 let found = false;
                 for (const sg of subGroups) {
-                    if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE) {
+                    if (Math.abs(sg[0].time - ev.time) < CHORD_MERGE_TOLERANCE &&
+                        sg[0].voiceNumber === ev.voiceNumber) {
                         sg.push(ev);
                         found = true;
                         break;
@@ -890,6 +1089,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                         beats: maxBeats,
                         xml: mergedXml,
                         midiNotes: mergedMidiNotes,
+                        voiceId: sg[0].voiceId,
+                        voiceNumber: sg[0].voiceNumber,
                         triplet: sg[0].triplet,
                         tripletPosition: sg[0].tripletPosition,
                         tripletType: sg[0].tripletType,
@@ -984,7 +1185,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                     const { step: baseStep, alter, octave, } = midiToStepOctaveForKey(midi, fifths);
                     const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
                     const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
-                    xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, 1, segTie, !first, seg.dotted));
+                    xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, 1, segTie, !first, seg.dotted, tie.voiceNumber));
                     first = false;
                 }
             }
@@ -994,6 +1195,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 beats: beatsThisMeasure,
                 midiNotes: tie.midiNotes,
                 staff: 1,
+                voiceNumber: tie.voiceNumber,
                 time: -1,
             });
             tie.remainingBeats -= beatsThisMeasure;
@@ -1012,7 +1214,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                     const { step: baseStep, alter, octave, } = midiToStepOctaveForKey(midi, fifths);
                     const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
                     const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
-                    xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, 2, segTie, !first, seg.dotted));
+                    xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, 2, segTie, !first, seg.dotted, tie.voiceNumber));
                     first = false;
                 }
             }
@@ -1022,6 +1224,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 beats: beatsThisMeasure,
                 midiNotes: tie.midiNotes,
                 staff: 2,
+                voiceNumber: tie.voiceNumber,
                 time: -1,
             });
             tie.remainingBeats -= beatsThisMeasure;
@@ -1037,6 +1240,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 beats: ev.beats,
                 midiNotes: ev.midiNotes || [],
                 staff: ev.staff,
+                voiceNumber: ev.voiceNumber,
                 time: ev.time,
             });
         }
@@ -1054,7 +1258,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                         const { step: baseStep, alter, octave, } = midiToStepOctaveForKey(midi, fifths);
                         const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
                         const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
-                        xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, ev.staff, segTie, !first, seg.dotted));
+                        xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, ev.staff, segTie, !first, seg.dotted, ev.voiceNumber));
                         first = false;
                     }
                 }
@@ -1064,12 +1268,14 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                     beats: beatsThisMeasure,
                     midiNotes: ev.midiNotes,
                     staff: ev.staff,
+                    voiceNumber: ev.voiceNumber,
                     time: ev.time,
                 });
                 pendingTies.push({
                     midiNotes: ev.midiNotes,
                     remainingBeats: beatsRemaining,
                     staff: ev.staff,
+                    voiceNumber: ev.voiceNumber,
                 });
             }
             else {
@@ -1077,6 +1283,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                     midiNotes: ev.midiNotes || [],
                     remainingBeats: ev.beats,
                     staff: ev.staff,
+                    voiceNumber: ev.voiceNumber,
                 });
             }
         }
@@ -1116,10 +1323,14 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
         currentMeasure.bassEvents.length > 0) {
         measuresData.push(currentMeasure);
     }
+    const STABLE_MEASURES_PER_SYSTEM = 3;
     for (let mIdx = 0; mIdx < measuresData.length; mIdx++) {
         const mData = measuresData[mIdx];
         const measureNum = mIdx + 1;
         let measureContent = "";
+        if (measureNum > 1 && (measureNum - 1) % STABLE_MEASURES_PER_SYSTEM === 0) {
+            measureContent += '<print new-system="yes"/>';
+        }
         if (measureNum === 1) {
             const [beats, beatType] = timeSignature === "6/8"
                 ? ["6", "8"]
@@ -1195,6 +1406,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                     beats: maxBeats,
                     midiNotes: mergedMidi,
                     staff: group[0].staff,
+                    voiceNumber: group[0].voiceNumber,
                     time: group[0].time,
                 });
             };
@@ -1202,7 +1414,8 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 const ev = events[i];
                 const sameBeatPos = Math.abs(ev.beatPos - currentGroup[0].beatPos) < 0.001;
                 const sameTime = Math.abs(ev.time - currentGroup[0].time) < SAME_STAFF_TOLERANCE;
-                if (sameBeatPos && sameTime) {
+                const sameVoice = ev.voiceNumber === currentGroup[0].voiceNumber;
+                if (sameBeatPos && sameTime && sameVoice) {
                     currentGroup.push(ev);
                 }
                 else {
@@ -1220,15 +1433,17 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 return { events, overflows: [] };
             const result = [];
             const overflows = [];
-            let currentBeatEnd = 0;
+            const currentBeatEndByVoice = new Map();
             for (const ev of events) {
-                const startPos = Math.max(ev.beatPos, currentBeatEnd);
+                const voiceEnd = currentBeatEndByVoice.get(ev.voiceNumber) || 0;
+                const startPos = Math.max(ev.beatPos, voiceEnd);
                 if (startPos >= BEATS_PER_MEASURE - 0.001) {
                     if (ev.midiNotes.length > 0) {
                         overflows.push({
                             midiNotes: ev.midiNotes,
                             remainingBeats: ev.beats,
                             staff: ev.staff,
+                            voiceNumber: ev.voiceNumber,
                         });
                     }
                     continue;
@@ -1236,7 +1451,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                 const remaining = BEATS_PER_MEASURE - startPos;
                 if (ev.beats <= remaining + 0.001) {
                     result.push({ ...ev, beatPos: startPos });
-                    currentBeatEnd = startPos + ev.beats;
+                    currentBeatEndByVoice.set(ev.voiceNumber, startPos + ev.beats);
                 }
                 else {
                     const truncatedBeats = remaining;
@@ -1246,6 +1461,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                                 midiNotes: ev.midiNotes,
                                 remainingBeats: ev.beats,
                                 staff: ev.staff,
+                                voiceNumber: ev.voiceNumber,
                             });
                         }
                         continue;
@@ -1263,7 +1479,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                             const { step: baseStep, alter, octave, } = midiToStepOctaveForKey(midi, fifths);
                             const alterXml = alter !== 0 ? `<alter>${alter}</alter>` : "";
                             const pitchXml = `<pitch><step>${baseStep}</step>${alterXml}<octave>${octave}</octave></pitch>`;
-                            xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, ev.staff, segTie, !first, seg.dotted));
+                            xml.push(generateNoteXmlWithTie(pitchXml, seg.duration, seg.noteType, ev.staff, segTie, !first, seg.dotted, ev.voiceNumber));
                             first = false;
                         }
                     }
@@ -1273,6 +1489,7 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                         beats: truncatedBeats,
                         midiNotes: ev.midiNotes,
                         staff: ev.staff,
+                        voiceNumber: ev.voiceNumber,
                         time: ev.time,
                     });
                     const overflowBeats = ev.beats - truncatedBeats;
@@ -1281,9 +1498,10 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
                             midiNotes: ev.midiNotes,
                             remainingBeats: overflowBeats,
                             staff: ev.staff,
+                            voiceNumber: ev.voiceNumber,
                         });
                     }
-                    currentBeatEnd = BEATS_PER_MEASURE;
+                    currentBeatEndByVoice.set(ev.voiceNumber, BEATS_PER_MEASURE);
                 }
             }
             return { events: result, overflows };
@@ -1299,6 +1517,10 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             const ev = clampedTreble[evIdx];
             const gap = ev.beatPos - trebleBeatPos;
             if (gap < -0.001) {
+                const backupDivisions = Math.round((trebleBeatPos - ev.beatPos) * 24);
+                if (backupDivisions > 0) {
+                    measureContent += `<backup><duration>${backupDivisions}</duration></backup>`;
+                }
                 trebleBeatPos = ev.beatPos;
             }
             else if (gap > MIN_REST_GAP) {
@@ -1338,6 +1560,10 @@ function generateMeasureXmls(notes, chords, timeSignature = "4/4", bpm = 120, fi
             const ev = clampedBass[evIdx];
             const gap = ev.beatPos - bassBeatPos;
             if (gap < -0.001) {
+                const backupDivisions = Math.round((bassBeatPos - ev.beatPos) * 24);
+                if (backupDivisions > 0) {
+                    measureContent += `<backup><duration>${backupDivisions}</duration></backup>`;
+                }
                 bassBeatPos = ev.beatPos;
             }
             else if (gap > MIN_REST_GAP) {
@@ -1408,29 +1634,83 @@ function generateBlankPageMusicXML(timeSignature = "4/4", bpm = 120, fifths = 0,
 </score-partwise>`;
 }
 const FALLBACK_XML = generateBlankPageMusicXML();
-function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, compact = false, viewportHeight, refinementVersion, onScoreRendered, onScoreScrollActiveChange, }) {
-    var _a, _b, _c;
+function buildEventSignature(notes, chords) {
+    const noteSig = notes
+        .map((note) => {
+        var _a, _b, _c, _d, _e;
+        return [
+            "n",
+            Math.round(((_a = note.time_seconds) !== null && _a !== void 0 ? _a : 0) * 1000),
+            note.midi_note,
+            Math.round(((_b = note.duration_seconds) !== null && _b !== void 0 ? _b : 0) * 1000),
+            Math.round(((_c = note.start_beat) !== null && _c !== void 0 ? _c : -1) * 24),
+            Math.round(((_d = note.note_divisions) !== null && _d !== void 0 ? _d : -1) * 24),
+            (_e = note.note_value) !== null && _e !== void 0 ? _e : "",
+            note.dotted ? 1 : 0,
+            note.triplet ? 1 : 0,
+        ].join(":");
+    })
+        .join("|");
+    const chordSig = chords
+        .map((chord) => {
+        var _a, _b, _c, _d, _e, _f;
+        return [
+            "c",
+            Math.round(((_a = chord.time_seconds) !== null && _a !== void 0 ? _a : 0) * 1000),
+            ((_b = chord.midi_notes) !== null && _b !== void 0 ? _b : []).join(","),
+            Math.round(((_c = chord.duration_seconds) !== null && _c !== void 0 ? _c : 0) * 1000),
+            Math.round(((_d = chord.start_beat) !== null && _d !== void 0 ? _d : -1) * 24),
+            Math.round(((_e = chord.note_divisions) !== null && _e !== void 0 ? _e : -1) * 24),
+            (_f = chord.note_value) !== null && _f !== void 0 ? _f : "",
+            chord.dotted ? 1 : 0,
+            chord.triplet ? 1 : 0,
+        ].join(":");
+    })
+        .join("|");
+    return `${notes.length}/${chords.length}:${noteSig}::${chordSig}`;
+}
+function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, compact = false, showCompactPlaybackOverlay = true, viewportHeight, refinementVersion, onScoreRendered, onScoreScrollActiveChange, }) {
+    var _a, _b, _c, _d;
     const [accumulatedNotes, setAccumulatedNotes] = (0, react_1.useState)([]);
     const [accumulatedChords, setAccumulatedChords] = (0, react_1.useState)([]);
     const hasReceivedDataRef = (0, react_1.useRef)(false);
     const lastRefinementVersionRef = (0, react_1.useRef)(undefined);
+    const lastAppliedResultsSignatureRef = (0, react_1.useRef)("");
     (0, react_1.useEffect)(() => {
-        var _a, _b;
+        var _a, _b, _c;
         if (!results) {
             if (hasReceivedDataRef.current) {
                 setAccumulatedNotes([]);
                 setAccumulatedChords([]);
                 hasReceivedDataRef.current = false;
+                lastAppliedResultsSignatureRef.current = "";
             }
             return;
         }
         const incomingNotes = (_a = results.notes) !== null && _a !== void 0 ? _a : [];
         const incomingChords = (_b = results.chords) !== null && _b !== void 0 ? _b : [];
+        const isLiveStreamUpdate = ((_c = results.analysis_summary) === null || _c === void 0 ? void 0 : _c.method) === "live_stream";
         const isRefinementUpdate = refinementVersion !== undefined &&
             refinementVersion !== lastRefinementVersionRef.current;
         lastRefinementVersionRef.current = refinementVersion;
         if (isRefinementUpdate &&
             (incomingNotes.length > 0 || incomingChords.length > 0)) {
+            const signature = `refine:${refinementVersion}:${buildEventSignature(incomingNotes, incomingChords)}`;
+            if (signature === lastAppliedResultsSignatureRef.current) {
+                return;
+            }
+            lastAppliedResultsSignatureRef.current = signature;
+            hasReceivedDataRef.current = true;
+            setAccumulatedNotes(incomingNotes);
+            setAccumulatedChords(incomingChords);
+            return;
+        }
+        if (isLiveStreamUpdate) {
+            const signature = `stream:${buildEventSignature(incomingNotes, incomingChords)}`;
+            if (signature === lastAppliedResultsSignatureRef.current) {
+                return;
+            }
+            lastAppliedResultsSignatureRef.current = signature;
             hasReceivedDataRef.current = true;
             setAccumulatedNotes(incomingNotes);
             setAccumulatedChords(incomingChords);
@@ -1439,6 +1719,7 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
         if (incomingNotes.length === 0 && incomingChords.length === 0)
             return;
         hasReceivedDataRef.current = true;
+        lastAppliedResultsSignatureRef.current = `append:${buildEventSignature(incomingNotes, incomingChords)}`;
         setAccumulatedNotes((prev) => {
             var _a;
             const seen = new Set();
@@ -1451,6 +1732,9 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
                     seen.add(key);
                     toAdd.push(n);
                 }
+            }
+            if (toAdd.length === 0) {
+                return prev;
             }
             return [...prev, ...toAdd];
         });
@@ -1466,6 +1750,9 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
                     seen.add(key);
                     toAdd.push(c);
                 }
+            }
+            if (toAdd.length === 0) {
+                return prev;
             }
             return [...prev, ...toAdd];
         });
@@ -1489,7 +1776,8 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
         html: osmdHTML_1.OSMD_HTML,
         baseUrl: "https://osmd.local/",
     }), []);
-    const shouldFollowLatest = ((_c = results === null || results === void 0 ? void 0 : results.analysis_summary) === null || _c === void 0 ? void 0 : _c.method) === "live";
+    const shouldFollowLatest = ((_c = results === null || results === void 0 ? void 0 : results.analysis_summary) === null || _c === void 0 ? void 0 : _c.method) === "live" ||
+        ((_d = results === null || results === void 0 ? void 0 : results.analysis_summary) === null || _d === void 0 ? void 0 : _d.method) === "live_stream";
     const measuresSentRef = (0, react_1.useRef)(0);
     const lastXmlRef = (0, react_1.useRef)(null);
     const pendingXmlRef = (0, react_1.useRef)(null);
@@ -1820,6 +2108,17 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
             }
             return;
         }
+        if (!pendingXmlRef.current &&
+            score !== lastXmlRef.current &&
+            measures.length <= measuresSentRef.current) {
+            try {
+                sendRenderXml(score, "render-updated-current-measure");
+            }
+            catch (e) {
+                console.warn("Failed posting current-measure renderXml", e);
+            }
+            return;
+        }
         if (measures.length > measuresSentRef.current) {
             if (!lastXmlRef.current) {
                 sendRenderXml(score, "render-full-score-retry");
@@ -1921,20 +2220,43 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
                     styles.scoreSection,
                     compact
                         ? {
-                            flex: 1,
-                            minHeight: compactViewportHeight,
+                            flex: 0,
+                            minHeight: 0,
                             marginBottom: 0,
                             borderWidth: 0,
                             borderRadius: 0,
                         }
                         : null,
                 ] },
+                compact && !isLandscape && showCompactPlaybackOverlay ? (react_1.default.createElement(react_native_1.View, { pointerEvents: "box-none", style: styles.compactPlaybackOverlay },
+                    react_1.default.createElement(react_native_1.View, { style: styles.compactPlaybackBar },
+                        react_1.default.createElement(ThemedText_1.ThemedText, { style: styles.compactPlaybackBpm },
+                            playbackBPM,
+                            " BPM"),
+                        react_1.default.createElement(react_native_1.TouchableOpacity, { activeOpacity: 0.85, style: [
+                                styles.compactPlaybackButton,
+                                isPlaying && !isPaused
+                                    ? styles.compactPlaybackButtonActive
+                                    : styles.compactPlaybackButtonPrimary,
+                                !hasPlayableScore && !isPlaying && !isPaused
+                                    ? styles.compactPlaybackButtonDisabled
+                                    : null,
+                            ], onPress: handlePlayPause, disabled: !hasPlayableScore && !isPlaying && !isPaused },
+                            react_1.default.createElement(ThemedText_1.ThemedText, { style: styles.compactPlaybackButtonText }, isPlaying ? (isPaused ? "Resume" : "Pause") : "Play")),
+                        react_1.default.createElement(react_native_1.TouchableOpacity, { activeOpacity: 0.85, style: [
+                                styles.compactPlaybackButton,
+                                styles.compactPlaybackButtonSecondary,
+                                !isPlaying && !isPaused
+                                    ? styles.compactPlaybackButtonDisabled
+                                    : null,
+                            ], onPress: handleStopPlayback, disabled: !isPlaying && !isPaused },
+                            react_1.default.createElement(ThemedText_1.ThemedText, { style: styles.compactPlaybackButtonText }, "Stop"))))) : null,
                 react_1.default.createElement(react_native_1.View, { style: [
                         styles.webviewFrame,
                         compact
                             ? {
-                                flex: 1,
-                                minHeight: compactViewportHeight,
+                                height: compactViewportHeight,
+                                minHeight: 0,
                             }
                             : null,
                     ] },
@@ -1942,34 +2264,10 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
                             isLandscape ? styles.landscapeWebview : styles.webview,
                             compact
                                 ? {
-                                    flex: 1,
-                                    height: undefined,
+                                    height: compactViewportHeight,
                                 }
                                 : null,
-                        ], nestedScrollEnabled: true, scrollEnabled: true }),
-                    compact && !isLandscape ? (react_1.default.createElement(react_native_1.View, { pointerEvents: "box-none", style: styles.compactPlaybackOverlay },
-                        react_1.default.createElement(react_native_1.View, { style: styles.compactPlaybackBar },
-                            react_1.default.createElement(ThemedText_1.ThemedText, { style: styles.compactPlaybackBpm },
-                                playbackBPM,
-                                " BPM"),
-                            react_1.default.createElement(react_native_1.TouchableOpacity, { activeOpacity: 0.85, style: [
-                                    styles.compactPlaybackButton,
-                                    isPlaying && !isPaused
-                                        ? styles.compactPlaybackButtonActive
-                                        : styles.compactPlaybackButtonPrimary,
-                                    !hasPlayableScore && !isPlaying && !isPaused
-                                        ? styles.compactPlaybackButtonDisabled
-                                        : null,
-                                ], onPress: handlePlayPause, disabled: !hasPlayableScore && !isPlaying && !isPaused },
-                                react_1.default.createElement(ThemedText_1.ThemedText, { style: styles.compactPlaybackButtonText }, isPlaying ? (isPaused ? "Resume" : "Pause") : "Play")),
-                            react_1.default.createElement(react_native_1.TouchableOpacity, { activeOpacity: 0.85, style: [
-                                    styles.compactPlaybackButton,
-                                    styles.compactPlaybackButtonSecondary,
-                                    !isPlaying && !isPaused
-                                        ? styles.compactPlaybackButtonDisabled
-                                        : null,
-                                ], onPress: handleStopPlayback, disabled: !isPlaying && !isPaused },
-                                react_1.default.createElement(ThemedText_1.ThemedText, { style: styles.compactPlaybackButtonText }, "Stop"))))) : null)),
+                        ], nestedScrollEnabled: true, scrollEnabled: true }))),
             compact ? null : (react_1.default.createElement(react_native_1.View, { style: styles.viewControlsSection },
                 react_1.default.createElement(react_native_1.View, { style: styles.viewControls },
                     react_1.default.createElement(react_native_1.View, { style: styles.cameraModeGroup },
@@ -1990,6 +2288,7 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
                         ], onPress: () => {
                             setAccumulatedNotes([]);
                             setAccumulatedChords([]);
+                            lastAppliedResultsSignatureRef.current = "";
                             lastXmlRef.current = null;
                             measuresSentRef.current = 0;
                             pendingXmlRef.current = null;
@@ -2023,7 +2322,6 @@ const styles = react_native_1.StyleSheet.create({
         maxWidth: "100%",
     },
     compactMainContainer: {
-        flex: 1,
         minHeight: 0,
     },
     title: {
@@ -2149,7 +2447,6 @@ const styles = react_native_1.StyleSheet.create({
         minHeight: 560,
         backgroundColor: "#fff",
         borderRadius: 12,
-        overflow: "hidden",
         marginBottom: 12,
         borderWidth: 1,
         borderColor: "#d8e1ea",
@@ -2162,10 +2459,14 @@ const styles = react_native_1.StyleSheet.create({
     },
     compactPlaybackOverlay: {
         position: "absolute",
-        top: 12,
-        right: 12,
-        zIndex: 3,
-        elevation: 6,
+        top: 0,
+        left: 0,
+        right: 0,
+        alignItems: "center",
+        paddingTop: 8,
+        paddingBottom: 6,
+        zIndex: 2,
+        elevation: 2,
     },
     compactPlaybackBar: {
         flexDirection: "row",

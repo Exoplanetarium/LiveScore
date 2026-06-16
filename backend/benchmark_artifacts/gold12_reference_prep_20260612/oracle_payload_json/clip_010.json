@@ -1,0 +1,187 @@
+{
+  "clip_id": "clip_010",
+  "benchmark_clip_id": "clip_010",
+  "title": "Sonata No. 9, Op. 68, \"Black Mass\"",
+  "bpm": 120.0,
+  "notes": [
+    {
+      "time_seconds": 0.0,
+      "onset_time": 0.0,
+      "offset_time": 0.529545,
+      "duration_seconds": 0.529545,
+      "duration": 0.529545,
+      "midi_note": 61,
+      "velocity": 39,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.0,
+      "onset_time": 0.0,
+      "offset_time": 0.543182,
+      "duration_seconds": 0.543182,
+      "duration": 0.543182,
+      "midi_note": 70,
+      "velocity": 54,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.381818,
+      "onset_time": 0.381818,
+      "offset_time": 1.35,
+      "duration_seconds": 0.968182,
+      "duration": 0.968182,
+      "midi_note": 69,
+      "velocity": 46,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.404545,
+      "onset_time": 0.404545,
+      "offset_time": 1.343182,
+      "duration_seconds": 0.938636,
+      "duration": 0.938636,
+      "midi_note": 65,
+      "velocity": 33,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.256818,
+      "onset_time": 1.256818,
+      "offset_time": 2.306818,
+      "duration_seconds": 1.05,
+      "duration": 1.05,
+      "midi_note": 68,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.277273,
+      "onset_time": 1.277273,
+      "offset_time": 1.622727,
+      "duration_seconds": 0.345455,
+      "duration": 0.345455,
+      "midi_note": 59,
+      "velocity": 24,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.184091,
+      "onset_time": 2.184091,
+      "offset_time": 6.0,
+      "duration_seconds": 3.815909,
+      "duration": 3.815909,
+      "midi_note": 71,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.197727,
+      "onset_time": 2.197727,
+      "offset_time": 6.0,
+      "duration_seconds": 3.802273,
+      "duration": 3.802273,
+      "midi_note": 67,
+      "velocity": 34,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.220455,
+      "onset_time": 2.220455,
+      "offset_time": 3.220455,
+      "duration_seconds": 1.0,
+      "duration": 1.0,
+      "midi_note": 61,
+      "velocity": 33,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.220455,
+      "onset_time": 2.220455,
+      "offset_time": 3.275,
+      "duration_seconds": 1.054545,
+      "duration": 1.054545,
+      "midi_note": 65,
+      "velocity": 32,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.090909,
+      "onset_time": 3.090909,
+      "offset_time": 4.106818,
+      "duration_seconds": 1.015909,
+      "duration": 1.015909,
+      "midi_note": 64,
+      "velocity": 41,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.109091,
+      "onset_time": 3.109091,
+      "offset_time": 4.081818,
+      "duration_seconds": 0.972727,
+      "duration": 0.972727,
+      "midi_note": 55,
+      "velocity": 28,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.965909,
+      "onset_time": 3.965909,
+      "offset_time": 5.034091,
+      "duration_seconds": 1.068182,
+      "duration": 1.068182,
+      "midi_note": 59,
+      "velocity": 38,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.968182,
+      "onset_time": 3.968182,
+      "offset_time": 5.063636,
+      "duration_seconds": 1.095455,
+      "duration": 1.095455,
+      "midi_note": 63,
+      "velocity": 30,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.879545,
+      "onset_time": 4.879545,
+      "offset_time": 5.475,
+      "duration_seconds": 0.595455,
+      "duration": 0.595455,
+      "midi_note": 62,
+      "velocity": 27,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.888636,
+      "onset_time": 4.888636,
+      "offset_time": 5.247727,
+      "duration_seconds": 0.359091,
+      "duration": 0.359091,
+      "midi_note": 53,
+      "velocity": 31,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    }
+  ],
+  "chords": [],
+  "source_midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\midi_excerpt\\clip_010__Sonata No. 9_ Op. 68_ _Black Mass_.mid",
+  "oracle_kind": "maestro_gt_midi_through_generateMusicXML"
+}

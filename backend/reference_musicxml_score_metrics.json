@@ -1,0 +1,57 @@
+{
+  "mode": "payload_batch",
+  "raw_summaries": [
+    {
+      "clip": "clip_001__control",
+      "dropped": 1,
+      "added": 3,
+      "shifted": 1,
+      "rawOnly": 1,
+      "xmlOnly": 3
+    },
+    {
+      "clip": "clip_001__treatment",
+      "dropped": 0,
+      "added": 1,
+      "shifted": 0,
+      "rawOnly": 0,
+      "xmlOnly": 1
+    }
+  ],
+  "comparisons": [
+    {
+      "label": "clip_001__control",
+      "reference_path": "C:\\Users\\ToniH\\AppData\\Local\\Temp\\livescore_ref_musicxml_smoke\\clip_001.musicxml",
+      "predicted_tokens": 11,
+      "reference_tokens": 1,
+      "exact_token_matched": 0,
+      "exact_token_precision": 0,
+      "exact_token_recall": 0,
+      "exact_token_f1": 0,
+      "score_edit_accuracy": 0,
+      "score_edit_cost": 11.325,
+      "score_reference_cost": 1,
+      "score_edit_exact_ops": 0,
+      "score_edit_substitutions": 1,
+      "score_edit_deletions": 0,
+      "score_edit_insertions": 10
+    },
+    {
+      "label": "clip_001__treatment",
+      "reference_path": "C:\\Users\\ToniH\\AppData\\Local\\Temp\\livescore_ref_musicxml_smoke\\clip_001.musicxml",
+      "predicted_tokens": 11,
+      "reference_tokens": 1,
+      "exact_token_matched": 0,
+      "exact_token_precision": 0,
+      "exact_token_recall": 0,
+      "exact_token_f1": 0,
+      "score_edit_accuracy": 0,
+      "score_edit_cost": 11.352083333333333,
+      "score_reference_cost": 1,
+      "score_edit_exact_ops": 0,
+      "score_edit_substitutions": 1,
+      "score_edit_deletions": 0,
+      "score_edit_insertions": 10
+    }
+  ]
+}

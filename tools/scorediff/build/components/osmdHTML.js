@@ -143,6 +143,9 @@ exports.OSMD_HTML = `
     const PORTRAIT_LAYOUT_BOX_WIDTH_MULTIPLIER = 1.08;
     const PORTRAIT_MEASURE_MIN_WIDTH = 110;
     const LANDSCAPE_MEASURE_MIN_WIDTH = 190;
+    const PORTRAIT_FIXED_MEASURE_WIDTH = 128;
+    const LANDSCAPE_FIXED_MEASURE_WIDTH = 205;
+    const STABLE_MEASURES_PER_SYSTEM = 3;
     const PORTRAIT_MIN_NOTE_DISTANCE = 3.1;
     const LANDSCAPE_MIN_NOTE_DISTANCE = 2.8;
     const PORTRAIT_VOICE_SPACING_ADDEND = 4.6;
@@ -293,14 +296,16 @@ exports.OSMD_HTML = `
       osmd.EngravingRules.MeasureMinimumWidth = portraitWrapped
         ? PORTRAIT_MEASURE_MIN_WIDTH
         : LANDSCAPE_MEASURE_MIN_WIDTH;
-      osmd.EngravingRules.RenderXMeasuresPerLineAkaSystem = portraitWrapped ? 3 : 0;
-      osmd.EngravingRules.FixedMeasureWidth = false;
-      osmd.EngravingRules.FixedMeasureWidthFixedValue = 0;
-      osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = false;
+      osmd.EngravingRules.RenderXMeasuresPerLineAkaSystem = portraitWrapped ? STABLE_MEASURES_PER_SYSTEM : 0;
+      osmd.EngravingRules.FixedMeasureWidth = true;
+      osmd.EngravingRules.FixedMeasureWidthFixedValue = portraitWrapped
+        ? PORTRAIT_FIXED_MEASURE_WIDTH
+        : LANDSCAPE_FIXED_MEASURE_WIDTH;
+      osmd.EngravingRules.FixedMeasureWidthUseForPickupMeasure = true;
       osmd.EngravingRules.AutoGenerateMultipleRestMeasuresFromRestMeasures = false;
       osmd.EngravingRules.RenderMultipleRestMeasures = false;
-      osmd.EngravingRules.LastSystemMaxScalingFactor = 2.2;
-      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = false;
+      osmd.EngravingRules.LastSystemMaxScalingFactor = 1.0;
+      osmd.EngravingRules.NewSystemAtXMLNewSystemAttribute = true;
       osmd.EngravingRules.NewPageAtXMLNewPageAttribute = false;
       osmd.EngravingRules.AutoBeamNotes = true;
       osmd.EngravingRules.AutoBeamOptions = {
@@ -318,7 +323,7 @@ exports.OSMD_HTML = `
       osmd.setOptions({
         renderSingleHorizontalStaffline: false,
         autoResize: fullscreenMode,
-        newSystemFromXML: false,
+        newSystemFromXML: true,
         newSystemFromNewPageInXML: false,
         newPageFromXML: false,
       });
@@ -382,10 +387,14 @@ exports.OSMD_HTML = `
         if (scale === 1) {
           shell.style.width = '';
           shell.style.height = '';
+          shell.style.marginLeft = '';
+          shell.style.marginRight = '';
           svg.style.width = '';
           svg.style.height = '';
           svg.style.maxWidth = '';
           svg.style.display = '';
+          svg.style.marginLeft = '';
+          svg.style.marginRight = '';
           svg.style.transform = '';
           svg.style.transformOrigin = '';
           return;
@@ -404,6 +413,8 @@ exports.OSMD_HTML = `
         if (layoutHeight > 0) {
           shell.style.height = layoutHeight.toFixed(2) + 'px';
         }
+        shell.style.marginLeft = portraitWrapped ? 'auto' : '0';
+        shell.style.marginRight = portraitWrapped ? 'auto' : '0';
 
         if (Number.isFinite(contentWidth) && contentWidth > 0) {
           svg.style.width = Math.max(1, contentWidth).toFixed(2) + 'px';
@@ -413,6 +424,15 @@ exports.OSMD_HTML = `
           svg.style.height = Math.max(1, contentHeight).toFixed(2) + 'px';
         }
         svg.style.display = 'block';
+        if (portraitWrapped && layoutWidth > 0 && Number.isFinite(contentWidth) && contentWidth > 0) {
+          const renderedWidth = contentWidth * scale;
+          const visualInset = Math.max(0, (layoutWidth - renderedWidth) / 2);
+          svg.style.marginLeft = visualInset.toFixed(2) + 'px';
+          svg.style.marginRight = '0';
+        } else {
+          svg.style.marginLeft = '';
+          svg.style.marginRight = '';
+        }
         svg.style.transformOrigin = 'top left';
         svg.style.transform = 'scale(' + scale.toFixed(4) + ')';
 
@@ -976,7 +996,7 @@ exports.OSMD_HTML = `
         playBtn.className = 'play-btn' + (isPlaying && !isPaused ? ' playing' : '');
       }
       if (bpmDisplay) {
-        bpmDisplay.textContent = playbackBPM;
+        bpmDisplay.textContent = Math.round(playbackBPM);
       }
     }
     
@@ -1325,46 +1345,49 @@ exports.OSMD_HTML = `
       const tiedOpen = {};
 
       measures.forEach((measure, measureIndex) => {
-        let voice1Time = currentTime;
-        let voice2Time = currentTime;
-        let lastVoice1NoteTime = currentTime;  // Track last note start for chords
-        let lastVoice2NoteTime = currentTime;
+        const measureStartTime = currentTime;
+        let measureDivisions = divisions;
+        const measureDivisionsEl = measure.querySelector('attributes divisions');
+        if (measureDivisionsEl) {
+          const parsedDivisions = parseInt(measureDivisionsEl.textContent || '', 10);
+          if (Number.isFinite(parsedDivisions) && parsedDivisions > 0) {
+            measureDivisions = parsedDivisions;
+          }
+        }
+
+        let cursorTime = measureStartTime;
+        let maxCursorTime = measureStartTime;
+        let lastNoteStartTime = measureStartTime;
+        const measureDurationSeconds =
+          beatsPerMeasure * (4 / Math.max(1, beatType)) * quarterNoteDuration;
         
         const elements = measure.children;
-        let activeVoice = 1;
+        let activeVoice = '1';
         
         for (let i = 0; i < elements.length; i++) {
           const el = elements[i];
           
           if (el.tagName === 'backup') {
             const backupDur = parseInt(el.querySelector('duration')?.textContent || '0');
-            const backupSeconds = (backupDur / divisions) * quarterNoteDuration;
-            // Backup typically means we're switching from treble to bass staff
-            // Reset voice2Time to go back to the start of the measure
-            voice2Time = currentTime;  // Reset to measure start
-            lastVoice2NoteTime = currentTime;  // Reset chord tracking too
-            // Note: we don't use the backupSeconds directly because our measure structure
-            // always backs up to the start of the measure for bass staff
+            const backupSeconds = (backupDur / measureDivisions) * quarterNoteDuration;
+            cursorTime = Math.max(measureStartTime, cursorTime - backupSeconds);
+            lastNoteStartTime = cursorTime;
           } else if (el.tagName === 'forward') {
             const forwardDur = parseInt(el.querySelector('duration')?.textContent || '0');
-            const forwardSeconds = (forwardDur / divisions) * quarterNoteDuration;
-            if (activeVoice === 1) {
-              voice1Time += forwardSeconds;
-            } else {
-              voice2Time += forwardSeconds;
-            }
+            const forwardSeconds = (forwardDur / measureDivisions) * quarterNoteDuration;
+            cursorTime += forwardSeconds;
+            maxCursorTime = Math.max(maxCursorTime, cursorTime);
           } else if (el.tagName === 'note') {
             const isRest = el.querySelector('rest') !== null;
             const isChord = el.querySelector('chord') !== null;
             const isGrace = el.querySelector('grace') !== null;
             const durationEl = el.querySelector('duration');
-            const duration = durationEl ? parseInt(durationEl.textContent) : divisions;
-            const durationSeconds = (duration / divisions) * quarterNoteDuration;
+            const duration = durationEl ? parseInt(durationEl.textContent) : measureDivisions;
+            const durationSeconds = (duration / measureDivisions) * quarterNoteDuration;
             
             // Get voice
             const voiceEl = el.querySelector('voice');
-            activeVoice = voiceEl ? parseInt(voiceEl.textContent) : 1;
-            const voiceTime = activeVoice === 1 ? voice1Time : voice2Time;
+            activeVoice = voiceEl ? String(voiceEl.textContent || '1') : '1';
             
             if (!isRest) {
               // Get pitch
@@ -1380,9 +1403,10 @@ exports.OSMD_HTML = `
                 const midi = (octave + 1) * 12 + stepToSemitone[step] + alter;
                 const noteName = midiToNoteName(midi);
                 
-                // If chord, use same start time as previous note in this voice
-                const lastNoteTime = activeVoice === 1 ? lastVoice1NoteTime : lastVoice2NoteTime;
-                const noteStartTime = isChord ? lastNoteTime : voiceTime;
+                // MusicXML uses a single time cursor per part. <backup> rewinds
+                // it for the second staff/voice; <chord> reuses the previous
+                // note's onset without advancing the cursor.
+                const noteStartTime = isChord ? lastNoteStartTime : cursorTime;
                 
                 // Check for ornaments in notations
                 const notationsEl = el.querySelector('notations');
@@ -1455,28 +1479,20 @@ exports.OSMD_HTML = `
                 
                 // Update last note time for this voice (for chord detection)
                 if (!isChord) {
-                  if (activeVoice === 1) {
-                    lastVoice1NoteTime = noteStartTime;
-                  } else {
-                    lastVoice2NoteTime = noteStartTime;
-                  }
+                  lastNoteStartTime = noteStartTime;
                 }
               }
             }
             
             // Advance time only for non-chord, non-grace notes
             if (!isChord && !isGrace) {
-              if (activeVoice === 1) {
-                voice1Time += durationSeconds;
-              } else {
-                voice2Time += durationSeconds;
-              }
+              cursorTime += durationSeconds;
+              maxCursorTime = Math.max(maxCursorTime, cursorTime);
             }
           }
         }
         
-        // Move to next measure (use the furthest voice position)
-        currentTime = Math.max(voice1Time, voice2Time);
+        currentTime = Math.max(maxCursorTime, measureStartTime + measureDurationSeconds);
       });
       
       // Sort by time

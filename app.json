@@ -25,6 +25,14 @@
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      [
+        "expo-dev-client",
+        {
+          "android": {
+            "launchMode": "launcher"
+          }
+        }
+      ],
       "expo-router",
       [
         "expo-splash-screen",

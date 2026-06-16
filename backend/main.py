@@ -308,6 +308,15 @@ STREAM_FRAME_EVIDENCE_SEC = 0.08
 # what rejects the noise that floods in when the birth gates are merely relaxed.
 STREAM_MIN_DISPLAY_OBSERVATIONS = 3
 STREAM_DISPLAY_FRAME_EVIDENCE_SEC = 0.15
+# Master switch for the RMS-attack birth gates in _filter_stream_continuity
+# (same_pitch_boundary / implausible_repeat / harmonic_sustain /
+# weak_birth_outside_attack). When False, every decoded observation is born and
+# birth/noise rejection is delegated entirely to the persistence + frame-evidence
+# display gate above. The RMS-attack heuristic physically cannot see a soft note
+# struck under sustained louder notes, so the gates cost real recall (soft inner
+# voices, soft repeated notes) while the display gate already separates real notes
+# (median ~22 observations) from single-window decode noise (median 1).
+STREAM_RMS_BIRTH_GATES = False
 
 
 class ContinuousLiveStreamSession:
@@ -770,6 +779,14 @@ class ContinuousLiveStreamSession:
             )
 
             if self._match_hypothesis(observation) is not None:
+                kept.append(observation)
+                continue
+
+            # When the RMS-attack birth gates are disabled, keep every decoded
+            # observation here; the persistence + frame-evidence display gate is
+            # the only birth/noise filter. attack-group registration above still
+            # runs so rescue bookkeeping stays consistent if gates are re-enabled.
+            if not STREAM_RMS_BIRTH_GATES:
                 kept.append(observation)
                 continue
 

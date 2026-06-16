@@ -93,7 +93,17 @@ LIVE_TEMPO_NATURAL_MAX_BPM = 160.0
 # estimate back into the natural range as a prior. Env-gated for A/B testing.
 LIVE_TEMPO_OCTAVE_GUARD = os.environ.get("LIVE_TEMPO_OCTAVE_GUARD", "1") != "0"
 LIVE_SCORE_DURATION_POLICY = os.environ.get("LIVE_SCORE_DURATION_POLICY", "ioi_same_voice")
-LIVE_VOICE_ASSIGNMENT = os.environ.get("LIVE_VOICE_ASSIGNMENT", "pitch_lanes")
+LIVE_VOICE_ASSIGNMENT = os.environ.get("LIVE_VOICE_ASSIGNMENT", "per_hand")
+# Re-express each display event's start_beat from its raw onset at the *final*
+# reported tempo, snapped to 1/N of a beat. The per-note start_beat written
+# during streaming is frozen at the tempo tracker's value at the moment the note
+# was quantized; as the tracker later refines BPM, those beats drift relative to
+# the final tempo the score is rendered at, distorting printed note values
+# (the score-vs-MIDI tempo divergence). Recomputing from time_seconds at the
+# final BPM removes that drift while still removing transcription jitter via the
+# snap grid. 1/12 (eighth-triplet resolution) measured cleanest on gold12;
+# set LIVE_DISPLAY_BEAT_SNAP_DIV=0 to restore the legacy frozen-grid behaviour.
+LIVE_DISPLAY_BEAT_SNAP_DIV = int(os.environ.get("LIVE_DISPLAY_BEAT_SNAP_DIV", "12"))
 DISPLAY_EVENT_DEDUPE_TOLERANCE_SEC = 0.05
 DISPLAY_EVENT_GROUP_TOLERANCE_SEC = 0.03
 DISPLAY_CHORD_RECONCILE_TOLERANCE_SEC = 0.01
@@ -182,6 +192,18 @@ def _event_hand(event: Dict) -> str:
 
 
 def _voice_id_from_pitch(hand: str, pitch: Optional[int]) -> Tuple[str, int]:
+    # 'per_hand': collapse each staff to a single notation lane (index 0 ->
+    # MusicXML voice 1/2). The score's printed duration is the beat-IOI to the
+    # next note in the SAME voice lane, and the GT/reference oracle carries no
+    # voice info (renders as one voice per hand). Pitch-bucketed lanes therefore
+    # both mismatch the reference voice number AND fragment a melodic line every
+    # time it crosses a bucket boundary (over-extending its duration). One lane
+    # per hand makes per-voice IOI == per-hand IOI, the correct default for the
+    # mostly-monophonic-per-hand material we transcribe. gold12 score edit
+    # accuracy 28.6 -> 41.1 vs 'pitch_lanes'. See memory
+    # score_vs_midi_timing_divergence.
+    if LIVE_VOICE_ASSIGNMENT == 'per_hand':
+        return f"{hand}_voice_0", 0
     if pitch is None:
         index = 1
     elif hand == 'treble':
@@ -562,12 +584,35 @@ def _group_display_note_events(note_events: List[Dict]) -> List[List[Dict]]:
     return groups
 
 
+def _normalize_display_beats(events: List[Dict], bpm: float) -> None:
+    """Snap each event's start_beat to its raw onset at the final reported tempo.
+
+    See LIVE_DISPLAY_BEAT_SNAP_DIV: the streaming-time start_beat is frozen at the
+    tempo-tracker value when the note was quantized, so it drifts from the final
+    rendered tempo. Recomputing from time_seconds at the final BPM (snapped to a
+    1/N-beat grid) removes that drift while preserving jitter removal."""
+    div = LIVE_DISPLAY_BEAT_SNAP_DIV
+    if div <= 0 or bpm <= 0:
+        return
+    beat_dur = 60.0 / bpm
+    for event in events:
+        raw = event.get('time_seconds', event.get('onset_time'))
+        try:
+            onset = float(raw)
+        except (TypeError, ValueError):
+            continue
+        event['start_beat'] = round(onset / beat_dur * div) / div
+
+
 def _build_display_surface(
     notes: List[Dict],
     chords: List[Dict],
+    bpm: float = 0.0,
 ) -> Dict[str, List[Dict]]:
     sanitized_notes: List[Dict] = [_sanitize_display_event(note) for note in (notes or [])]
     sanitized_chords: List[Dict] = [_sanitize_display_event(chord) for chord in (chords or [])]
+    _normalize_display_beats(sanitized_notes, bpm)
+    _normalize_display_beats(sanitized_chords, bpm)
     assign_voice_ids(sanitized_notes)
     assign_voice_ids(sanitized_chords)
 
@@ -1476,7 +1521,11 @@ class LiveTranscriptionSession:
         return self.refinement_state.get_all_notes()
 
     def get_display_state(self) -> Dict[str, List[Dict]]:
-        return _build_display_surface(self.get_all_notes(), self.coarse_chords)
+        return _build_display_surface(
+            self.get_all_notes(),
+            self.coarse_chords,
+            self.tempo_tracker.current_bpm,
+        )
 
     def get_current_bpm(self) -> Tuple[float, float]:
         return (self.tempo_tracker.current_bpm, self.tempo_tracker.confidence)
@@ -1498,14 +1547,22 @@ class LiveTranscriptionSession:
         old_delay_beats = self.refinement_state.refinement_delay_beats
         old_min_delay = self.refinement_state.refinement_min_delay_sec
         old_min_beats = self.refinement_state.min_beats_for_refinement
-        self.refinement_state.refinement_delay_beats = 0.0
-        self.refinement_state.refinement_min_delay_sec = 0.0
-        self.refinement_state.min_beats_for_refinement = 0.0
-        refined = self.refinement_state.check_refinement(current_time + 10, bpm, grid=grid)
-        self.refinement_state.refinement_delay_beats = old_delay_beats
-        self.refinement_state.refinement_min_delay_sec = old_min_delay
-        self.refinement_state.min_beats_for_refinement = old_min_beats
-        return refined
+        old_min_notes = self.refinement_state.min_notes_for_refinement
+        try:
+            self.refinement_state.refinement_delay_beats = 0.0
+            self.refinement_state.refinement_min_delay_sec = 0.0
+            self.refinement_state.min_beats_for_refinement = 0.0
+            self.refinement_state.min_notes_for_refinement = 1
+            return self.refinement_state.check_refinement(
+                current_time + 10,
+                bpm,
+                grid=grid,
+            )
+        finally:
+            self.refinement_state.refinement_delay_beats = old_delay_beats
+            self.refinement_state.refinement_min_delay_sec = old_min_delay
+            self.refinement_state.min_beats_for_refinement = old_min_beats
+            self.refinement_state.min_notes_for_refinement = old_min_notes
 
     def reset(self):
         self.tempo_tracker.reset()

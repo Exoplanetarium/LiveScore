@@ -3,7 +3,13 @@ import { Midi } from "@tonejs/midi";
 import * as FileSystem from "expo-file-system";
 import { LinearGradient } from "expo-linear-gradient";
 import * as Sharing from "expo-sharing";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -37,7 +43,11 @@ const USE_LIVE_ADAPTIVE_ONSET_THRESHOLD_EXPERIMENT = true;
 const USE_LIVE_OSMD_ENGRAVING_EXPERIMENT = true;
 const LIVE_PREVIEW_BATCH_MS = 33;
 const LIVE_PREVIEW_STALE_FLUSH_MS = 180;
+const LIVE_STREAM_ANALYSIS_BATCH_MS = 250;
 const LIVE_OSMD_BATCH_MS = 500;
+const LIVE_PREVIEW_STRIP_LOOKBACK_BEATS = 12;
+const LIVE_PREVIEW_STRIP_MIN_HISTORY_SEC = 6;
+const LIVE_PREVIEW_STRIP_LOOKAHEAD_SEC = 1.5;
 
 type LiveNoiseProfile = "open" | "balanced" | "clean";
 
@@ -158,6 +168,11 @@ interface AnalysisResult {
     samples_received?: number;
   };
 }
+
+type LivePreviewStripResult = Pick<
+  AnalysisResult,
+  "notes" | "chords" | "analysis_summary"
+>;
 
 interface RecordedChunkTelemetry {
   sequenceNumber: number;
@@ -289,6 +304,19 @@ interface LiveStreamUpdate {
     committed?: number;
     locked?: number;
   };
+  refinement?: {
+    needs_refresh?: boolean;
+    refined_notes?: NoteResult[];
+    refinement_version?: number;
+    bpm?: number;
+    bpm_confidence?: number;
+    next_refinement_poll_ms?: number | null;
+    timing_ms?: {
+      display_state?: number;
+    };
+  };
+  all_notes?: NoteResult[];
+  all_chords?: ChordResult[];
   error?: string;
 }
 
@@ -301,6 +329,42 @@ function getLiveStreamUrl() {
   );
   return `${wsBaseUrl}/live/stream`;
 }
+interface MemoizedLivePreviewStripProps {
+  analysisFallback: AnalysisResult | null;
+  bpm: number;
+  isRecording: boolean;
+  localElapsedSeconds: number;
+  localStartedAtMs: number | null;
+  previewResult: LivePreviewStripResult | null;
+}
+
+const MemoizedLivePreviewStrip = React.memo(
+  function MemoizedLivePreviewStrip({
+    analysisFallback,
+    bpm,
+    isRecording,
+    localElapsedSeconds,
+    localStartedAtMs,
+    previewResult,
+  }: MemoizedLivePreviewStripProps) {
+    return (
+      <LiveScoreStrip
+        results={previewResult ?? analysisFallback}
+        bpm={bpm}
+        localElapsedSeconds={localElapsedSeconds}
+        localStartedAtMs={localStartedAtMs}
+        isRecording={isRecording}
+      />
+    );
+  },
+  (prev, next) =>
+    prev.analysisFallback === next.analysisFallback &&
+    prev.bpm === next.bpm &&
+    prev.isRecording === next.isRecording &&
+    prev.localElapsedSeconds === next.localElapsedSeconds &&
+    prev.localStartedAtMs === next.localStartedAtMs &&
+    prev.previewResult === next.previewResult,
+);
 
 function midiToNoteName(midi: number) {
   const names = [
@@ -358,16 +422,21 @@ function quantizeStreamDurationBeats(rawBeats: number): {
   );
 }
 
-function streamPayloadToNote(
-  payload: LiveStreamNotePayload,
-  bpm: number = 120,
-): NoteResult {
+function getLiveStreamPayloadBounds(payload: LiveStreamNotePayload) {
   const onset = Number(payload.onset_time ?? 0);
   const duration = Math.max(
     0.04,
     Number(payload.duration ?? (payload.offset_time ?? onset) - onset),
   );
   const offset = Number(payload.offset_time ?? onset + duration);
+  return { duration, offset, onset };
+}
+
+function streamPayloadToNote(
+  payload: LiveStreamNotePayload,
+  bpm: number = 120,
+): NoteResult {
+  const { duration, offset, onset } = getLiveStreamPayloadBounds(payload);
   const secondsPerBeat = 60 / Math.max(40, Math.min(240, bpm || 120));
   const startBeat = Math.round((onset / secondsPerBeat) * 24) / 24;
   const durationSpec = quantizeStreamDurationBeats(duration / secondsPerBeat);
@@ -397,6 +466,87 @@ function getLiveStreamNoteKey(payload: LiveStreamNotePayload) {
     return `id-${payload.id}`;
   }
   return `${payload.midi_note}-${Math.round((payload.onset_time ?? 0) * 1000)}`;
+}
+
+function buildLiveStreamPreviewResult(
+  update: LiveStreamUpdate,
+  bpm: number | undefined,
+  previewPayloads: Map<string, LiveStreamNotePayload>,
+): LivePreviewStripResult {
+  const safeBpm = Math.max(40, Math.min(240, bpm || 120));
+  const secondsPerBeat = 60 / safeBpm;
+  const audioTimeSec = Math.max(
+    0,
+    update.session?.audio_time_sec ?? update.session?.current_time_sec ?? 0,
+  );
+  const minVisibleTimeSec = Math.max(
+    0,
+    audioTimeSec -
+      Math.max(
+        LIVE_PREVIEW_STRIP_MIN_HISTORY_SEC,
+        secondsPerBeat * LIVE_PREVIEW_STRIP_LOOKBACK_BEATS,
+      ),
+  );
+  const maxVisibleTimeSec = audioTimeSec + LIVE_PREVIEW_STRIP_LOOKAHEAD_SEC;
+  const visiblePayloads = [
+    ...(update.heard_notes ?? []).map((payload) => ({
+      ...payload,
+      state: "active" as const,
+    })),
+    ...(update.candidate_notes ?? []).map((payload) => ({
+      ...payload,
+      state: "active" as const,
+    })),
+    ...(update.active_notes ?? []).map((payload) => ({
+      ...payload,
+      state: "active" as const,
+    })),
+    ...(update.committed_notes ?? []),
+    ...(update.locked_notes ?? []),
+  ];
+  const snapshotKeys = new Set<string>();
+
+  for (const payload of visiblePayloads) {
+    const key = getLiveStreamNoteKey(payload);
+    snapshotKeys.add(key);
+    previewPayloads.set(key, payload);
+  }
+
+  for (const [key, payload] of previewPayloads) {
+    const { offset, onset } = getLiveStreamPayloadBounds(payload);
+    const isTransient =
+      payload.state !== "committed" && payload.state !== "locked";
+    if (
+      (isTransient && !snapshotKeys.has(key)) ||
+      offset < minVisibleTimeSec ||
+      onset > maxVisibleTimeSec
+    ) {
+      previewPayloads.delete(key);
+    }
+  }
+
+  const notes = [...previewPayloads.values()]
+    .map((payload) => streamPayloadToNote(payload, safeBpm))
+    .sort(
+      (left, right) =>
+        left.time_seconds - right.time_seconds ||
+        left.midi_note - right.midi_note,
+    );
+
+  return {
+    notes,
+    chords: [],
+    analysis_summary: {
+      total_onsets: notes.length,
+      total_notes: notes.length,
+      total_chords: 0,
+      duration_seconds: audioTimeSec,
+      sample_rate: LIVE_AUDIO_SAMPLE_RATE,
+      detected_bpm: bpm,
+      tempo_confidence: undefined,
+      method: "live_stream_preview",
+    },
+  };
 }
 
 function buildLiveStreamAnalysisResult(
@@ -442,6 +592,29 @@ function buildLiveStreamAnalysisResult(
     update.session?.audio_time_sec ?? update.session?.current_time_sec ?? 0,
   );
   return result;
+}
+
+function mergeLiveStreamAnalysisPayloads(
+  update: LiveStreamUpdate,
+  accumulatedPayloads?: Map<string, LiveStreamNotePayload>,
+  includeUnstableNotes = false,
+) {
+  if (!accumulatedPayloads) {
+    return;
+  }
+
+  const visibleNotes = [
+    ...(includeUnstableNotes ? (update.heard_notes ?? []) : []),
+    ...(includeUnstableNotes ? (update.candidate_notes ?? []) : []),
+    ...(includeUnstableNotes ? (update.active_notes ?? []) : []),
+    ...(update.committed_notes ?? []),
+    ...(update.locked_notes ?? []),
+    ...(!includeUnstableNotes ? (update.active_notes ?? []) : []),
+  ];
+
+  for (const payload of visibleNotes) {
+    accumulatedPayloads.set(getLiveStreamNoteKey(payload), payload);
+  }
 }
 
 function buildAnalysisResultEventSignature(result: AnalysisResult) {
@@ -513,6 +686,67 @@ function buildLiveAnalysisResult(
   };
 }
 
+interface MemoizedScoreContentProps {
+  analysisResult: AnalysisResult | null;
+  compact: boolean;
+  hasStoppedRecording: boolean;
+  isRecording: boolean;
+  isWarmingUp: boolean;
+  liveEngravingResult: AnalysisResult | null;
+  liveEngravingVersion: number;
+  onScoreScrollActiveChange: (active: boolean) => void;
+  viewportHeight?: number;
+}
+
+const MemoizedScoreContent = React.memo(function MemoizedScoreContent({
+  analysisResult,
+  compact,
+  hasStoppedRecording,
+  isRecording,
+  isWarmingUp,
+  liveEngravingResult,
+  liveEngravingVersion,
+  onScoreScrollActiveChange,
+  viewportHeight,
+}: MemoizedScoreContentProps) {
+  if (USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
+    return (
+      <PianoSheetMusic
+        results={liveEngravingResult ?? undefined}
+        refinementVersion={liveEngravingVersion}
+        compact={compact}
+        showCompactPlaybackOverlay={hasStoppedRecording}
+        viewportHeight={viewportHeight}
+        onScoreScrollActiveChange={onScoreScrollActiveChange}
+      />
+    );
+  }
+
+  if (hasStoppedRecording && analysisResult) {
+    return (
+      <PianoSheetMusic
+        results={analysisResult}
+        compact={compact}
+        showCompactPlaybackOverlay={hasStoppedRecording}
+        viewportHeight={viewportHeight}
+        onScoreScrollActiveChange={onScoreScrollActiveChange}
+      />
+    );
+  }
+
+  return (
+    <View style={compact ? styles.liveScorePlaceholder : null}>
+      <ThemedText style={styles.placeholderText}>
+        {isRecording
+          ? "Recording... live engraving will continue to update here while the controls stay pinned below."
+          : isWarmingUp
+            ? "Warming the live neural path. Recording has not started yet."
+            : "Start a live session to capture notes. The piano roll above updates in real time; sheet music renders after stop."}
+      </ThemedText>
+    </View>
+  );
+});
+
 function getConnectionStatusColor(status: ConnectionStatus) {
   switch (status) {
     case "connected":
@@ -536,9 +770,7 @@ function getConnectionStatusText(
   }
 
   if (isProcessing) {
-    return USE_LIVE_STREAM_TRANSPORT
-      ? "Updating stream"
-      : "Processing chunk";
+    return USE_LIVE_STREAM_TRANSPORT ? "Updating stream" : "Processing chunk";
   }
 
   switch (status) {
@@ -596,10 +828,11 @@ export default function LiveTranscriptionScreen() {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(
     null,
   );
+  const analysisResultRef = useRef<AnalysisResult | null>(null);
   const [liveEngravingResult, setLiveEngravingResult] =
     useState<AnalysisResult | null>(null);
   const [livePreviewResult, setLivePreviewResult] =
-    useState<AnalysisResult | null>(null);
+    useState<LivePreviewStripResult | null>(null);
   const [liveEngravingVersion, setLiveEngravingVersion] = useState(0);
   const [sessionReady, setSessionReady] = useState(false);
   const [noiseProfile, setNoiseProfile] =
@@ -618,12 +851,20 @@ export default function LiveTranscriptionScreen() {
     result: AnalysisResult | null;
     version: number;
   }>({ result: null, version: 0 });
-  const livePreviewFlushTimeoutRef =
-    useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingLivePreviewRef = useRef<AnalysisResult | null>(null);
+  const livePreviewFlushTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const pendingLivePreviewRef = useRef<LivePreviewStripResult | null>(null);
   const pendingLivePreviewQueuedAtRef = useRef<number | null>(null);
   const pendingLivePreviewAudioTimeMsRef = useRef<number | null>(null);
+  const liveStreamAnalysisFlushTimeoutRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const pendingLiveStreamAnalysisUpdateRef = useRef<LiveStreamUpdate | null>(
+    null,
+  );
   const lastLivePreviewFlushAtRef = useRef(0);
+  const lastLiveStreamAnalysisFlushAtRef = useRef(0);
   const coalescedLivePreviewUpdatesRef = useRef(0);
   const droppedLivePreviewUpdatesRef = useRef(0);
   const livePreviewFlushCountRef = useRef(0);
@@ -641,6 +882,9 @@ export default function LiveTranscriptionScreen() {
   const liveStreamNotePayloadsRef = useRef<Map<string, LiveStreamNotePayload>>(
     new Map(),
   );
+  const liveStreamPreviewPayloadsRef = useRef<
+    Map<string, LiveStreamNotePayload>
+  >(new Map());
   const liveStreamAnalysisSignatureRef = useRef("");
   const liveStreamAudioSubscriptionRef = useRef<{
     remove?: () => void;
@@ -650,9 +894,7 @@ export default function LiveTranscriptionScreen() {
     null,
   );
   const liveStreamWarmResolveRef = useRef<(() => void) | null>(null);
-  const liveStreamWarmRejectRef = useRef<((error: Error) => void) | null>(
-    null,
-  );
+  const liveStreamWarmRejectRef = useRef<((error: Error) => void) | null>(null);
   const liveStreamStopResolveRef = useRef<(() => void) | null>(null);
   const currentChunkStartedAtRef = useRef<number | null>(null);
   const chunkSequenceRef = useRef(0);
@@ -690,6 +932,10 @@ export default function LiveTranscriptionScreen() {
     sessionReadyRef.current = sessionReady;
   }, [sessionReady]);
 
+  useEffect(() => {
+    analysisResultRef.current = analysisResult;
+  }, [analysisResult]);
+
   const clearLivePreviewQueue = useCallback(() => {
     if (livePreviewFlushTimeoutRef.current) {
       clearTimeout(livePreviewFlushTimeoutRef.current);
@@ -707,19 +953,21 @@ export default function LiveTranscriptionScreen() {
     lastLivePreviewDataLagMsRef.current = null;
   }, []);
 
+  const clearLiveStreamAnalysisQueue = useCallback(() => {
+    if (liveStreamAnalysisFlushTimeoutRef.current) {
+      clearTimeout(liveStreamAnalysisFlushTimeoutRef.current);
+      liveStreamAnalysisFlushTimeoutRef.current = null;
+    }
+    pendingLiveStreamAnalysisUpdateRef.current = null;
+    lastLiveStreamAnalysisFlushAtRef.current = 0;
+  }, []);
+
   const handleLiveScoreSectionLayout = useCallback(
     (event: LayoutChangeEvent) => {
       liveScoreSectionYRef.current = event.nativeEvent.layout.y;
     },
     [],
   );
-
-  const scrollToLiveScoreSection = useCallback(() => {
-    const targetY = Math.max(0, liveScoreSectionYRef.current - 12);
-    requestAnimationFrame(() => {
-      scrollViewRef.current?.scrollTo({ y: targetY, animated: false });
-    });
-  }, []);
 
   const clearPendingChunkUpload = useCallback(() => {
     const pendingUpload = pendingChunkUploadRef.current;
@@ -825,20 +1073,27 @@ export default function LiveTranscriptionScreen() {
     version: liveRefinementVersion,
   } = useLiveRhythm({
     onRefinementReady: (result) => {
-      setAnalysisResult((previous) =>
-        buildLiveAnalysisResult(
+      setAnalysisResult((previous) => {
+        const nextResult = buildLiveAnalysisResult(
           result.notes as NoteResult[],
           result.chords as ChordResult[],
           previous?.onsets ?? [],
           result.bpm,
           result.bpmConfidence,
-        ),
-      );
+        );
+        analysisResultRef.current = nextResult;
+        return nextResult;
+      });
       setSessionReady(true);
       sessionReadyRef.current = true;
       setConnectionStatus("connected");
     },
   });
+
+  const currentBpmRef = useRef(120);
+  useEffect(() => {
+    currentBpmRef.current = currentBpm;
+  }, [currentBpm]);
 
   const warmBackend = useCallback(async () => {
     const response = await fetch(`${BACKEND_URL}/warmup`);
@@ -918,7 +1173,7 @@ export default function LiveTranscriptionScreen() {
   }, []);
 
   const queueLivePreviewResult = useCallback(
-    (nextResult: AnalysisResult) => {
+    (nextResult: LivePreviewStripResult) => {
       if (pendingLivePreviewRef.current) {
         droppedLivePreviewUpdatesRef.current += 1;
       }
@@ -952,6 +1207,73 @@ export default function LiveTranscriptionScreen() {
       }
     },
     [flushLivePreviewResult],
+  );
+
+  const flushLiveStreamAnalysisResult = useCallback(() => {
+    if (liveStreamAnalysisFlushTimeoutRef.current) {
+      clearTimeout(liveStreamAnalysisFlushTimeoutRef.current);
+      liveStreamAnalysisFlushTimeoutRef.current = null;
+    }
+
+    const pendingUpdate = pendingLiveStreamAnalysisUpdateRef.current;
+    pendingLiveStreamAnalysisUpdateRef.current = null;
+    if (!pendingUpdate) {
+      return;
+    }
+
+    lastLiveStreamAnalysisFlushAtRef.current = Date.now();
+    const nextResult = buildLiveStreamAnalysisResult(
+      pendingUpdate,
+      currentBpmRef.current || 120,
+      undefined,
+      liveStreamNotePayloadsRef.current,
+    );
+    const nextSignature = buildAnalysisResultEventSignature(nextResult);
+    if (nextSignature !== liveStreamAnalysisSignatureRef.current) {
+      liveStreamAnalysisSignatureRef.current = nextSignature;
+      analysisResultRef.current = nextResult;
+      setAnalysisResult(nextResult);
+    }
+  }, []);
+
+  const queueLiveStreamAnalysisUpdate = useCallback(
+    (update: LiveStreamUpdate) => {
+      pendingLiveStreamAnalysisUpdateRef.current = update;
+      const elapsedMs = Date.now() - lastLiveStreamAnalysisFlushAtRef.current;
+      if (elapsedMs >= LIVE_STREAM_ANALYSIS_BATCH_MS) {
+        flushLiveStreamAnalysisResult();
+        return;
+      }
+
+      if (!liveStreamAnalysisFlushTimeoutRef.current) {
+        liveStreamAnalysisFlushTimeoutRef.current = setTimeout(
+          flushLiveStreamAnalysisResult,
+          Math.max(1, LIVE_STREAM_ANALYSIS_BATCH_MS - elapsedMs),
+        );
+      }
+    },
+    [flushLiveStreamAnalysisResult],
+  );
+
+  const flushLiveEngraving = useCallback(() => {
+    engravingFlushTimeoutRef.current = null;
+    const pending = pendingEngravingRef.current;
+    setLiveEngravingResult(pending.result);
+    setLiveEngravingVersion(pending.version);
+  }, []);
+
+  const queueLiveEngraving = useCallback(
+    (result: AnalysisResult | null, version: number) => {
+      pendingEngravingRef.current = { result, version };
+      if (engravingFlushTimeoutRef.current) {
+        return;
+      }
+
+      engravingFlushTimeoutRef.current = setTimeout(() => {
+        flushLiveEngraving();
+      }, LIVE_OSMD_BATCH_MS);
+    },
+    [flushLiveEngraving],
   );
 
   const handleLiveStreamPayload = useCallback(
@@ -1026,7 +1348,8 @@ export default function LiveTranscriptionScreen() {
           const backendAudioTimeMs =
             ((data.session?.audio_time_sec ??
               data.session?.current_time_sec ??
-              0) || 0) * 1000;
+              0) ||
+              0) * 1000;
           const recordingStartedAtMs = liveStreamRecordingStartedAtRef.current;
           if (
             recordingStartedAtMs != null &&
@@ -1054,20 +1377,17 @@ export default function LiveTranscriptionScreen() {
             const previewFlushes = livePreviewFlushCountRef.current;
             const previewLastQueueWaitMs =
               lastLivePreviewQueueWaitMsRef.current;
-            const previewMaxQueueWaitMs =
-              maxLivePreviewQueueWaitMsRef.current;
+            const previewMaxQueueWaitMs = maxLivePreviewQueueWaitMsRef.current;
             const previewDataLagMs = lastLivePreviewDataLagMsRef.current;
             const noteBirths = liveDebugBirthsRef.current;
             const noteMatches = liveDebugMatchedRef.current;
             const noteStaleSkipped = liveDebugStaleSkippedRef.current;
             const noteSuppressed = liveDebugSuppressedRef.current;
             const notePromotedActive = liveDebugPromotedActiveRef.current;
-            const notePromotedCommitted =
-              liveDebugPromotedCommittedRef.current;
+            const notePromotedCommitted = liveDebugPromotedCommittedRef.current;
             const notePromotedLocked = liveDebugPromotedLockedRef.current;
             const noteBirthSamples = liveDebugBirthSamplesRef.current;
-            const noteSuppressedSamples =
-              liveDebugSuppressedSamplesRef.current;
+            const noteSuppressedSamples = liveDebugSuppressedSamplesRef.current;
             coalescedLivePreviewUpdatesRef.current = 0;
             droppedLivePreviewUpdatesRef.current = 0;
             livePreviewFlushCountRef.current = 0;
@@ -1135,17 +1455,14 @@ export default function LiveTranscriptionScreen() {
               continuitySuppressed: continuityFilter?.suppressed,
               continuitySamePitchBoundary:
                 continuityFilter?.same_pitch_boundary,
-              continuityImplausibleRepeat:
-                continuityFilter?.implausible_repeat,
-              continuityHarmonicSustain:
-                continuityFilter?.harmonic_sustain,
+              continuityImplausibleRepeat: continuityFilter?.implausible_repeat,
+              continuityHarmonicSustain: continuityFilter?.harmonic_sustain,
               continuityWeakBirthOutsideAttack:
                 continuityFilter?.weak_birth_outside_attack,
               continuityAttackGroups: continuityFilter?.attack_groups,
               continuityRegisteredAttackGroups:
                 continuityFilter?.registered_attack_groups,
-              continuityTotalSuppressed:
-                continuityFilter?.total_suppressed,
+              continuityTotalSuppressed: continuityFilter?.total_suppressed,
               noteBirths,
               noteMatches,
               noteStaleSkipped,
@@ -1159,25 +1476,17 @@ export default function LiveTranscriptionScreen() {
             });
           }
 
-          const nextResult = buildLiveStreamAnalysisResult(
+          mergeLiveStreamAnalysisPayloads(
             data,
-            currentBpm || 120,
-            undefined,
             liveStreamNotePayloadsRef.current,
           );
-          const nextPreviewResult = buildLiveStreamAnalysisResult(
+          const nextPreviewResult = buildLiveStreamPreviewResult(
             data,
-            currentBpm || 120,
-            undefined,
-            undefined,
-            true,
+            currentBpmRef.current || 120,
+            liveStreamPreviewPayloadsRef.current,
           );
           queueLivePreviewResult(nextPreviewResult);
-          const nextSignature = buildAnalysisResultEventSignature(nextResult);
-          if (nextSignature !== liveStreamAnalysisSignatureRef.current) {
-            liveStreamAnalysisSignatureRef.current = nextSignature;
-            setAnalysisResult(nextResult);
-          }
+          queueLiveStreamAnalysisUpdate(data);
         }
         setConnectionStatus("connected");
         setIsProcessing(false);
@@ -1185,6 +1494,7 @@ export default function LiveTranscriptionScreen() {
       }
 
       if (data.type === "live_stream_stopped") {
+        flushLiveStreamAnalysisResult();
         liveStreamStopResolveRef.current?.();
         liveStreamStopResolveRef.current = null;
         setIsProcessing(false);
@@ -1219,7 +1529,11 @@ export default function LiveTranscriptionScreen() {
         setIsProcessing(false);
       }
     },
-    [currentBpm, queueLivePreviewResult],
+    [
+      flushLiveStreamAnalysisResult,
+      queueLivePreviewResult,
+      queueLiveStreamAnalysisUpdate,
+    ],
   );
 
   const openLiveStreamSocket = useCallback(
@@ -1238,6 +1552,7 @@ export default function LiveTranscriptionScreen() {
       liveStreamSessionIdRef.current = streamSessionId;
       liveStreamFirstPacketSentAtRef.current = null;
       liveStreamNotePayloadsRef.current = new Map();
+      liveStreamPreviewPayloadsRef.current = new Map();
       liveStreamAnalysisSignatureRef.current = "";
       liveDebugBirthsRef.current = 0;
       liveDebugMatchedRef.current = 0;
@@ -1248,6 +1563,7 @@ export default function LiveTranscriptionScreen() {
       liveDebugPromotedLockedRef.current = 0;
       liveDebugBirthSamplesRef.current = [];
       liveDebugSuppressedSamplesRef.current = [];
+      clearLiveStreamAnalysisQueue();
       clearLivePreviewQueue();
       setLivePreviewResult(null);
 
@@ -1316,7 +1632,11 @@ export default function LiveTranscriptionScreen() {
         });
       }
     },
-    [clearLivePreviewQueue, handleLiveStreamPayload],
+    [
+      clearLivePreviewQueue,
+      clearLiveStreamAnalysisQueue,
+      handleLiveStreamPayload,
+    ],
   );
 
   const installLiveStreamAudioSubscription = useCallback(() => {
@@ -1383,27 +1703,6 @@ export default function LiveTranscriptionScreen() {
     liveStreamStopResolveRef.current = null;
   }, []);
 
-  const flushLiveEngraving = useCallback(() => {
-    engravingFlushTimeoutRef.current = null;
-    const pending = pendingEngravingRef.current;
-    setLiveEngravingResult(pending.result);
-    setLiveEngravingVersion(pending.version);
-  }, []);
-
-  const queueLiveEngraving = useCallback(
-    (result: AnalysisResult | null, version: number) => {
-      pendingEngravingRef.current = { result, version };
-      if (engravingFlushTimeoutRef.current) {
-        return;
-      }
-
-      engravingFlushTimeoutRef.current = setTimeout(() => {
-        flushLiveEngraving();
-      }, LIVE_OSMD_BATCH_MS);
-    },
-    [flushLiveEngraving],
-  );
-
   useEffect(() => {
     const audioOptions = {
       sampleRate: LIVE_AUDIO_SAMPLE_RATE,
@@ -1429,6 +1728,7 @@ export default function LiveTranscriptionScreen() {
       if (engravingFlushTimeoutRef.current) {
         clearTimeout(engravingFlushTimeoutRef.current);
       }
+      clearLiveStreamAnalysisQueue();
       clearLivePreviewQueue();
       clearPendingChunkUpload();
       removeLiveStreamAudioSubscription();
@@ -1442,6 +1742,7 @@ export default function LiveTranscriptionScreen() {
       liveStreamStopResolveRef.current = null;
       liveStreamRecordingStartedAtRef.current = null;
       liveStreamFirstPacketSentAtRef.current = null;
+      analysisResultRef.current = null;
       lastLiveStreamLatencyLogAtRef.current = 0;
       liveDebugBirthsRef.current = 0;
       liveDebugMatchedRef.current = 0;
@@ -1465,6 +1766,7 @@ export default function LiveTranscriptionScreen() {
     };
   }, [
     clearPendingChunkUpload,
+    clearLiveStreamAnalysisQueue,
     clearLivePreviewQueue,
     removeLiveStreamAudioSubscription,
     resetSession,
@@ -1554,15 +1856,17 @@ export default function LiveTranscriptionScreen() {
         });
         const uploadFinishedAtMs = Date.now();
         const mergeQueuedAtMs = Date.now();
-        setAnalysisResult((previous) =>
-          mergeChunkIntoResult(
+        setAnalysisResult((previous) => {
+          const nextResult = mergeChunkIntoResult(
             previous,
             chunk.coarseNotes as NoteResult[],
             chunk.coarseChords as ChordResult[],
             chunk.onsets as OnsetResult[],
             chunk.bpm,
-          ),
-        );
+          );
+          analysisResultRef.current = nextResult;
+          return nextResult;
+        });
         requestAnimationFrame(() => {
           logChunkPipelineTiming(
             telemetry,
@@ -1771,7 +2075,6 @@ export default function LiveTranscriptionScreen() {
         return;
       }
 
-      scrollToLiveScoreSection();
       setIsWarmingUp(true);
       setConnectionStatus("connecting");
       setDuration(0);
@@ -1789,9 +2092,12 @@ export default function LiveTranscriptionScreen() {
 
       await resetSession();
 
+      analysisResultRef.current = null;
       setAnalysisResult(null);
       setLiveEngravingResult(null);
+      clearLiveStreamAnalysisQueue();
       clearLivePreviewQueue();
+      liveStreamPreviewPayloadsRef.current = new Map();
       setLivePreviewResult(null);
       setLiveEngravingVersion(0);
       pendingEngravingRef.current = { result: null, version: 0 };
@@ -1846,7 +2152,6 @@ export default function LiveTranscriptionScreen() {
       }
       setIsWarmingUp(false);
       setIsRecording(true);
-      scrollToLiveScoreSection();
       setSessionReady(true);
       sessionReadyRef.current = true;
       setConnectionStatus("connected");
@@ -1855,7 +2160,7 @@ export default function LiveTranscriptionScreen() {
         if (startedAtMs != null) {
           setDuration(Math.max(0, (Date.now() - startedAtMs) / 1000));
         }
-      }, 100);
+      }, 500);
     } catch (error) {
       console.error("Failed to start live transcription", error);
       removeLiveStreamAudioSubscription();
@@ -1894,6 +2199,7 @@ export default function LiveTranscriptionScreen() {
   }, [
     analyzeRecordingChunk,
     clearPendingChunkUpload,
+    clearLiveStreamAnalysisQueue,
     clearLivePreviewQueue,
     createSession,
     currentBpm,
@@ -1903,7 +2209,6 @@ export default function LiveTranscriptionScreen() {
     requestPermissions,
     resetSession,
     removeLiveStreamAudioSubscription,
-    scrollToLiveScoreSection,
     stopLiveStreamSocket,
   ]);
 
@@ -1943,6 +2248,7 @@ export default function LiveTranscriptionScreen() {
             console.warn("Failed to stop live audio recorder", error);
           }
           await stopLiveStreamSocket();
+          flushLiveStreamAnalysisResult();
         } else {
           let finalChunkPath: string | null = null;
           const captureStoppedAtMs = Date.now();
@@ -2018,6 +2324,7 @@ export default function LiveTranscriptionScreen() {
   }, [
     clearLivePreviewQueue,
     drainPendingChunkUploads,
+    flushLiveStreamAnalysisResult,
     processRecordedChunk,
     removeLiveStreamAudioSubscription,
     resolveRecordedFilePath,
@@ -2143,78 +2450,45 @@ export default function LiveTranscriptionScreen() {
     </LinearGradient>
   );
 
-  const recentEvents = [
-    ...(analysisResult?.notes ?? []).map((note) => ({
-      keyBase: `note-${note.time_seconds}-${note.note_name ?? note.midi_note ?? "unknown"}`,
-      time: note.time_seconds,
-      icon: "musical-note" as const,
-      label: note.note_name ?? `MIDI ${note.midi_note ?? "?"}`,
-      detail:
-        note.confidence != null
-          ? `${Math.round(note.confidence * 100)}% confidence`
-          : "Detected note",
-      color: "#30a46c",
-    })),
-    ...(analysisResult?.chords ?? []).map((chord) => ({
-      keyBase: `chord-${chord.time_seconds}-${chord.label}`,
-      time: chord.time_seconds,
-      icon: "library" as const,
-      label: chord.label,
-      detail:
-        chord.confidence != null
-          ? `${Math.round(chord.confidence * 100)}% confidence`
-          : "Detected chord",
-      color: "#2563eb",
-    })),
-  ]
-    .sort((left, right) => right.time - left.time)
-    .map((event, index) => ({
-      ...event,
-      key: `${event.keyBase}-${index}`,
-    }))
-    .slice(0, 12);
+  const recentEvents = useMemo(
+    () =>
+      [
+        ...(analysisResult?.notes ?? []).map((note) => ({
+          keyBase: `note-${note.time_seconds}-${note.note_name ?? note.midi_note ?? "unknown"}`,
+          time: note.time_seconds,
+          icon: "musical-note" as const,
+          label: note.note_name ?? `MIDI ${note.midi_note ?? "?"}`,
+          detail:
+            note.confidence != null
+              ? `${Math.round(note.confidence * 100)}% confidence`
+              : "Detected note",
+          color: "#30a46c",
+        })),
+        ...(analysisResult?.chords ?? []).map((chord) => ({
+          keyBase: `chord-${chord.time_seconds}-${chord.label}`,
+          time: chord.time_seconds,
+          icon: "library" as const,
+          label: chord.label,
+          detail:
+            chord.confidence != null
+              ? `${Math.round(chord.confidence * 100)}% confidence`
+              : "Detected chord",
+          color: "#2563eb",
+        })),
+      ]
+        .sort((left, right) => right.time - left.time)
+        .map((event, index) => ({
+          ...event,
+          key: `${event.keyBase}-${index}`,
+        }))
+        .slice(0, 12),
+    [analysisResult],
+  );
 
   const compactScoreViewportHeight = Math.max(
     220,
     liveScoreViewportHeight || 280,
   );
-
-  const renderScoreContent = (compact: boolean) => {
-    if (USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
-      return (
-        <PianoSheetMusic
-          results={liveEngravingResult ?? undefined}
-          refinementVersion={liveEngravingVersion}
-          compact={compact}
-          viewportHeight={compact ? compactScoreViewportHeight : undefined}
-          onScoreScrollActiveChange={setIsScoreScrollActive}
-        />
-      );
-    }
-
-    if (hasStoppedRecording && analysisResult) {
-      return (
-        <PianoSheetMusic
-          results={analysisResult}
-          compact={compact}
-          viewportHeight={compact ? compactScoreViewportHeight : undefined}
-          onScoreScrollActiveChange={setIsScoreScrollActive}
-        />
-      );
-    }
-
-    return (
-      <View style={compact ? styles.liveScorePlaceholder : null}>
-        <ThemedText style={styles.placeholderText}>
-          {isRecording
-            ? "Recording... live engraving will continue to update here while the controls stay pinned below."
-            : isWarmingUp
-              ? "Warming the live neural path. Recording has not started yet."
-              : "Start a live session to capture notes. The piano roll above updates in real time; sheet music renders after stop."}
-        </ThemedText>
-      </View>
-    );
-  };
 
   if (isLiveSessionLayout) {
     const liveStatusColor = getConnectionStatusColor(connectionStatus);
@@ -2308,8 +2582,9 @@ export default function LiveTranscriptionScreen() {
               onLayout={handleLiveScoreSectionLayout}
             >
               <View style={styles.liveScoreStrip}>
-                <LiveScoreStrip
-                  results={livePreviewResult ?? analysisResult}
+                <MemoizedLivePreviewStrip
+                  previewResult={livePreviewResult}
+                  analysisFallback={analysisResult}
                   bpm={currentBpm || 120}
                   localElapsedSeconds={duration}
                   localStartedAtMs={recordingStartedAtMs}
@@ -2320,7 +2595,17 @@ export default function LiveTranscriptionScreen() {
                 style={styles.liveScoreViewport}
                 onLayout={handleLiveScoreViewportLayout}
               >
-                {renderScoreContent(true)}
+                <MemoizedScoreContent
+                  analysisResult={analysisResult}
+                  compact
+                  hasStoppedRecording={hasStoppedRecording}
+                  isRecording={isRecording}
+                  isWarmingUp={isWarmingUp}
+                  liveEngravingResult={liveEngravingResult}
+                  liveEngravingVersion={liveEngravingVersion}
+                  onScoreScrollActiveChange={setIsScoreScrollActive}
+                  viewportHeight={compactScoreViewportHeight}
+                />
               </View>
             </View>
 
@@ -2560,7 +2845,16 @@ export default function LiveTranscriptionScreen() {
                 ? "Live OSMD Engraving"
                 : "Committed Score"}
             </ThemedText>
-            {renderScoreContent(false)}
+            <MemoizedScoreContent
+              analysisResult={analysisResult}
+              compact={false}
+              hasStoppedRecording={hasStoppedRecording}
+              isRecording={isRecording}
+              isWarmingUp={isWarmingUp}
+              liveEngravingResult={liveEngravingResult}
+              liveEngravingVersion={liveEngravingVersion}
+              onScoreScrollActiveChange={setIsScoreScrollActive}
+            />
           </LinearGradient>
 
           <LinearGradient

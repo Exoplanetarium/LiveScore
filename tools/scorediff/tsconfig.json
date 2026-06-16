@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2019",
     "module": "CommonJS",
-    "moduleResolution": "node",
+    "moduleResolution": "node10",
     "jsx": "react",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,

@@ -1,0 +1,209 @@
+{
+  "clip_id": "clip_012",
+  "benchmark_clip_id": "clip_012",
+  "title": "Sonata No. 9",
+  "bpm": 120.0,
+  "notes": [
+    {
+      "time_seconds": 1.047727,
+      "onset_time": 1.047727,
+      "offset_time": 2.161364,
+      "duration_seconds": 1.113636,
+      "duration": 1.113636,
+      "midi_note": 71,
+      "velocity": 42,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.068182,
+      "onset_time": 1.068182,
+      "offset_time": 2.138636,
+      "duration_seconds": 1.070455,
+      "duration": 1.070455,
+      "midi_note": 67,
+      "velocity": 31,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.013636,
+      "onset_time": 2.013636,
+      "offset_time": 2.852273,
+      "duration_seconds": 0.838636,
+      "duration": 0.838636,
+      "midi_note": 70,
+      "velocity": 48,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.043182,
+      "onset_time": 2.043182,
+      "offset_time": 2.743182,
+      "duration_seconds": 0.7,
+      "duration": 0.7,
+      "midi_note": 61,
+      "velocity": 27,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.604545,
+      "onset_time": 2.604545,
+      "offset_time": 3.302273,
+      "duration_seconds": 0.697727,
+      "duration": 0.697727,
+      "midi_note": 69,
+      "velocity": 49,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.611364,
+      "onset_time": 2.611364,
+      "offset_time": 3.263636,
+      "duration_seconds": 0.652273,
+      "duration": 0.652273,
+      "midi_note": 65,
+      "velocity": 41,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.211364,
+      "onset_time": 3.211364,
+      "offset_time": 3.420455,
+      "duration_seconds": 0.209091,
+      "duration": 0.209091,
+      "midi_note": 59,
+      "velocity": 41,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.211364,
+      "onset_time": 3.211364,
+      "offset_time": 4.05,
+      "duration_seconds": 0.838636,
+      "duration": 0.838636,
+      "midi_note": 68,
+      "velocity": 56,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.954545,
+      "onset_time": 3.954545,
+      "offset_time": 6.0,
+      "duration_seconds": 2.045455,
+      "duration": 2.045455,
+      "midi_note": 71,
+      "velocity": 51,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.0,
+      "onset_time": 4.0,
+      "offset_time": 6.0,
+      "duration_seconds": 2.0,
+      "duration": 2.0,
+      "midi_note": 67,
+      "velocity": 33,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.002273,
+      "onset_time": 4.002273,
+      "offset_time": 4.693182,
+      "duration_seconds": 0.690909,
+      "duration": 0.690909,
+      "midi_note": 61,
+      "velocity": 36,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.011364,
+      "onset_time": 4.011364,
+      "offset_time": 4.675,
+      "duration_seconds": 0.663636,
+      "duration": 0.663636,
+      "midi_note": 65,
+      "velocity": 41,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.627273,
+      "onset_time": 4.627273,
+      "offset_time": 5.425,
+      "duration_seconds": 0.797727,
+      "duration": 0.797727,
+      "midi_note": 64,
+      "velocity": 42,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.629545,
+      "onset_time": 4.629545,
+      "offset_time": 5.306818,
+      "duration_seconds": 0.677273,
+      "duration": 0.677273,
+      "midi_note": 55,
+      "velocity": 39,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.215909,
+      "onset_time": 5.215909,
+      "offset_time": 6.0,
+      "duration_seconds": 0.784091,
+      "duration": 0.784091,
+      "midi_note": 63,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.222727,
+      "onset_time": 5.222727,
+      "offset_time": 6.0,
+      "duration_seconds": 0.777273,
+      "duration": 0.777273,
+      "midi_note": 59,
+      "velocity": 30,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.897727,
+      "onset_time": 5.897727,
+      "offset_time": 6.0,
+      "duration_seconds": 0.102273,
+      "duration": 0.102273,
+      "midi_note": 62,
+      "velocity": 37,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.909091,
+      "onset_time": 5.909091,
+      "offset_time": 6.0,
+      "duration_seconds": 0.090909,
+      "duration": 0.090909,
+      "midi_note": 53,
+      "velocity": 39,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    }
+  ],
+  "chords": [],
+  "source_midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\midi_excerpt\\clip_012__Sonata No. 9.mid",
+  "oracle_kind": "maestro_gt_midi_through_generateMusicXML"
+}

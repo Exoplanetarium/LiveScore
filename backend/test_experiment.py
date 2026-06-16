@@ -20,7 +20,9 @@ import math
 import os
 import random
 import re
+import subprocess
 import sys
+import tempfile
 import uuid
 from collections import Counter
 from contextlib import contextmanager, nullcontext
@@ -79,7 +81,18 @@ PAIRED_DISPLAY_METRICS: Tuple[Tuple[str, str], ...] = (
     ("display_cluster_f1", "display_cluster_f1"),
     ("display_note_f1", "display_note_f1"),
     ("display_offset_f1", "display_offset_f1"),
+    ("display_score_edit_accuracy", "display_score_edit_accuracy"),
+    ("display_score_exact_token_f1", "display_score_exact_token_f1"),
 )
+
+REFERENCE_MUSICXML_FIELDS = (
+    "reference_musicxml_path",
+    "gt_musicxml_path",
+    "musicxml_path",
+    "score_musicxml_path",
+    "score_path",
+)
+REFERENCE_MUSICXML_EXTENSIONS = (".musicxml", ".xml")
 
 
 @contextmanager
@@ -319,6 +332,11 @@ def build_candidates(
 
         title = str(piece.get("title") or Path(midi_path).stem)
         piece_id = f"{Path(midi_path).stem}"
+        reference_musicxml_path = ""
+        for field in REFERENCE_MUSICXML_FIELDS:
+            if piece.get(field):
+                reference_musicxml_path = str(piece.get(field) or "")
+                break
         piece_duration = float(piece.get("duration", 0.0) or 0.0)
         scan_limit = min(scan_seconds, piece_duration) if piece_duration > 0.0 else scan_seconds
         if scan_limit < clip_seconds:
@@ -348,6 +366,7 @@ def build_candidates(
                     "piece_id": piece_id,
                     "audio_path": audio_path,
                     "midi_path": midi_path,
+                    "reference_musicxml_path": reference_musicxml_path,
                     "start_sec": round(start_sec, 6),
                     "end_sec": round(end_sec, 6),
                     "duration_sec": round(clip_seconds, 6),
@@ -600,11 +619,23 @@ def normalize_manifest_clip(raw_clip: Dict, category: str) -> Dict:
     else:
         end_sec = float(end_sec)
 
+    reference_musicxml_path = ""
+    for field in REFERENCE_MUSICXML_FIELDS:
+        if clip.get(field):
+            candidate = Path(str(clip.get(field) or "")).expanduser()
+            if not candidate.exists():
+                raise FileNotFoundError(
+                    f"Manifest clip '{category}' reference MusicXML path does not exist: {candidate}"
+                )
+            reference_musicxml_path = str(candidate)
+            break
+
     return {
         **clip,
         "title": str(clip.get("title") or audio_path.stem),
         "audio_path": str(audio_path),
         "midi_path": str(midi_path),
+        "reference_musicxml_path": reference_musicxml_path,
         "start_sec": round(start_sec, 6),
         "end_sec": round(end_sec, 6),
         "duration_sec": round(duration_sec, 6),
@@ -715,6 +746,54 @@ def select_benchmark_clips(args: argparse.Namespace) -> tuple[Dict[str, Dict], P
 
     selected = choose_excerpts(candidates, args.categories)
     return selected, None, DEFAULT_SELECTION_STRATEGY
+
+
+def resolve_reference_musicxml_path(clip_id: str, clip: Dict, reference_dir: str = "") -> str:
+    for field in REFERENCE_MUSICXML_FIELDS:
+        value = clip.get(field)
+        if not value:
+            continue
+        path = Path(str(value)).expanduser()
+        if path.exists():
+            return str(path.resolve())
+
+    candidate_stems = [
+        str(clip.get("clip_id") or clip_id),
+        Path(str(clip.get("midi_path") or "")).stem,
+        Path(str(clip.get("audio_path") or "")).stem,
+    ]
+    candidate_stems = [stem for index, stem in enumerate(candidate_stems) if stem and stem not in candidate_stems[:index]]
+
+    search_dirs: List[Path] = []
+    if reference_dir:
+        search_dirs.append(Path(reference_dir).expanduser())
+    midi_parent = Path(str(clip.get("midi_path") or "")).expanduser().parent
+    audio_parent = Path(str(clip.get("audio_path") or "")).expanduser().parent
+    for directory in (midi_parent, audio_parent):
+        if directory and directory not in search_dirs:
+            search_dirs.append(directory)
+
+    for directory in search_dirs:
+        if not directory.exists():
+            continue
+        for stem in candidate_stems:
+            for ext in REFERENCE_MUSICXML_EXTENSIONS:
+                candidate = directory / f"{stem}{ext}"
+                if candidate.exists():
+                    return str(candidate.resolve())
+
+    return ""
+
+
+def find_missing_reference_musicxml(
+    selected: Dict[str, Dict],
+    reference_dir: str = "",
+) -> List[str]:
+    missing = []
+    for clip_id, clip in selected.items():
+        if not resolve_reference_musicxml_path(clip_id, clip, reference_dir):
+            missing.append(str(clip_id))
+    return missing
 
 
 def print_selection_summary(selected: Dict[str, Dict]) -> None:
@@ -965,6 +1044,97 @@ def compute_onset_cluster_metrics(
     }
 
 
+def compute_pairwise_coonset_metrics(
+    pred_notes: Sequence[Dict],
+    gt_notes: Sequence[Dict],
+    onset_tol: float = ONSET_CLUSTER_TOLERANCE_SEC,
+    window_sec: float = ONSET_CLUSTER_TOLERANCE_SEC,
+) -> Dict:
+    """Tempo-free chord-grouping metric: agreement of the 'struck together'
+    relation over commonly-matched notes only. For every unordered pair of
+    pitch+onset-matched notes, both pred and GT vote together/apart by
+    |Δonset| <= window_sec; F1 is computed over the 'together' relation.
+
+    Unlike the single-linkage cluster F1, this has no anchor and no transitive
+    chaining, so it does not flip on where a wide (25-79ms) chord's boundary
+    falls between pred and GT. It deliberately factors out recall (scores only
+    matched notes), isolating grouping quality from missed notes. Proven
+    2026-06-15 to show production grouping is ~0.97 vs the misleading 0.688
+    single-linkage headline. See gpt_memory/repo/live-change-log.md.
+    """
+    gt_used: set[int] = set()
+    pairs: List[tuple[int, int]] = []
+    for pi, pred in enumerate(pred_notes):
+        try:
+            p_pitch = int(pred.get("midi_note", pred.get("pitch", 0)) or 0)
+            p_onset = float(pred.get("onset_time", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        best_idx = None
+        best_err = None
+        for gi, gt in enumerate(gt_notes):
+            if gi in gt_used:
+                continue
+            try:
+                g_pitch = int(gt.get("midi_note", gt.get("pitch", 0)) or 0)
+                g_onset = float(gt.get("onset_time", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if p_pitch != g_pitch:
+                continue
+            err = abs(p_onset - g_onset)
+            if err > onset_tol:
+                continue
+            if best_err is None or err < best_err:
+                best_idx = gi
+                best_err = err
+        if best_idx is not None:
+            gt_used.add(best_idx)
+            pairs.append((pi, best_idx))
+
+    matched_notes = len(pairs)
+    if matched_notes < 2:
+        # No pair to disagree on -> grouping is vacuously correct.
+        return {
+            "precision": 1.0,
+            "recall": 1.0,
+            "f1": 1.0,
+            "matched_notes": matched_notes,
+            "true_positive_pairs": 0,
+            "false_positive_pairs": 0,
+            "false_negative_pairs": 0,
+        }
+
+    tp = fp = fn = 0
+    for a in range(matched_notes):
+        pa, ga = pairs[a]
+        pa_on = float(pred_notes[pa].get("onset_time", 0.0) or 0.0)
+        ga_on = float(gt_notes[ga].get("onset_time", 0.0) or 0.0)
+        for b in range(a + 1, matched_notes):
+            pb, gb = pairs[b]
+            pred_together = abs(pa_on - float(pred_notes[pb].get("onset_time", 0.0) or 0.0)) <= window_sec
+            gt_together = abs(ga_on - float(gt_notes[gb].get("onset_time", 0.0) or 0.0)) <= window_sec
+            if gt_together and pred_together:
+                tp += 1
+            elif pred_together and not gt_together:
+                fp += 1
+            elif gt_together and not pred_together:
+                fn += 1
+
+    precision = tp / (tp + fp) if (tp + fp) else 1.0
+    recall = tp / (tp + fn) if (tp + fn) else 1.0
+    f1 = 2.0 * precision * recall / (precision + recall) if (precision + recall) else 1.0
+    return {
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "matched_notes": matched_notes,
+        "true_positive_pairs": tp,
+        "false_positive_pairs": fp,
+        "false_negative_pairs": fn,
+    }
+
+
 def compute_note_metrics(
     pred_notes: Sequence[Dict],
     gt_notes: Sequence[Dict],
@@ -1152,6 +1322,27 @@ def compute_note_value_metrics(
         "note_value_accuracy": accuracy,
         "note_value_matched": n_evaluable,
         "note_value_avg_beat_error": avg_beat_error,
+    }
+
+
+def empty_reference_musicxml_score_metrics() -> Dict:
+    return {
+        "score_reference_available": False,
+        "score_reference_pending": False,
+        "score_reference_path": None,
+        "score_edit_accuracy": None,
+        "score_edit_cost": None,
+        "score_reference_cost": None,
+        "score_exact_token_f1": None,
+        "score_exact_token_precision": None,
+        "score_exact_token_recall": None,
+        "score_exact_token_matches": 0,
+        "score_predicted_tokens": 0,
+        "score_reference_tokens": 0,
+        "score_edit_exact_ops": 0,
+        "score_edit_substitutions": 0,
+        "score_edit_deletions": 0,
+        "score_edit_insertions": 0,
     }
 
 
@@ -1916,6 +2107,7 @@ def compute_final_display_accuracy_metrics(
     offset_metrics = compute_offset_metrics(display_notes, gt_notes)
     note_value_metrics = compute_note_value_metrics(display_notes, gt_notes, reference_bpm=reference_bpm)
     cluster_metrics = compute_onset_cluster_metrics(display_cluster_notes, gt_notes)
+    pairwise_metrics = compute_pairwise_coonset_metrics(display_cluster_notes, gt_notes)
 
     return {
         "display_final_note_event_count": len(display_notes),
@@ -1923,6 +2115,8 @@ def compute_final_display_accuracy_metrics(
         **_prefix_metric_keys(offset_metrics, "display_"),
         **_prefix_metric_keys(note_value_metrics, "display_"),
         **_prefix_metric_keys(cluster_metrics, "display_cluster_"),
+        **_prefix_metric_keys(pairwise_metrics, "display_pairwise_"),
+        **_prefix_metric_keys(empty_reference_musicxml_score_metrics(), "display_"),
         "display_strict_onset_metrics": compute_onset_tolerance_sweep(display_notes, gt_notes),
     }
 
@@ -2467,6 +2661,147 @@ def run_direct_live_neural_excerpt(
     }
 
 
+def build_score_musicxml_payload(
+    clip_id: str,
+    arm: str,
+    run: Dict,
+    reference_musicxml_path: str,
+    reference_bpm: float,
+) -> Dict | None:
+    app_notes = run.get("app_notes")
+    app_chords = run.get("app_chords")
+    if app_notes is None or app_chords is None:
+        return None
+    try:
+        app_bpm = float(run.get("app_bpm", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        app_bpm = 0.0
+    return {
+        "clip_id": f"{clip_id}__{arm}",
+        "benchmark_clip_id": clip_id,
+        "benchmark_arm": arm,
+        "bpm": app_bpm if app_bpm > 1.0 else float(reference_bpm),
+        "notes": app_notes,
+        "chords": app_chords,
+        "reference_musicxml_path": reference_musicxml_path,
+    }
+
+
+def _display_score_metric_updates(scorediff_metrics: Dict) -> Dict:
+    return {
+        "display_score_reference_available": True,
+        "display_score_reference_pending": False,
+        "display_score_reference_path": scorediff_metrics.get("reference_path"),
+        "display_score_edit_accuracy": scorediff_metrics.get("score_edit_accuracy"),
+        "display_score_edit_cost": scorediff_metrics.get("score_edit_cost"),
+        "display_score_reference_cost": scorediff_metrics.get("score_reference_cost"),
+        "display_score_exact_token_f1": scorediff_metrics.get("exact_token_f1"),
+        "display_score_exact_token_precision": scorediff_metrics.get("exact_token_precision"),
+        "display_score_exact_token_recall": scorediff_metrics.get("exact_token_recall"),
+        "display_score_exact_token_matches": int(scorediff_metrics.get("exact_token_matched", 0) or 0),
+        "display_score_predicted_tokens": int(scorediff_metrics.get("predicted_tokens", 0) or 0),
+        "display_score_reference_tokens": int(scorediff_metrics.get("reference_tokens", 0) or 0),
+        "display_score_edit_exact_ops": int(scorediff_metrics.get("score_edit_exact_ops", 0) or 0),
+        "display_score_edit_substitutions": int(scorediff_metrics.get("score_edit_substitutions", 0) or 0),
+        "display_score_edit_deletions": int(scorediff_metrics.get("score_edit_deletions", 0) or 0),
+        "display_score_edit_insertions": int(scorediff_metrics.get("score_edit_insertions", 0) or 0),
+    }
+
+
+def merge_reference_musicxml_score_metrics(
+    results: Dict,
+    payloads: Sequence[Dict],
+    output_dir: Path | None = None,
+    ref_payload_path: str = "",
+) -> None:
+    score_summary = {
+        "enabled": bool(payloads),
+        "payload_count": len(payloads),
+        "available_metric_count": 0,
+        "missing_metric_count": 0,
+        "error": None,
+    }
+    results["score_reference_musicxml"] = score_summary
+    if not payloads:
+        return
+
+    repo_root = Path(__file__).resolve().parent.parent
+    scorediff_script = repo_root / "tools" / "scorediff" / "run.js"
+    if not scorediff_script.exists():
+        score_summary["error"] = f"scorediff script not found: {scorediff_script}"
+        return
+
+    with tempfile.TemporaryDirectory(prefix="livescore_musicxml_refs_") as temp_dir_str:
+        temp_dir = Path(temp_dir_str)
+        payload_paths = []
+        dump_dir = (output_dir / "score_payloads") if output_dir is not None else None
+        if dump_dir is not None:
+            dump_dir.mkdir(parents=True, exist_ok=True)
+        for payload in payloads:
+            path = temp_dir / f"{payload['clip_id']}.json"
+            payload_text = json.dumps(payload, indent=2)
+            path.write_text(payload_text, encoding="utf-8")
+            if dump_dir is not None:
+                (dump_dir / f"{payload['clip_id']}.json").write_text(payload_text, encoding="utf-8")
+            payload_paths.append(path)
+
+        json_out = temp_dir / "score_metrics.json"
+        command = [
+            "node",
+            str(scorediff_script),
+            "--limit=0",
+            "--json-out",
+            str(json_out),
+        ]
+        if ref_payload_path:
+            resolved_ref_payload = Path(ref_payload_path).expanduser().resolve()
+            if not resolved_ref_payload.exists():
+                score_summary["error"] = f"score-ref-payload not found: {resolved_ref_payload}"
+                return
+            command += ["--ref-payload", str(resolved_ref_payload)]
+        command += [str(path) for path in payload_paths]
+        completed = subprocess.run(
+            command,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            score_summary["error"] = (
+                f"scorediff failed with code {completed.returncode}: "
+                f"{(completed.stderr or completed.stdout).strip()}"
+            )
+            return
+        if not json_out.exists():
+            score_summary["error"] = "scorediff did not write score_metrics.json"
+            return
+
+        scorediff_payload = json.loads(json_out.read_text(encoding="utf-8"))
+        if output_dir is not None:
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "reference_musicxml_score_metrics.json").write_text(
+                json.dumps(scorediff_payload, indent=2),
+                encoding="utf-8",
+            )
+
+    comparisons = scorediff_payload.get("comparisons") or []
+    for row in comparisons:
+        label = str(row.get("label") or "")
+        if "__" not in label:
+            score_summary["missing_metric_count"] += 1
+            continue
+        clip_id, arm = label.split("__", 1)
+        clip_entry = (results.get("clips") or {}).get(clip_id)
+        if not isinstance(clip_entry, dict) or not isinstance(clip_entry.get(arm), dict):
+            score_summary["missing_metric_count"] += 1
+            continue
+        clip_entry[arm].update(_display_score_metric_updates(row))
+        score_summary["available_metric_count"] += 1
+
+    score_summary["missing_metric_count"] = max(0, len(payloads) - score_summary["available_metric_count"])
+
+
 async def run_retro_correction_excerpt(
     audio: np.ndarray,
     baseline_run: Dict,
@@ -2987,6 +3322,18 @@ def print_run_summary(label: str, metrics: Dict) -> None:
             f"pitch_conflicts={metrics['display_cluster_pitch_conflict_matches']} "
             f"missed_gt={metrics['display_cluster_unmatched_ground_truth']}"
         )
+        if metrics.get("display_score_reference_available"):
+            print(
+                "      final display score edit: "
+                f"accuracy={metrics['display_score_edit_accuracy']:.3f} "
+                f"exact_token_f1={metrics['display_score_exact_token_f1']:.3f} "
+                f"edit={metrics['display_score_edit_cost']:.2f}/{metrics['display_score_reference_cost']:.2f} "
+                f"ops exact={metrics['display_score_edit_exact_ops']} sub={metrics['display_score_edit_substitutions']} "
+                f"del={metrics['display_score_edit_deletions']} ins={metrics['display_score_edit_insertions']}"
+            )
+        else:
+            state = "pending batch MusicXML comparison" if metrics.get("display_score_reference_pending") else "unavailable (no reference MusicXML)"
+            print(f"      final display score edit: {state}")
     print(
         "      threshold profiles: "
         f"hit_rate={metrics['profile_hit_rate']:.3f} thresholds={metrics['selected_thresholds']} "
@@ -3044,6 +3391,16 @@ def print_delta(reference_label: str, reference: Dict, candidate_label: str, can
                 f"display_cluster_jaccard={candidate['display_cluster_avg_jaccard'] - reference['display_cluster_avg_jaccard']:+.3f}",
             ]
         )
+        if (
+            reference.get("display_score_edit_accuracy") is not None
+            and candidate.get("display_score_edit_accuracy") is not None
+        ):
+            parts.extend(
+                [
+                    f"display_score_edit_acc={candidate['display_score_edit_accuracy'] - reference['display_score_edit_accuracy']:+.3f}",
+                    f"display_score_exact_token_f1={candidate['display_score_exact_token_f1'] - reference['display_score_exact_token_f1']:+.3f}",
+                ]
+            )
     print(f"    delta {candidate_label}-{reference_label}: {' '.join(parts)}")
 
 
@@ -3235,6 +3592,13 @@ async def warmup_live_path(chunk_seconds: float) -> None:
 
 async def run_experiment(args: argparse.Namespace) -> Dict:
     selected, manifest_path, selection_mode = select_benchmark_clips(args)
+    missing_reference_musicxml = find_missing_reference_musicxml(selected, args.reference_musicxml_dir)
+    if args.require_reference_musicxml and missing_reference_musicxml:
+        raise RuntimeError(
+            "Missing reference MusicXML for clips: "
+            + ", ".join(missing_reference_musicxml[:20])
+            + (" ..." if len(missing_reference_musicxml) > 20 else "")
+        )
     failure_bucket_index: Dict[str, List[str]] = {bucket: [] for bucket in FAILURE_BUCKET_ORDER}
     boundary_failure_tag_counts: Counter = Counter()
     cluster_metric_mode = "raw"
@@ -3272,16 +3636,26 @@ async def run_experiment(args: argparse.Namespace) -> Dict:
             "eval_boundary_band_sec": float(args.eval_boundary_band_sec),
             "selection_mode": selection_mode,
             "benchmark_manifest": str(manifest_path) if manifest_path is not None else None,
+            "reference_musicxml_dir": args.reference_musicxml_dir,
+            "require_reference_musicxml": bool(args.require_reference_musicxml),
+            "reference_musicxml_missing_clip_count": len(missing_reference_musicxml),
         },
         "clips": {},
         "failure_buckets": {},
         "boundary_failure_tag_counts": {},
     }
+    score_musicxml_payloads: List[Dict] = []
 
     for clip_id, clip in selected.items():
 
         audio = load_audio_excerpt(clip["audio_path"], clip["start_sec"], clip["duration_sec"], TARGET_SR)
         reference_bpm = get_midi_reference_bpm(clip["midi_path"])
+        reference_musicxml_path = resolve_reference_musicxml_path(
+            clip_id,
+            clip,
+            args.reference_musicxml_dir,
+        )
+        capture_score_inputs = bool(reference_musicxml_path)
         gt_notes = slice_gt_notes(
             load_midi_notes(clip["midi_path"]),
             clip["start_sec"],
@@ -3293,12 +3667,14 @@ async def run_experiment(args: argparse.Namespace) -> Dict:
             adaptive_onset_threshold=False,
             chunk_seconds=args.chunk_seconds,
             noise_profile=args.noise_profile,
+            capture_display_inputs=capture_score_inputs,
         )
         treatment_run = await run_live_excerpt(
             audio,
             adaptive_onset_threshold=True,
             chunk_seconds=args.chunk_seconds,
             noise_profile=args.noise_profile,
+            capture_display_inputs=capture_score_inputs,
         )
 
         control_summary = summarize_run(
@@ -3317,14 +3693,30 @@ async def run_experiment(args: argparse.Namespace) -> Dict:
             reference_bpm=reference_bpm,
             cluster_metric_mode=cluster_metric_mode,
         )
+        if reference_musicxml_path:
+            for summary in (control_summary, treatment_summary):
+                summary["display_score_reference_pending"] = True
+                summary["display_score_reference_path"] = reference_musicxml_path
 
         clip_results = {
             "clip": clip,
             "ground_truth_notes": len(gt_notes),
             "reference_bpm": round(float(reference_bpm), 3),
+            "reference_musicxml_path": reference_musicxml_path or None,
             "control": control_summary,
             "treatment": treatment_summary,
         }
+        if reference_musicxml_path:
+            for arm, run in (("control", control_run), ("treatment", treatment_run)):
+                payload = build_score_musicxml_payload(
+                    clip_id,
+                    arm,
+                    run,
+                    reference_musicxml_path,
+                    reference_bpm,
+                )
+                if payload is not None:
+                    score_musicxml_payloads.append(payload)
 
         retro_summary = None
         control_baseline_threshold = 0.38
@@ -3347,6 +3739,16 @@ async def run_experiment(args: argparse.Namespace) -> Dict:
                 retro_gate_min_activity_ratio=args.retro_gate_min_activity_ratio,
                 retro_threshold=args.retro_threshold,
             )
+            if reference_musicxml_path:
+                payload = build_score_musicxml_payload(
+                    clip_id,
+                    "retro_correction",
+                    retro_run,
+                    reference_musicxml_path,
+                    reference_bpm,
+                )
+                if payload is not None:
+                    score_musicxml_payloads.append(payload)
             retro_summary = summarize_run(
                 retro_run,
                 gt_notes,
@@ -3355,6 +3757,9 @@ async def run_experiment(args: argparse.Namespace) -> Dict:
                 reference_bpm=reference_bpm,
                 cluster_metric_mode=cluster_metric_mode,
             )
+            if reference_musicxml_path:
+                retro_summary["display_score_reference_pending"] = True
+                retro_summary["display_score_reference_path"] = reference_musicxml_path
             clip_results["retro_correction"] = retro_summary
 
         boundary_failure_diagnostics = build_clip_boundary_failure_diagnostics(
@@ -3399,6 +3804,25 @@ async def run_experiment(args: argparse.Namespace) -> Dict:
     results["boundary_failure_tag_counts"] = dict(
         sorted(boundary_failure_tag_counts.items(), key=lambda item: (-item[1], item[0]))
     )
+    score_metrics_output_dir = Path(args.output_json).expanduser().resolve().parent if args.output_json else None
+    merge_reference_musicxml_score_metrics(
+        results,
+        score_musicxml_payloads,
+        output_dir=score_metrics_output_dir,
+        ref_payload_path=getattr(args, "score_ref_payload", "") or "",
+    )
+    score_ref_summary = results.get("score_reference_musicxml") or {}
+    if score_ref_summary.get("enabled"):
+        print(
+            "Reference MusicXML score metrics: "
+            f"{score_ref_summary.get('available_metric_count', 0)}/{score_ref_summary.get('payload_count', 0)} payloads scored"
+        )
+        if score_ref_summary.get("error"):
+            print(f"  error: {score_ref_summary['error']}")
+    elif args.reference_musicxml_dir or any(
+        any((clip.get(field) for field in REFERENCE_MUSICXML_FIELDS)) for clip in selected.values()
+    ):
+        print("Reference MusicXML score metrics: no usable reference payloads")
     results["paired_stats"] = {}
     treatment_paired_stats = build_paired_run_stats(results, "control", "treatment")
     if treatment_paired_stats:
@@ -3443,6 +3867,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--write-selected-manifest", type=str, default="", help="Optional path to save the dynamically selected clips as a fixed benchmark manifest")
     parser.add_argument("--selection-only", action="store_true", help="Only build and optionally write the selected benchmark clips; do not run the live experiment")
     parser.add_argument("--clip-ids", nargs="+", default=[], help="Optional subset of manifest clip IDs to run when using --benchmark-manifest")
+    parser.add_argument("--reference-musicxml-dir", type=str, default="", help="Directory containing true reference MusicXML files keyed by clip id, MIDI stem, or audio stem")
+    parser.add_argument("--require-reference-musicxml", action="store_true", help="Fail if any selected benchmark clip lacks a true reference MusicXML file")
+    parser.add_argument("--score-ref-payload", type=str, default="", help="GT-payload JSON (e.g. oracle_gt_midi_payloads.json); when set, scorediff regenerates each reference score at the predicted clip's bpm (tempo-normalized) instead of using the static reference MusicXML")
     parser.add_argument(
         "--categories",
         nargs="+",
@@ -3504,6 +3931,14 @@ def main() -> None:
             written_manifest = write_benchmark_manifest(args.write_selected_manifest, selected, args)
             print(f"Saved benchmark manifest to {written_manifest}")
         print_selection_summary(selected)
+        missing_reference_musicxml = find_missing_reference_musicxml(selected, args.reference_musicxml_dir)
+        if missing_reference_musicxml:
+            print(
+                f"Reference MusicXML missing for {len(missing_reference_musicxml)} clips"
+                + (f": {', '.join(missing_reference_musicxml[:20])}" if len(missing_reference_musicxml) <= 20 else "")
+            )
+            if args.require_reference_musicxml:
+                raise RuntimeError("Selection contains clips without reference MusicXML")
         return
 
     results = asyncio.run(run_experiment(args))

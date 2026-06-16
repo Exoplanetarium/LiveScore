@@ -109,9 +109,9 @@ image = image.add_local_file("rhythm_training/train_ensemble.py", "/root/rhythm_
 # uses the mel baseline weights, but its decode helper lives in train_ensemble.
 # Add mel baseline model (trained multi-resolution model)
 image = image.add_local_file("rhythm_training/train_mel_baseline.py", "/root/rhythm_training/train_mel_baseline.py")
-image = image.add_local_file("rhythm_training/mel_baseline_transcription.pt", "/root/rhythm_training/mel_baseline_transcription.pt")
+# image = image.add_local_file("rhythm_training/mel_baseline_transcription.pt", "/root/rhythm_training/mel_baseline_transcription.pt")
 image = image.add_local_file("rhythm_training/train_enhanced_mel_transcriber.py", "/root/rhythm_training/train_enhanced_mel_transcriber.py")
-image = image.add_local_file("rhythm_training/enhanced_mel_transcription.pt", "/root/rhythm_training/enhanced_mel_transcription.pt")
+image = image.add_local_file("rhythm_training/enhanced_mel_transcription_crosskey_scratch.pt", "/root/rhythm_training/enhanced_mel_transcription.pt")
 image = image.add_local_file("train_display_chord_pairwise_model.py", "/root/train_display_chord_pairwise_model.py")
 
 @app.function(

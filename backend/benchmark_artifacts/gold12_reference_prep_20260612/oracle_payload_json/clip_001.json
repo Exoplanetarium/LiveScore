@@ -1,0 +1,110 @@
+{
+  "clip_id": "clip_001",
+  "benchmark_clip_id": "clip_001",
+  "title": "Sonata in A Major, K. 208",
+  "bpm": 120.0,
+  "notes": [
+    {
+      "time_seconds": 0.984091,
+      "onset_time": 0.984091,
+      "offset_time": 2.622727,
+      "duration_seconds": 1.638636,
+      "duration": 1.638636,
+      "midi_note": 69,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.020455,
+      "onset_time": 1.020455,
+      "offset_time": 1.611364,
+      "duration_seconds": 0.590909,
+      "duration": 0.590909,
+      "midi_note": 57,
+      "velocity": 29,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.288636,
+      "onset_time": 2.288636,
+      "offset_time": 4.0,
+      "duration_seconds": 1.711364,
+      "duration": 1.711364,
+      "midi_note": 73,
+      "velocity": 61,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.359091,
+      "onset_time": 2.359091,
+      "offset_time": 3.034091,
+      "duration_seconds": 0.675,
+      "duration": 0.675,
+      "midi_note": 57,
+      "velocity": 31,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.813636,
+      "onset_time": 3.813636,
+      "offset_time": 4.775,
+      "duration_seconds": 0.961364,
+      "duration": 0.961364,
+      "midi_note": 78,
+      "velocity": 61,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.888636,
+      "onset_time": 3.888636,
+      "offset_time": 4.479545,
+      "duration_seconds": 0.590909,
+      "duration": 0.590909,
+      "midi_note": 57,
+      "velocity": 31,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.543182,
+      "onset_time": 4.543182,
+      "offset_time": 6.0,
+      "duration_seconds": 1.456818,
+      "duration": 1.456818,
+      "midi_note": 76,
+      "velocity": 59,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.281818,
+      "onset_time": 5.281818,
+      "offset_time": 6.0,
+      "duration_seconds": 0.718182,
+      "duration": 0.718182,
+      "midi_note": 57,
+      "velocity": 35,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.995455,
+      "onset_time": 5.995455,
+      "offset_time": 6.0,
+      "duration_seconds": 0.004545,
+      "duration": 0.004545,
+      "midi_note": 74,
+      "velocity": 58,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    }
+  ],
+  "chords": [],
+  "source_midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\midi_excerpt\\clip_001__Sonata in A Major_ K. 208.mid",
+  "oracle_kind": "maestro_gt_midi_through_generateMusicXML"
+}

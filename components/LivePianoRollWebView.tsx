@@ -471,7 +471,7 @@ function buildRenderEvents(
   notes: LiveNoteLike[],
   chords: LiveChordLike[],
 ): LiveRenderEvent[] {
-  const staged: Array<Omit<LiveRenderEvent, "id"> & { baseKey: string }> = [];
+  const staged: (Omit<LiveRenderEvent, "id"> & { baseKey: string })[] = [];
 
   notes.forEach((note) => {
     staged.push({

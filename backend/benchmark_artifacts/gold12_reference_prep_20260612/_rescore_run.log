@@ -1,0 +1,948 @@
+C:\Users\ToniH\Documents\GitHub\LiveScore\backend\env\Lib\site-packages\pretty_midi\instrument.py:11: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+[GPU] Using NVIDIA GeForce RTX 5070 Ti Laptop GPU
+[GPU] VRAM: 12.8 GB
+Warming live neural path...
+[GPU EnhancedMel] Loaded from C:\Users\ToniH\Documents\GitHub\LiveScore\backend\rhythm_training\enhanced_mel_transcription.pt (43,308,915 params)
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=111.8ms, model=181.3ms, decode=1.1ms | TOTAL=294.4ms for 600ms audio (RTF=0.49x)
+[TIMING] stream_chunk[experiment-3b58bf430804476dbd34a424e6ee4541](live_neural): decode=0.3ms, inference=1259.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=1259.7ms | audio=600ms, RTF=2.10x | model=enhanced_mel, neural_total=1252.8ms, model_inference=181.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.4ms, features=0.5ms, model=12.3ms, decode=1.1ms | TOTAL=14.4ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.2ms, inference=16.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.7ms, model_inference=12.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=1.5ms, model=21.5ms, decode=2.3ms | TOTAL=25.5ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.2ms, inference=27.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.7ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.1ms, model_inference=21.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=1.3ms, model=17.1ms, decode=3.0ms | TOTAL=21.4ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.1ms, inference=23.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.1ms, model_inference=17.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=1.7ms, model=19.4ms, decode=4.1ms | TOTAL=25.4ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.1ms, inference=27.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.9ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.2ms, model_inference=19.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=1.3ms, model=17.0ms, decode=5.0ms | TOTAL=23.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.2ms, inference=26.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=26.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.6ms, model_inference=17.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=12.7ms, decode=4.8ms | TOTAL=18.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.2ms, inference=20.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.2ms, model_inference=12.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.0ms, decode=5.1ms | TOTAL=17.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.1ms, inference=19.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=12.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=17.2ms, decode=4.8ms | TOTAL=23.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.1ms, inference=25.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.9ms, model_inference=17.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.8ms, decode=5.1ms | TOTAL=17.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.1ms, inference=19.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=14.0ms, decode=4.9ms | TOTAL=19.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-730948afc1b841518e11acd06dd8feeb](live_neural): decode=0.1ms, inference=22.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.2ms, model_inference=14.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=10.4ms, decode=1.1ms | TOTAL=12.2ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=14.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.3ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.8ms, model_inference=10.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.2ms, decode=2.2ms | TOTAL=14.0ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=15.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.3ms, model_inference=11.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.3ms, decode=2.9ms | TOTAL=14.9ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=16.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.3ms, model_inference=11.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=2.1ms, model=17.6ms, decode=4.8ms | TOTAL=24.6ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=26.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=26.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=26.3ms, model_inference=17.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.2ms, decode=4.7ms | TOTAL=17.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=20.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.1ms, model_inference=12.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.7ms, decode=5.3ms | TOTAL=17.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.2ms, inference=21.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.3ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.6ms, model_inference=11.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=16.6ms, decode=4.7ms | TOTAL=22.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.2ms, inference=24.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.9ms, model_inference=16.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.6ms, decode=6.3ms | TOTAL=18.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=21.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.7ms, model_inference=11.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=15.6ms, decode=4.8ms | TOTAL=21.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.1ms, inference=23.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=15.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=1.0ms, model=14.2ms, decode=4.7ms | TOTAL=20.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b058fbe2241f4eefbfeda3f540934a1a](live_neural): decode=0.2ms, inference=22.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.1ms, model_inference=14.2ms
+
+[CLIP_001] Sonata in A Major, K. 208
+  excerpt: start=0.00s end=6.00s duration=6.00s gt_notes=9 rms=0.0060 peak=0.0439 crest=7.334 rms_std=0.0032
+    control:
+      note metrics: precision=0.667 recall=0.889 f1=0.762 matched=8/9 pred=12
+      strict onset f1: 10ms=0.762 20ms=0.762 30ms=0.762
+      timing metrics: offset_f1=0.000 rhythm_precision=0.000 note_value_acc=0.000 note_value_n=8 avg_beat_error=1.945
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=2 matched=1 missed=1 miss_rate=0.500
+      latency: avg_chunk_ms=23.13 p95_chunk_ms=27.81 avg_rtf=0.038
+      notation metrics: first_correct_ms=69.8 visible_p50_ms=225.8 visible_p95_ms=380.7 stabilize_p50_ms=1746.3 stabilize_p95_ms=2383.7 avg_revisions=1.62 matched=8 refined=8 snapshots=16
+      algorithmic latency: first_correct_ms=41.9 visible_p50_ms=198.0 visible_p95_ms=360.6 stabilize_p50_ms=1463.8 stabilize_p95_ms=1887.6
+      final display note metrics: precision=0.667 recall=0.889 f1=0.762 matched=8/9 pred=12
+      final display strict onset f1: 10ms=0.762 20ms=0.762 30ms=0.762
+      final display timing: offset_f1=0.000 rhythm_precision=0.000 note_value_acc=0.000 note_value_n=8 avg_beat_error=1.490
+      final display structure: cluster_f1=0.667 onset_align_recall=0.875 avg_jaccard=0.929 exact=6/8 pred=10 over=1 under=0 pitch_conflicts=0 missed_gt=1
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.667 recall=0.889 f1=0.762 matched=8/9 pred=12
+      strict onset f1: 10ms=0.762 20ms=0.762 30ms=0.762
+      timing metrics: offset_f1=0.000 rhythm_precision=0.000 note_value_acc=0.000 note_value_n=8 avg_beat_error=1.945
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=2 matched=1 missed=1 miss_rate=0.500
+      latency: avg_chunk_ms=20.77 p95_chunk_ms=25.76 avg_rtf=0.034
+      notation metrics: first_correct_ms=68.7 visible_p50_ms=213.9 visible_p95_ms=385.1 stabilize_p50_ms=1743.5 stabilize_p95_ms=2384.1 avg_revisions=1.62 matched=8 refined=8 snapshots=16
+      algorithmic latency: first_correct_ms=41.9 visible_p50_ms=198.0 visible_p95_ms=360.6 stabilize_p50_ms=1463.8 stabilize_p95_ms=1887.6
+      final display note metrics: precision=0.667 recall=0.889 f1=0.762 matched=8/9 pred=12
+      final display strict onset f1: 10ms=0.762 20ms=0.762 30ms=0.762
+      final display timing: offset_f1=0.000 rhythm_precision=0.000 note_value_acc=0.000 note_value_n=8 avg_beat_error=1.490
+      final display structure: cluster_f1=0.667 onset_align_recall=0.875 avg_jaccard=0.929 exact=6/8 pred=10 over=1 under=0 pitch_conflicts=0 missed_gt=1
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.56] profiles={'soft_sparse_recall': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=-2.04 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=-11.9 stabilize_p50_ms=-2.8 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['runtime_only_win', 'boundary_miss_failure', 'high_revision_slow_stabilization', 'note_value_offset_failure']
+      boundary diagnostics: missed=1 by_arm={'control': 1, 'treatment': 1} tags={'control_boundary_miss': 1, 'no_control_coarse_candidate': 1}
+        miss: pitch=74 onset=5.995s boundary_delta_ms=-5.2 control_coarse=False treatment_coarse=False retro=n/a
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.8ms, decode=1.5ms | TOTAL=14.1ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.2ms, inference=16.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.1ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=10.7ms, decode=2.5ms | TOTAL=14.1ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=16.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.5ms, model_inference=10.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.3ms, decode=4.5ms | TOTAL=16.4ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=18.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.5ms, model_inference=11.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=14.0ms, decode=4.5ms | TOTAL=19.5ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=22.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.5ms, model_inference=14.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.2ms, decode=5.5ms | TOTAL=18.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=20.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.3ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.6ms, model_inference=12.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.8ms, model=18.2ms, decode=5.8ms | TOTAL=25.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=28.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=29.1ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=28.4ms, model_inference=18.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=12.3ms, decode=5.7ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=21.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.0ms, model_inference=12.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.8ms, model=19.0ms, decode=5.9ms | TOTAL=26.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=28.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=29.0ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=28.2ms, model_inference=19.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.8ms, model=15.0ms, decode=5.4ms | TOTAL=21.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=23.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.5ms, model_inference=15.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.4ms, features=0.8ms, model=15.4ms, decode=6.1ms | TOTAL=22.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-4837b3f62ff349e0a59e687ab10d16aa](live_neural): decode=0.1ms, inference=25.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.7ms, model_inference=15.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=10.8ms, decode=2.1ms | TOTAL=13.8ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=16.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.6ms, model_inference=10.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=17.9ms, decode=2.9ms | TOTAL=21.6ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=23.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=17.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.1ms, decode=3.6ms | TOTAL=15.3ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=17.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.1ms, model_inference=11.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=11.0ms, decode=4.4ms | TOTAL=16.2ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=18.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.2ms, model_inference=11.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.8ms, model=11.9ms, decode=6.0ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=22.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.8ms, model_inference=11.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.0ms, decode=5.5ms | TOTAL=19.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=22.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.6ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.8ms, model_inference=13.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=14.7ms, decode=5.6ms | TOTAL=20.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=23.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.3ms, model_inference=14.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.4ms, features=0.5ms, model=13.0ms, decode=5.5ms | TOTAL=19.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=21.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.4ms, model_inference=13.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=16.9ms, decode=5.7ms | TOTAL=23.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=25.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=26.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.5ms, model_inference=16.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=13.1ms, decode=5.3ms | TOTAL=19.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-5a9b4345907a428b8de9156ab07471ce](live_neural): decode=0.1ms, inference=21.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.2ms, model_inference=13.1ms
+
+[CLIP_002] Two Sonatas
+  excerpt: start=21.00s end=27.00s duration=6.00s gt_notes=95 rms=0.1706 peak=0.8416 crest=4.933 rms_std=0.0350
+    control:
+      note metrics: precision=0.948 recall=0.958 f1=0.953 matched=91/95 pred=96
+      strict onset f1: 10ms=0.890 20ms=0.953 30ms=0.953
+      timing metrics: offset_f1=0.848 rhythm_precision=0.890 note_value_acc=0.396 note_value_n=91 avg_beat_error=0.118
+      duplicate metrics: duplicates=2 per_100_notes=2.08
+      boundary metrics: gt=30 matched=29 missed=1 miss_rate=0.033
+      latency: avg_chunk_ms=22.55 p95_chunk_ms=29.07 avg_rtf=0.037
+      notation metrics: first_correct_ms=39.5 visible_p50_ms=307.8 visible_p95_ms=607.9 stabilize_p50_ms=1252.0 stabilize_p95_ms=1922.7 avg_revisions=1.12 matched=52 refined=52 snapshots=21
+      algorithmic latency: first_correct_ms=18.2 visible_p50_ms=280.5 visible_p95_ms=587.2 stabilize_p50_ms=694.3 stabilize_p95_ms=1386.0
+      final display note metrics: precision=0.957 recall=0.947 f1=0.952 matched=90/95 pred=94
+      final display strict onset f1: 10ms=0.889 20ms=0.952 30ms=0.952
+      final display timing: offset_f1=0.847 rhythm_precision=0.889 note_value_acc=0.300 note_value_n=90 avg_beat_error=0.257
+      final display structure: cluster_f1=0.857 onset_align_recall=1.000 avg_jaccard=0.938 exact=45/52 pred=53 over=2 under=4 pitch_conflicts=1 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.958 recall=0.958 f1=0.958 matched=91/95 pred=95
+      strict onset f1: 10ms=0.895 20ms=0.958 30ms=0.958
+      timing metrics: offset_f1=0.853 rhythm_precision=0.890 note_value_acc=0.396 note_value_n=91 avg_beat_error=0.118
+      duplicate metrics: duplicates=2 per_100_notes=2.11
+      boundary metrics: gt=30 matched=29 missed=1 miss_rate=0.033
+      latency: avg_chunk_ms=21.57 p95_chunk_ms=25.22 avg_rtf=0.036
+      notation metrics: first_correct_ms=40.7 visible_p50_ms=302.7 visible_p95_ms=606.0 stabilize_p50_ms=1271.8 stabilize_p95_ms=1993.7 avg_revisions=1.19 matched=52 refined=52 snapshots=21
+      algorithmic latency: first_correct_ms=18.2 visible_p50_ms=280.5 visible_p95_ms=587.2 stabilize_p50_ms=714.1 stabilize_p95_ms=1488.6
+      final display note metrics: precision=0.968 recall=0.947 f1=0.957 matched=90/95 pred=93
+      final display strict onset f1: 10ms=0.894 20ms=0.957 30ms=0.957
+      final display timing: offset_f1=0.851 rhythm_precision=0.889 note_value_acc=0.322 note_value_n=90 avg_beat_error=0.249
+      final display structure: cluster_f1=0.865 onset_align_recall=1.000 avg_jaccard=0.938 exact=45/52 pred=52 over=2 under=4 pitch_conflicts=1 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.62] profiles={'loud_dense_precision': 10}
+    delta treatment-control: precision=+0.010 recall=+0.000 f1=+0.005 offset_f1=+0.004 note_value_acc=+0.000 dup_per_100=+0.02 boundary_miss_rate=+0.000 p95_chunk_ms=-3.85 f1_10ms=+0.005 f1_20ms=+0.005 f1_30ms=+0.005 visible_p50_ms=-5.1 stabilize_p50_ms=+19.8 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+19.8 avg_revisions=+0.08 display_note_f1=+0.005 display_offset_f1=+0.005 display_cluster_f1=+0.008 display_cluster_jaccard=+0.000
+    failure buckets: ['runtime_only_win', 'boundary_miss_failure', 'high_revision_slow_stabilization', 'note_value_offset_failure']
+      boundary diagnostics: missed=1 by_arm={'control': 1, 'treatment': 1} tags={'control_boundary_miss': 1, 'no_control_coarse_candidate': 1}
+        miss: pitch=34 onset=5.949s boundary_delta_ms=-50.8 control_coarse=False treatment_coarse=False retro=n/a
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=13.5ms, decode=1.3ms | TOTAL=15.8ms for 600ms audio (RTF=0.03x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=17.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.0ms, model_inference=13.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=15.3ms, decode=2.2ms | TOTAL=18.1ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=19.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=15.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=10.7ms, decode=3.0ms | TOTAL=14.3ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=16.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.9ms, model_inference=10.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=10.8ms, decode=3.9ms | TOTAL=15.2ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=17.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.0ms, model_inference=10.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=18.3ms, decode=5.7ms | TOTAL=24.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=27.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.2ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=26.6ms, model_inference=18.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.8ms, model=11.9ms, decode=4.9ms | TOTAL=17.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=20.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.2ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.6ms, model_inference=11.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=12.2ms, decode=5.1ms | TOTAL=17.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=19.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.4ms, model_inference=12.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.1ms, decode=5.3ms | TOTAL=18.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=20.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.8ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.9ms, model=13.3ms, decode=5.8ms | TOTAL=20.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=22.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.9ms, model_inference=13.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=19.2ms, decode=5.1ms | TOTAL=25.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-53a7ddbf91ed47ebbaf9226a42ada59b](live_neural): decode=0.1ms, inference=27.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.7ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=26.9ms, model_inference=19.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=10.9ms, decode=1.3ms | TOTAL=13.0ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=14.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=14.6ms, model_inference=10.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=18.8ms, decode=2.2ms | TOTAL=21.7ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=23.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.6ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.1ms, model_inference=18.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=10.7ms, decode=3.3ms | TOTAL=14.8ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=16.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.2ms, model_inference=10.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=11.8ms, decode=3.9ms | TOTAL=16.5ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=18.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.1ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=18.6ms, decode=5.8ms | TOTAL=25.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=27.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.5ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=26.9ms, model_inference=18.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.8ms, model=12.0ms, decode=4.9ms | TOTAL=17.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.2ms, inference=20.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.8ms, model_inference=12.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=18.4ms, decode=5.2ms | TOTAL=24.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=26.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.2ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=26.6ms, model_inference=18.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.8ms, decode=5.1ms | TOTAL=17.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=20.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.6ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=14.3ms, decode=4.8ms | TOTAL=19.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.1ms, inference=21.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.6ms, model_inference=14.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.7ms, decode=6.8ms | TOTAL=19.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-b45191e3639d4aec9f3ee2d6b24a8e91](live_neural): decode=0.2ms, inference=21.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.8ms, model_inference=11.7ms
+
+[CLIP_003] Sonata in D Minor, K. 213
+  excerpt: start=9.00s end=15.00s duration=6.00s gt_notes=18 rms=0.0079 peak=0.0465 crest=5.877 rms_std=0.0026
+    control:
+      note metrics: precision=0.783 recall=1.000 f1=0.878 matched=18/18 pred=23
+      strict onset f1: 10ms=0.829 20ms=0.878 30ms=0.878
+      timing metrics: offset_f1=0.439 rhythm_precision=0.500 note_value_acc=0.056 note_value_n=18 avg_beat_error=0.899
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=8 matched=8 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=20.96 p95_chunk_ms=27.48 avg_rtf=0.035
+      notation metrics: first_correct_ms=43.3 visible_p50_ms=332.9 visible_p95_ms=605.2 stabilize_p50_ms=1864.0 stabilize_p95_ms=2957.2 avg_revisions=2.22 matched=18 refined=18 snapshots=20
+      algorithmic latency: first_correct_ms=15.6 visible_p50_ms=308.1 visible_p95_ms=587.1 stabilize_p50_ms=1648.6 stabilize_p95_ms=2909.5
+      final display note metrics: precision=0.783 recall=1.000 f1=0.878 matched=18/18 pred=23
+      final display strict onset f1: 10ms=0.829 20ms=0.878 30ms=0.878
+      final display timing: offset_f1=0.439 rhythm_precision=0.500 note_value_acc=0.444 note_value_n=18 avg_beat_error=0.485
+      final display structure: cluster_f1=0.865 onset_align_recall=1.000 avg_jaccard=0.971 exact=16/17 pred=20 over=1 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.692 recall=1.000 f1=0.818 matched=18/18 pred=26
+      strict onset f1: 10ms=0.773 20ms=0.818 30ms=0.818
+      timing metrics: offset_f1=0.409 rhythm_precision=0.500 note_value_acc=0.056 note_value_n=18 avg_beat_error=0.899
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=8 matched=8 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=21.34 p95_chunk_ms=27.35 avg_rtf=0.035
+      notation metrics: first_correct_ms=37.1 visible_p50_ms=332.9 visible_p95_ms=605.5 stabilize_p50_ms=840.7 stabilize_p95_ms=3122.0 avg_revisions=1.06 matched=18 refined=18 snapshots=21
+      algorithmic latency: first_correct_ms=15.6 visible_p50_ms=308.1 visible_p95_ms=587.1 stabilize_p50_ms=617.2 stabilize_p95_ms=2588.5
+      final display note metrics: precision=0.692 recall=1.000 f1=0.818 matched=18/18 pred=26
+      final display strict onset f1: 10ms=0.773 20ms=0.818 30ms=0.818
+      final display timing: offset_f1=0.409 rhythm_precision=0.500 note_value_acc=0.333 note_value_n=18 avg_beat_error=0.490
+      final display structure: cluster_f1=0.800 onset_align_recall=1.000 avg_jaccard=0.971 exact=16/17 pred=23 over=1 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.56] profiles={'soft_sparse_recall': 10}
+    delta treatment-control: precision=-0.090 recall=+0.000 f1=-0.060 offset_f1=-0.030 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=-0.13 f1_10ms=-0.057 f1_20ms=-0.060 f1_30ms=-0.060 visible_p50_ms=-0.1 stabilize_p50_ms=-1023.3 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=-1031.4 avg_revisions=-1.17 display_note_f1=-0.060 display_offset_f1=-0.030 display_cluster_f1=-0.065 display_cluster_jaccard=+0.000
+    failure buckets: ['high_revision_slow_stabilization', 'note_value_offset_failure']
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.5ms, features=0.7ms, model=17.9ms, decode=2.3ms | TOTAL=21.4ms for 600ms audio (RTF=0.04x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=22.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.5ms, model_inference=17.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.4ms, features=0.5ms, model=10.5ms, decode=3.3ms | TOTAL=14.7ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.2ms, inference=16.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.1ms, model_inference=10.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=10.8ms, decode=3.1ms | TOTAL=14.4ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=16.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.0ms, model_inference=10.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=11.7ms, decode=4.8ms | TOTAL=17.1ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=19.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.0ms, model_inference=11.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=14.6ms, decode=5.0ms | TOTAL=20.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=22.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.3ms, model_inference=14.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.4ms, decode=6.5ms | TOTAL=18.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=20.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.4ms, model_inference=11.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.1ms, decode=5.2ms | TOTAL=17.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.2ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.2ms, decode=5.0ms | TOTAL=17.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=19.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=12.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.8ms, decode=5.4ms | TOTAL=17.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=19.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.6ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=19.1ms, decode=5.5ms | TOTAL=25.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-620f5c90fa4741aeb8fe6ccebed51b0a](live_neural): decode=0.1ms, inference=27.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.8ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.0ms, model_inference=19.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=13.1ms, decode=1.5ms | TOTAL=15.1ms for 600ms audio (RTF=0.03x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=17.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.0ms, model_inference=13.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=13.1ms, decode=2.4ms | TOTAL=16.1ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=17.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.3ms, model_inference=13.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=10.3ms, decode=3.3ms | TOTAL=14.1ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=16.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.8ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=12.9ms, decode=4.4ms | TOTAL=18.3ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=20.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.1ms, model_inference=12.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=13.3ms, decode=5.7ms | TOTAL=19.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=21.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.3ms, model_inference=13.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=16.8ms, decode=5.3ms | TOTAL=23.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=25.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.8ms, model_inference=16.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.8ms, decode=5.1ms | TOTAL=17.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.2ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=13.4ms, decode=5.0ms | TOTAL=19.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=21.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.8ms, model_inference=13.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=12.5ms, decode=4.6ms | TOTAL=17.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=19.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.3ms, model_inference=12.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=11.9ms, decode=5.3ms | TOTAL=17.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-226f3fc046fc425ca6dc949341f49782](live_neural): decode=0.1ms, inference=19.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=11.9ms
+
+[CLIP_004] Rem. of Don Juan
+  excerpt: start=15.00s end=21.00s duration=6.00s gt_notes=41 rms=0.1217 peak=0.9068 crest=7.451 rms_std=0.0673
+    control:
+      note metrics: precision=0.810 recall=0.829 f1=0.819 matched=34/41 pred=42
+      strict onset f1: 10ms=0.434 20ms=0.651 30ms=0.819
+      timing metrics: offset_f1=0.554 rhythm_precision=0.676 note_value_acc=0.324 note_value_n=34 avg_beat_error=0.730
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=4 matched=3 missed=1 miss_rate=0.250
+      latency: avg_chunk_ms=20.88 p95_chunk_ms=25.69 avg_rtf=0.035
+      notation metrics: first_correct_ms=136.1 visible_p50_ms=386.2 visible_p95_ms=604.8 stabilize_p50_ms=1406.8 stabilize_p95_ms=5038.1 avg_revisions=1.24 matched=21 refined=21 snapshots=16
+      algorithmic latency: first_correct_ms=119.3 visible_p50_ms=363.0 visible_p95_ms=584.9 stabilize_p50_ms=950.8 stabilize_p95_ms=3988.3
+      final display note metrics: precision=0.805 recall=0.805 f1=0.805 matched=33/41 pred=41
+      final display strict onset f1: 10ms=0.415 20ms=0.634 30ms=0.805
+      final display timing: offset_f1=0.561 rhythm_precision=0.697 note_value_acc=0.182 note_value_n=33 avg_beat_error=1.109
+      final display structure: cluster_f1=0.553 onset_align_recall=0.909 avg_jaccard=0.812 exact=13/22 pred=25 over=2 under=4 pitch_conflicts=1 missed_gt=2
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.829 recall=0.829 f1=0.829 matched=34/41 pred=41
+      strict onset f1: 10ms=0.439 20ms=0.659 30ms=0.829
+      timing metrics: offset_f1=0.561 rhythm_precision=0.676 note_value_acc=0.324 note_value_n=34 avg_beat_error=0.730
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=4 matched=3 missed=1 miss_rate=0.250
+      latency: avg_chunk_ms=20.16 p95_chunk_ms=23.84 avg_rtf=0.034
+      notation metrics: first_correct_ms=137.1 visible_p50_ms=380.5 visible_p95_ms=605.5 stabilize_p50_ms=1475.7 stabilize_p95_ms=5126.8 avg_revisions=1.43 matched=21 refined=21 snapshots=16
+      algorithmic latency: first_correct_ms=119.3 visible_p50_ms=363.0 visible_p95_ms=584.9 stabilize_p50_ms=963.0 stabilize_p95_ms=4084.6
+      final display note metrics: precision=0.825 recall=0.805 f1=0.815 matched=33/41 pred=40
+      final display strict onset f1: 10ms=0.420 20ms=0.642 30ms=0.815
+      final display timing: offset_f1=0.568 rhythm_precision=0.697 note_value_acc=0.152 note_value_n=33 avg_beat_error=0.955
+      final display structure: cluster_f1=0.553 onset_align_recall=0.909 avg_jaccard=0.812 exact=13/22 pred=25 over=2 under=4 pitch_conflicts=1 missed_gt=2
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.600 thresholds=[0.6, 0.62] profiles={'baseline_nominal': 4, 'loud_dense_precision': 6}
+    delta treatment-control: precision=+0.020 recall=+0.000 f1=+0.010 offset_f1=+0.007 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=-1.84 f1_10ms=+0.005 f1_20ms=+0.008 f1_30ms=+0.010 visible_p50_ms=-5.7 stabilize_p50_ms=+68.9 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+12.2 avg_revisions=+0.19 display_note_f1=+0.010 display_offset_f1=+0.007 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['boundary_miss_failure', 'high_revision_slow_stabilization', 'note_value_offset_failure']
+      boundary diagnostics: missed=1 by_arm={'control': 1, 'treatment': 1} tags={'control_boundary_miss': 1, 'no_control_coarse_candidate': 1}
+        miss: pitch=61 onset=4.826s boundary_delta_ms=+25.5 control_coarse=False treatment_coarse=False retro=n/a
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=10.2ms, decode=1.3ms | TOTAL=12.2ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.2ms, inference=13.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.0ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.4ms, model_inference=10.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.7ms, model=11.1ms, decode=2.2ms | TOTAL=14.1ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=15.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.4ms, model_inference=11.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=13.5ms, decode=3.3ms | TOTAL=17.7ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=19.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.3ms, model_inference=13.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.8ms, decode=4.0ms | TOTAL=16.3ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=18.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.1ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=15.5ms, decode=4.8ms | TOTAL=21.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=23.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.9ms, model_inference=15.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=11.8ms, decode=4.6ms | TOTAL=16.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=19.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.9ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=15.1ms, decode=5.1ms | TOTAL=20.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=23.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.5ms, model_inference=15.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=13.2ms, decode=4.8ms | TOTAL=18.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=21.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.6ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.0ms, model_inference=13.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=13.8ms, decode=4.9ms | TOTAL=19.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.1ms, inference=21.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.2ms, model_inference=13.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.6ms, decode=6.6ms | TOTAL=19.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d94ff9fc0a246c69cb663b9ef321ffb](live_neural): decode=0.3ms, inference=22.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.1ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=10.4ms, decode=1.2ms | TOTAL=12.3ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=13.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.0ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.5ms, model_inference=10.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=18.9ms, decode=2.7ms | TOTAL=22.3ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=24.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.7ms, model_inference=18.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=15.2ms, decode=3.1ms | TOTAL=18.8ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=20.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.3ms, model_inference=15.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=11.6ms, decode=3.9ms | TOTAL=16.0ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=18.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.4ms, model_inference=11.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.2ms, decode=4.9ms | TOTAL=18.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=21.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.6ms, model_inference=13.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=12.7ms, decode=4.7ms | TOTAL=18.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.2ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.1ms, model_inference=12.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=17.2ms, decode=4.9ms | TOTAL=22.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=24.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.3ms, model_inference=17.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.1ms, decode=5.5ms | TOTAL=18.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.2ms, inference=21.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.6ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=15.5ms, decode=4.7ms | TOTAL=20.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=22.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.4ms, model_inference=15.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.6ms, decode=4.8ms | TOTAL=17.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-d1cc713b863e40009c2e59ba3a62e242](live_neural): decode=0.1ms, inference=19.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=11.6ms
+
+[CLIP_005] Transcendental Etude No. 11 "Harmonies du Soir"
+  excerpt: start=36.00s end=42.00s duration=6.00s gt_notes=8 rms=0.0091 peak=0.0571 crest=6.274 rms_std=0.0043
+    control:
+      note metrics: precision=0.727 recall=1.000 f1=0.842 matched=8/8 pred=11
+      strict onset f1: 10ms=0.421 20ms=0.842 30ms=0.842
+      timing metrics: offset_f1=0.421 rhythm_precision=0.500 note_value_acc=0.000 note_value_n=8 avg_beat_error=2.211
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=1 matched=1 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=20.11 p95_chunk_ms=23.38 avg_rtf=0.033
+      notation metrics: first_correct_ms=69.8 visible_p50_ms=215.8 visible_p95_ms=450.4 stabilize_p50_ms=858.9 stabilize_p95_ms=2078.4 avg_revisions=0.75 matched=8 refined=8 snapshots=17
+      algorithmic latency: first_correct_ms=46.9 visible_p50_ms=196.4 visible_p95_ms=430.6 stabilize_p50_ms=600.3 stabilize_p95_ms=1705.4
+      final display note metrics: precision=0.727 recall=1.000 f1=0.842 matched=8/8 pred=11
+      final display strict onset f1: 10ms=0.421 20ms=0.842 30ms=0.842
+      final display timing: offset_f1=0.421 rhythm_precision=0.500 note_value_acc=0.250 note_value_n=8 avg_beat_error=2.062
+      final display structure: cluster_f1=0.842 onset_align_recall=1.000 avg_jaccard=1.000 exact=8/8 pred=11 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.727 recall=1.000 f1=0.842 matched=8/8 pred=11
+      strict onset f1: 10ms=0.421 20ms=0.842 30ms=0.842
+      timing metrics: offset_f1=0.421 rhythm_precision=0.500 note_value_acc=0.000 note_value_n=8 avg_beat_error=2.211
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=1 matched=1 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=20.90 p95_chunk_ms=24.60 avg_rtf=0.035
+      notation metrics: first_correct_ms=66.9 visible_p50_ms=218.5 visible_p95_ms=448.5 stabilize_p50_ms=859.1 stabilize_p95_ms=2078.9 avg_revisions=0.75 matched=8 refined=8 snapshots=17
+      algorithmic latency: first_correct_ms=46.9 visible_p50_ms=196.4 visible_p95_ms=430.6 stabilize_p50_ms=600.3 stabilize_p95_ms=1705.4
+      final display note metrics: precision=0.727 recall=1.000 f1=0.842 matched=8/8 pred=11
+      final display strict onset f1: 10ms=0.421 20ms=0.842 30ms=0.842
+      final display timing: offset_f1=0.421 rhythm_precision=0.500 note_value_acc=0.250 note_value_n=8 avg_beat_error=2.062
+      final display structure: cluster_f1=0.842 onset_align_recall=1.000 avg_jaccard=1.000 exact=8/8 pred=11 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.56] profiles={'soft_sparse_recall': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=+1.22 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=+2.7 stabilize_p50_ms=+0.2 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['high_revision_slow_stabilization', 'note_value_offset_failure']
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=9.8ms, decode=1.5ms | TOTAL=12.1ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.2ms, inference=14.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.3ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.6ms, model_inference=9.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=10.4ms, decode=3.6ms | TOTAL=14.7ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=16.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.6ms, model_inference=10.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=15.9ms, decode=6.3ms | TOTAL=22.6ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=24.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.2ms, model_inference=15.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.4ms, features=0.8ms, model=13.5ms, decode=4.8ms | TOTAL=19.5ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.2ms, inference=22.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.1ms, model_inference=13.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.5ms, features=0.9ms, model=20.4ms, decode=6.8ms | TOTAL=28.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=31.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=31.8ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=31.0ms, model_inference=20.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.1ms, decode=5.8ms | TOTAL=18.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=21.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.1ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=12.8ms, decode=5.9ms | TOTAL=19.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=22.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.4ms, model_inference=12.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=19.4ms, decode=6.1ms | TOTAL=26.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=29.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=29.9ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=29.0ms, model_inference=19.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=17.7ms, decode=6.4ms | TOTAL=24.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=27.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=28.0ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.2ms, model_inference=17.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=19.3ms, decode=7.7ms | TOTAL=27.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-38cb7c9f74ba4fb3948b7ecd4589ede2](live_neural): decode=0.1ms, inference=30.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=31.1ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=30.1ms, model_inference=19.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=11.4ms, decode=1.6ms | TOTAL=13.9ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.2ms, inference=15.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.3ms, model_inference=11.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=15.5ms, decode=2.6ms | TOTAL=18.9ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=20.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.3ms, model_inference=15.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.7ms, model=12.0ms, decode=3.8ms | TOTAL=16.6ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=18.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.2ms, model_inference=12.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=14.5ms, decode=5.1ms | TOTAL=20.5ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=23.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.6ms, model_inference=14.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.4ms, decode=6.9ms | TOTAL=20.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.2ms, inference=22.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.2ms, model_inference=12.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=13.0ms, decode=6.1ms | TOTAL=19.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=22.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.1ms, model_inference=13.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.1ms, decode=6.4ms | TOTAL=19.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=21.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.4ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=13.4ms, decode=6.3ms | TOTAL=20.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=23.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=13.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.9ms, decode=6.8ms | TOTAL=19.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=23.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=11.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.8ms, model=19.0ms, decode=6.2ms | TOTAL=26.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9da4f66beb704d6d8625fce8d1f62307](live_neural): decode=0.1ms, inference=29.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=29.4ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=28.7ms, model_inference=19.0ms
+
+[CLIP_006] Concert Etude No. 2 "Gnomenreigen"
+  excerpt: start=29.00s end=35.00s duration=6.00s gt_notes=187 rms=0.0441 peak=0.2321 crest=5.257 rms_std=0.0130
+    control:
+      note metrics: precision=0.928 recall=0.893 f1=0.910 matched=167/187 pred=180
+      strict onset f1: 10ms=0.839 20ms=0.899 30ms=0.905
+      timing metrics: offset_f1=0.910 rhythm_precision=1.000 note_value_acc=0.856 note_value_n=167 avg_beat_error=0.015
+      duplicate metrics: duplicates=5 per_100_notes=2.78
+      boundary metrics: gt=60 matched=50 missed=10 miss_rate=0.167
+      latency: avg_chunk_ms=24.52 p95_chunk_ms=31.50 avg_rtf=0.041
+      notation metrics: first_correct_ms=38.3 visible_p50_ms=351.1 visible_p95_ms=613.2 stabilize_p50_ms=1133.0 stabilize_p95_ms=1808.2 avg_revisions=1.31 matched=94 refined=94 snapshots=21
+      algorithmic latency: first_correct_ms=15.1 visible_p50_ms=328.6 visible_p95_ms=590.5 stabilize_p50_ms=685.4 stabilize_p95_ms=1362.0
+      final display note metrics: precision=0.953 recall=0.877 f1=0.914 matched=164/187 pred=172
+      final display strict onset f1: 10ms=0.836 20ms=0.897 30ms=0.903
+      final display timing: offset_f1=0.914 rhythm_precision=1.000 note_value_acc=0.287 note_value_n=164 avg_beat_error=0.119
+      final display structure: cluster_f1=0.539 onset_align_recall=0.923 avg_jaccard=0.807 exact=41/78 pred=74 over=9 under=16 pitch_conflicts=6 missed_gt=6
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.928 recall=0.893 f1=0.910 matched=167/187 pred=180
+      strict onset f1: 10ms=0.839 20ms=0.899 30ms=0.905
+      timing metrics: offset_f1=0.910 rhythm_precision=1.000 note_value_acc=0.856 note_value_n=167 avg_beat_error=0.015
+      duplicate metrics: duplicates=5 per_100_notes=2.78
+      boundary metrics: gt=60 matched=50 missed=10 miss_rate=0.167
+      latency: avg_chunk_ms=22.43 p95_chunk_ms=26.90 avg_rtf=0.037
+      notation metrics: first_correct_ms=37.3 visible_p50_ms=351.7 visible_p95_ms=610.6 stabilize_p50_ms=1130.7 stabilize_p95_ms=1809.2 avg_revisions=1.31 matched=94 refined=94 snapshots=21
+      algorithmic latency: first_correct_ms=15.1 visible_p50_ms=328.6 visible_p95_ms=590.5 stabilize_p50_ms=685.4 stabilize_p95_ms=1362.0
+      final display note metrics: precision=0.953 recall=0.877 f1=0.914 matched=164/187 pred=172
+      final display strict onset f1: 10ms=0.836 20ms=0.897 30ms=0.903
+      final display timing: offset_f1=0.914 rhythm_precision=1.000 note_value_acc=0.287 note_value_n=164 avg_beat_error=0.119
+      final display structure: cluster_f1=0.539 onset_align_recall=0.923 avg_jaccard=0.807 exact=41/78 pred=74 over=9 under=16 pitch_conflicts=6 missed_gt=6
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'baseline_nominal': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=-4.60 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=+0.6 stabilize_p50_ms=-2.3 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['runtime_only_win', 'boundary_miss_failure', 'high_revision_slow_stabilization']
+      boundary diagnostics: missed=10 by_arm={'control': 10, 'treatment': 10} tags={'control_boundary_miss': 10, 'no_control_coarse_candidate': 10}
+        miss: pitch=91 onset=0.529s boundary_delta_ms=-71.4 control_coarse=False treatment_coarse=False retro=n/a
+        miss: pitch=74 onset=0.566s boundary_delta_ms=-33.6 control_coarse=False treatment_coarse=False retro=n/a
+        miss: pitch=71 onset=2.419s boundary_delta_ms=+19.3 control_coarse=False treatment_coarse=False retro=n/a
+        ... 7 more missed boundary notes in diagnostics JSON
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=10.9ms, decode=1.2ms | TOTAL=13.1ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.2ms, inference=14.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.9ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=14.2ms, model_inference=10.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.1ms, decode=2.1ms | TOTAL=13.9ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=15.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.2ms, model_inference=11.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=11.7ms, decode=2.8ms | TOTAL=15.0ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=17.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.5ms, model_inference=11.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=11.8ms, decode=3.8ms | TOTAL=16.4ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=18.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.1ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=14.0ms, decode=4.5ms | TOTAL=19.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=22.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.6ms, model_inference=14.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=14.4ms, decode=4.6ms | TOTAL=19.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=21.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.3ms, model_inference=14.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.6ms, decode=4.7ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=21.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.8ms, model_inference=13.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=13.4ms, decode=4.9ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=21.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.3ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.7ms, model_inference=13.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.7ms, model=13.4ms, decode=5.0ms | TOTAL=19.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=21.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.0ms, model_inference=13.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=14.8ms, decode=4.9ms | TOTAL=20.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-280f5665fd024b1697dc5ffb78b2ea92](live_neural): decode=0.1ms, inference=22.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.3ms, model_inference=14.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=12.8ms, decode=1.3ms | TOTAL=14.8ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=16.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.0ms, model_inference=12.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=11.6ms, decode=2.1ms | TOTAL=14.2ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=15.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.5ms, model_inference=11.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=1.0ms, model=13.6ms, decode=2.8ms | TOTAL=17.6ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=19.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.1ms, model_inference=13.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.6ms, decode=4.1ms | TOTAL=17.2ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=19.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.9ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=15.4ms, decode=4.5ms | TOTAL=20.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=23.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.8ms, model_inference=15.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=14.7ms, decode=4.7ms | TOTAL=20.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=22.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.9ms, model_inference=14.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=12.9ms, decode=5.1ms | TOTAL=18.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=20.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.3ms, model_inference=12.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.5ms, decode=4.8ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=21.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.8ms, model_inference=13.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=13.2ms, decode=4.8ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.2ms, inference=21.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.1ms, model_inference=13.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=13.8ms, decode=5.2ms | TOTAL=19.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-2d106c63614942e3bade106346bd1125](live_neural): decode=0.1ms, inference=21.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.6ms, model_inference=13.8ms
+
+[CLIP_007] Transcendental Etude No. 11 "Harmonies du Soir"
+  excerpt: start=23.00s end=29.00s duration=6.00s gt_notes=10 rms=0.0134 peak=0.0697 crest=5.197 rms_std=0.0059
+    control:
+      note metrics: precision=0.667 recall=1.000 f1=0.800 matched=10/10 pred=15
+      strict onset f1: 10ms=0.720 20ms=0.800 30ms=0.800
+      timing metrics: offset_f1=0.320 rhythm_precision=0.400 note_value_acc=0.200 note_value_n=10 avg_beat_error=0.512
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=0 matched=0 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=19.86 p95_chunk_ms=22.64 avg_rtf=0.033
+      notation metrics: first_correct_ms=284.8 visible_p50_ms=341.9 visible_p95_ms=468.2 stabilize_p50_ms=2282.5 stabilize_p95_ms=2978.9 avg_revisions=2.38 matched=8 refined=8 snapshots=17
+      algorithmic latency: first_correct_ms=263.5 visible_p50_ms=320.4 visible_p95_ms=445.2 stabilize_p50_ms=1200.5 stabilize_p95_ms=2108.9
+      final display note metrics: precision=0.667 recall=1.000 f1=0.800 matched=10/10 pred=15
+      final display strict onset f1: 10ms=0.720 20ms=0.800 30ms=0.800
+      final display timing: offset_f1=0.320 rhythm_precision=0.400 note_value_acc=0.100 note_value_n=10 avg_beat_error=0.600
+      final display structure: cluster_f1=0.667 onset_align_recall=1.000 avg_jaccard=1.000 exact=4/4 pred=8 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.667 recall=1.000 f1=0.800 matched=10/10 pred=15
+      strict onset f1: 10ms=0.720 20ms=0.800 30ms=0.800
+      timing metrics: offset_f1=0.320 rhythm_precision=0.400 note_value_acc=0.200 note_value_n=10 avg_beat_error=0.512
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=0 matched=0 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=20.39 p95_chunk_ms=22.98 avg_rtf=0.034
+      notation metrics: first_correct_ms=285.1 visible_p50_ms=341.3 visible_p95_ms=467.3 stabilize_p50_ms=2281.7 stabilize_p95_ms=2978.4 avg_revisions=2.38 matched=8 refined=8 snapshots=17
+      algorithmic latency: first_correct_ms=263.5 visible_p50_ms=320.4 visible_p95_ms=445.2 stabilize_p50_ms=1200.5 stabilize_p95_ms=2108.9
+      final display note metrics: precision=0.667 recall=1.000 f1=0.800 matched=10/10 pred=15
+      final display strict onset f1: 10ms=0.720 20ms=0.800 30ms=0.800
+      final display timing: offset_f1=0.320 rhythm_precision=0.400 note_value_acc=0.100 note_value_n=10 avg_beat_error=0.600
+      final display structure: cluster_f1=0.667 onset_align_recall=1.000 avg_jaccard=1.000 exact=4/4 pred=8 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.56] profiles={'soft_sparse_recall': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=+0.34 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=-0.6 stabilize_p50_ms=-0.8 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['high_revision_slow_stabilization', 'note_value_offset_failure']
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=10.3ms, decode=1.6ms | TOTAL=12.7ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=14.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.5ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.9ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=10.3ms, decode=2.7ms | TOTAL=13.4ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=16.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.6ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=11.6ms, decode=3.8ms | TOTAL=16.1ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=18.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.7ms, model_inference=11.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=14.0ms, decode=5.3ms | TOTAL=19.8ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.2ms, inference=22.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.9ms, model_inference=14.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=16.1ms, decode=5.8ms | TOTAL=22.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=25.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.8ms, model_inference=16.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=15.9ms, decode=6.1ms | TOTAL=23.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=25.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.6ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.9ms, model_inference=15.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=14.7ms, decode=8.7ms | TOTAL=24.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=29.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=30.2ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=29.4ms, model_inference=14.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=13.0ms, decode=5.8ms | TOTAL=19.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=22.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.7ms, model_inference=13.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.4ms, model=12.8ms, decode=7.6ms | TOTAL=21.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.2ms, inference=23.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=24.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.2ms, model_inference=12.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.1ms, decode=6.1ms | TOTAL=19.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-bef5ff7572e64fe0b854cd4b67c46648](live_neural): decode=0.1ms, inference=21.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.1ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=14.5ms, decode=1.8ms | TOTAL=17.0ms for 600ms audio (RTF=0.03x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.3ms, inference=18.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.2ms, model_inference=14.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=10.3ms, decode=2.7ms | TOTAL=13.6ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=15.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.5ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.0ms, decode=3.8ms | TOTAL=15.6ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=17.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.4ms, model_inference=11.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=14.2ms, decode=6.3ms | TOTAL=21.2ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=23.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=14.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.1ms, decode=6.2ms | TOTAL=19.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=21.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.3ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.8ms, model=15.9ms, decode=6.0ms | TOTAL=22.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.2ms, inference=26.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=26.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.9ms, model_inference=15.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.7ms, decode=6.3ms | TOTAL=19.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=22.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.0ms, model_inference=12.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.1ms, decode=6.0ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=21.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.1ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=15.7ms, decode=6.7ms | TOTAL=23.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=25.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.0ms, model_inference=15.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.5ms, decode=7.1ms | TOTAL=20.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-ad4c1c93f9af40fa88e568b32c12fe83](live_neural): decode=0.1ms, inference=23.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.3ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.6ms, model_inference=12.5ms
+
+[CLIP_008] Concert Etude No. 2, "Gnomenreigen", S. 145/2
+  excerpt: start=23.00s end=29.00s duration=6.00s gt_notes=160 rms=0.1129 peak=0.5224 crest=4.628 rms_std=0.0393
+    control:
+      note metrics: precision=0.920 recall=0.938 f1=0.929 matched=150/160 pred=163
+      strict onset f1: 10ms=0.861 20ms=0.923 30ms=0.923
+      timing metrics: offset_f1=0.923 rhythm_precision=0.993 note_value_acc=0.780 note_value_n=150 avg_beat_error=0.025
+      duplicate metrics: duplicates=8 per_100_notes=4.91
+      boundary metrics: gt=47 matched=46 missed=1 miss_rate=0.021
+      latency: avg_chunk_ms=22.15 p95_chunk_ms=28.13 avg_rtf=0.037
+      notation metrics: first_correct_ms=0.0 visible_p50_ms=325.9 visible_p95_ms=610.7 stabilize_p50_ms=959.2 stabilize_p95_ms=1814.0 avg_revisions=1.36 matched=90 refined=90 snapshots=21
+      algorithmic latency: first_correct_ms=0.0 visible_p50_ms=301.3 visible_p95_ms=589.9 stabilize_p50_ms=483.5 stabilize_p95_ms=1310.4
+      final display note metrics: precision=0.973 recall=0.906 f1=0.939 matched=145/160 pred=149
+      final display strict onset f1: 10ms=0.854 20ms=0.919 30ms=0.926
+      final display timing: offset_f1=0.932 rhythm_precision=0.993 note_value_acc=0.200 note_value_n=145 avg_beat_error=0.106
+      final display structure: cluster_f1=0.645 onset_align_recall=0.937 avg_jaccard=0.856 exact=50/79 pred=76 over=7 under=12 pitch_conflicts=5 missed_gt=5
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.932 recall=0.938 f1=0.935 matched=150/160 pred=161
+      strict onset f1: 10ms=0.866 20ms=0.928 30ms=0.928
+      timing metrics: offset_f1=0.928 rhythm_precision=0.993 note_value_acc=0.780 note_value_n=150 avg_beat_error=0.025
+      duplicate metrics: duplicates=7 per_100_notes=4.35
+      boundary metrics: gt=47 matched=46 missed=1 miss_rate=0.021
+      latency: avg_chunk_ms=21.91 p95_chunk_ms=26.22 avg_rtf=0.037
+      notation metrics: first_correct_ms=0.0 visible_p50_ms=328.0 visible_p95_ms=613.9 stabilize_p50_ms=1014.1 stabilize_p95_ms=1853.3 avg_revisions=1.36 matched=91 refined=91 snapshots=21
+      algorithmic latency: first_correct_ms=0.0 visible_p50_ms=302.9 visible_p95_ms=593.0 stabilize_p50_ms=519.5 stabilize_p95_ms=1351.2
+      final display note metrics: precision=0.980 recall=0.906 f1=0.942 matched=145/160 pred=148
+      final display strict onset f1: 10ms=0.857 20ms=0.922 30ms=0.929
+      final display timing: offset_f1=0.935 rhythm_precision=0.993 note_value_acc=0.200 note_value_n=145 avg_beat_error=0.102
+      final display structure: cluster_f1=0.658 onset_align_recall=0.937 avg_jaccard=0.860 exact=51/79 pred=76 over=6 under=12 pitch_conflicts=5 missed_gt=5
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.500 thresholds=[0.6, 0.62] profiles={'baseline_nominal': 5, 'loud_dense_precision': 5}
+    delta treatment-control: precision=+0.011 recall=+0.000 f1=+0.006 offset_f1=+0.006 note_value_acc=+0.000 dup_per_100=-0.56 boundary_miss_rate=+0.000 p95_chunk_ms=-1.91 f1_10ms=+0.005 f1_20ms=+0.006 f1_30ms=+0.006 visible_p50_ms=+2.1 stabilize_p50_ms=+54.9 algo_visible_p50_ms=+1.6 algo_stabilize_p50_ms=+36.1 avg_revisions=+0.01 display_note_f1=+0.003 display_offset_f1=+0.003 display_cluster_f1=+0.013 display_cluster_jaccard=+0.005
+    failure buckets: ['boundary_miss_failure', 'high_revision_slow_stabilization']
+      boundary diagnostics: missed=1 by_arm={'control': 1, 'treatment': 1} tags={'control_boundary_miss': 1, 'no_control_coarse_candidate': 1}
+        miss: pitch=86 onset=3.695s boundary_delta_ms=+95.3 control_coarse=False treatment_coarse=False retro=n/a
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=12.6ms, decode=1.4ms | TOTAL=14.9ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=17.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.7ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.5ms, model=17.5ms, decode=2.5ms | TOTAL=20.6ms for 1200ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.2ms, inference=22.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.9ms, model_inference=17.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=20.1ms, decode=3.6ms | TOTAL=24.4ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.2ms, inference=27.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.3ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=26.6ms, model_inference=20.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=17.4ms, decode=4.7ms | TOTAL=22.7ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=25.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.2ms, model_inference=17.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.2ms, decode=5.7ms | TOTAL=18.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.2ms, inference=21.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.7ms, model_inference=12.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=25.9ms, decode=7.5ms | TOTAL=34.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=36.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=36.7ms | audio=600ms, RTF=0.06x | model=enhanced_mel, neural_total=36.0ms, model_inference=25.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.8ms, decode=6.1ms | TOTAL=19.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=22.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.9ms, model_inference=12.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=13.0ms, decode=6.0ms | TOTAL=19.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=22.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.9ms, model_inference=13.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.8ms, model=16.2ms, decode=5.7ms | TOTAL=22.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=25.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.9ms, model_inference=16.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=15.1ms, decode=6.1ms | TOTAL=22.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9e00c09124f24ca9b0052ca341b22e94](live_neural): decode=0.1ms, inference=25.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.7ms, model_inference=15.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.2ms, decode=1.5ms | TOTAL=15.4ms for 600ms audio (RTF=0.03x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.2ms, inference=17.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.7ms, model_inference=13.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=10.0ms, decode=2.9ms | TOTAL=13.6ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.2ms, inference=15.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.1ms, model_inference=10.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.5ms, decode=3.7ms | TOTAL=15.8ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.1ms, inference=17.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.4ms, model_inference=11.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.6ms, decode=4.7ms | TOTAL=17.0ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.2ms, inference=19.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.0ms, model_inference=11.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.1ms, decode=6.0ms | TOTAL=18.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.2ms, inference=21.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.3ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=12.5ms, decode=6.5ms | TOTAL=19.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.1ms, inference=22.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.2ms, model_inference=12.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.4ms, features=0.7ms, model=14.1ms, decode=5.8ms | TOTAL=21.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.1ms, inference=25.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.7ms, model_inference=14.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=15.0ms, decode=7.9ms | TOTAL=23.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.1ms, inference=26.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=26.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.6ms, model_inference=15.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.3ms, decode=6.4ms | TOTAL=19.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.1ms, inference=21.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.5ms, model_inference=12.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.6ms, decode=6.0ms | TOTAL=19.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-9d7da00f3df94677ad895592eb09614b](live_neural): decode=0.2ms, inference=21.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.4ms, model_inference=12.6ms
+
+[CLIP_009] Etude "Pour les accords"
+  excerpt: start=2.00s end=8.00s duration=6.00s gt_notes=130 rms=0.0822 peak=0.4571 crest=5.563 rms_std=0.0250
+    control:
+      note metrics: precision=0.850 recall=0.915 f1=0.881 matched=119/130 pred=140
+      strict onset f1: 10ms=0.652 20ms=0.874 30ms=0.881
+      timing metrics: offset_f1=0.881 rhythm_precision=1.000 note_value_acc=0.882 note_value_n=119 avg_beat_error=0.015
+      duplicate metrics: duplicates=4 per_100_notes=2.86
+      boundary metrics: gt=48 matched=45 missed=3 miss_rate=0.062
+      latency: avg_chunk_ms=24.78 p95_chunk_ms=32.48 avg_rtf=0.041
+      notation metrics: first_correct_ms=134.1 visible_p50_ms=416.7 visible_p95_ms=641.6 stabilize_p50_ms=2073.2 stabilize_p95_ms=3215.7 avg_revisions=2.00 matched=23 refined=23 snapshots=21
+      algorithmic latency: first_correct_ms=97.4 visible_p50_ms=394.0 visible_p95_ms=620.1 stabilize_p50_ms=1569.5 stabilize_p95_ms=2171.8
+      final display note metrics: precision=0.882 recall=0.862 f1=0.872 matched=112/130 pred=127
+      final display strict onset f1: 10ms=0.638 20ms=0.864 30ms=0.872
+      final display timing: offset_f1=0.872 rhythm_precision=1.000 note_value_acc=0.625 note_value_n=112 avg_beat_error=0.276
+      final display structure: cluster_f1=0.449 onset_align_recall=0.957 avg_jaccard=0.840 exact=11/23 pred=26 over=2 under=7 pitch_conflicts=2 missed_gt=1
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.850 recall=0.915 f1=0.881 matched=119/130 pred=140
+      strict onset f1: 10ms=0.652 20ms=0.874 30ms=0.881
+      timing metrics: offset_f1=0.881 rhythm_precision=1.000 note_value_acc=0.882 note_value_n=119 avg_beat_error=0.015
+      duplicate metrics: duplicates=4 per_100_notes=2.86
+      boundary metrics: gt=48 matched=45 missed=3 miss_rate=0.062
+      latency: avg_chunk_ms=21.20 p95_chunk_ms=25.91 avg_rtf=0.035
+      notation metrics: first_correct_ms=120.4 visible_p50_ms=419.4 visible_p95_ms=642.2 stabilize_p50_ms=2075.9 stabilize_p95_ms=3211.5 avg_revisions=2.00 matched=23 refined=23 snapshots=21
+      algorithmic latency: first_correct_ms=97.4 visible_p50_ms=394.0 visible_p95_ms=620.1 stabilize_p50_ms=1569.5 stabilize_p95_ms=2171.8
+      final display note metrics: precision=0.882 recall=0.862 f1=0.872 matched=112/130 pred=127
+      final display strict onset f1: 10ms=0.638 20ms=0.864 30ms=0.872
+      final display timing: offset_f1=0.872 rhythm_precision=1.000 note_value_acc=0.625 note_value_n=112 avg_beat_error=0.276
+      final display structure: cluster_f1=0.449 onset_align_recall=0.957 avg_jaccard=0.840 exact=11/23 pred=26 over=2 under=7 pitch_conflicts=2 missed_gt=1
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'baseline_nominal': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=-6.57 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=+2.7 stabilize_p50_ms=+2.7 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['runtime_only_win', 'boundary_miss_failure', 'high_revision_slow_stabilization']
+      boundary diagnostics: missed=3 by_arm={'control': 3, 'treatment': 3} tags={'control_boundary_miss': 3, 'no_control_coarse_candidate': 3}
+        miss: pitch=62 onset=5.430s boundary_delta_ms=+29.7 control_coarse=False treatment_coarse=False retro=n/a
+        miss: pitch=64 onset=5.969s boundary_delta_ms=-31.2 control_coarse=False treatment_coarse=False retro=n/a
+        miss: pitch=76 onset=5.999s boundary_delta_ms=-1.3 control_coarse=False treatment_coarse=False retro=n/a
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=10.1ms, decode=1.3ms | TOTAL=12.3ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=14.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.8ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=14.1ms, model_inference=10.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=10.7ms, decode=3.4ms | TOTAL=14.5ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=16.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.8ms, model_inference=10.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=20.7ms, decode=3.7ms | TOTAL=25.2ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=28.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=28.2ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.6ms, model_inference=20.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.8ms, model=20.1ms, decode=4.1ms | TOTAL=25.2ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=27.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.7ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.1ms, model_inference=20.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.5ms, model=12.2ms, decode=4.8ms | TOTAL=17.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=20.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.2ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.6ms, model_inference=12.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.6ms, decode=5.0ms | TOTAL=18.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.1ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.3ms, decode=5.3ms | TOTAL=19.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=21.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.4ms, model_inference=13.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.3ms, decode=5.0ms | TOTAL=18.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=20.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.9ms, model_inference=12.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=20.6ms, decode=5.8ms | TOTAL=27.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=29.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=29.7ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=29.1ms, model_inference=20.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.8ms, decode=5.9ms | TOTAL=18.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-7c95c2ddbdf240beb078f9ac98d62df5](live_neural): decode=0.1ms, inference=20.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.3ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=9.8ms, decode=1.3ms | TOTAL=11.7ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=13.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=14.1ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.6ms, model_inference=9.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=14.8ms, decode=2.2ms | TOTAL=17.6ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=19.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.9ms, model_inference=14.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=12.1ms, decode=3.0ms | TOTAL=15.6ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=17.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.9ms, model_inference=12.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=12.7ms, decode=4.1ms | TOTAL=17.5ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=19.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=12.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.7ms, decode=4.9ms | TOTAL=17.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.2ms, model_inference=11.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.9ms, decode=4.8ms | TOTAL=18.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=20.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.0ms, model_inference=12.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=11.9ms, decode=4.9ms | TOTAL=17.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=20.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.7ms, model_inference=11.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.4ms, decode=4.9ms | TOTAL=17.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=20.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.7ms, model_inference=12.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=11.8ms, decode=6.4ms | TOTAL=18.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=21.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.3ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.7ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.8ms, decode=5.3ms | TOTAL=17.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-db13004499f7487888282edeccdc58cf](live_neural): decode=0.1ms, inference=20.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.2ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.6ms, model_inference=11.8ms
+
+[CLIP_010] Sonata No. 9, Op. 68, "Black Mass"
+  excerpt: start=10.00s end=16.00s duration=6.00s gt_notes=14 rms=0.0125 peak=0.0693 crest=5.531 rms_std=0.0039
+    control:
+      note metrics: precision=0.609 recall=1.000 f1=0.757 matched=14/14 pred=23
+      strict onset f1: 10ms=0.649 20ms=0.757 30ms=0.757
+      timing metrics: offset_f1=0.054 rhythm_precision=0.071 note_value_acc=0.071 note_value_n=14 avg_beat_error=1.942
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=5 matched=5 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=22.13 p95_chunk_ms=29.01 avg_rtf=0.037
+      notation metrics: first_correct_ms=209.8 visible_p50_ms=378.4 visible_p95_ms=564.4 stabilize_p50_ms=2572.8 stabilize_p95_ms=3570.7 avg_revisions=2.50 matched=8 refined=8 snapshots=17
+      algorithmic latency: first_correct_ms=195.1 visible_p50_ms=355.2 visible_p95_ms=536.2 stabilize_p50_ms=2009.9 stabilize_p95_ms=2903.8
+      final display note metrics: precision=0.609 recall=1.000 f1=0.757 matched=14/14 pred=23
+      final display strict onset f1: 10ms=0.649 20ms=0.757 30ms=0.757
+      final display timing: offset_f1=0.054 rhythm_precision=0.071 note_value_acc=0.071 note_value_n=14 avg_beat_error=1.744
+      final display structure: cluster_f1=0.632 onset_align_recall=1.000 avg_jaccard=1.000 exact=6/6 pred=13 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.609 recall=1.000 f1=0.757 matched=14/14 pred=23
+      strict onset f1: 10ms=0.649 20ms=0.757 30ms=0.757
+      timing metrics: offset_f1=0.054 rhythm_precision=0.071 note_value_acc=0.071 note_value_n=14 avg_beat_error=1.942
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=5 matched=5 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=19.43 p95_chunk_ms=21.03 avg_rtf=0.032
+      notation metrics: first_correct_ms=209.1 visible_p50_ms=374.5 visible_p95_ms=553.6 stabilize_p50_ms=2567.1 stabilize_p95_ms=3562.0 avg_revisions=2.50 matched=8 refined=8 snapshots=17
+      algorithmic latency: first_correct_ms=195.1 visible_p50_ms=355.2 visible_p95_ms=536.2 stabilize_p50_ms=2009.9 stabilize_p95_ms=2903.8
+      final display note metrics: precision=0.609 recall=1.000 f1=0.757 matched=14/14 pred=23
+      final display strict onset f1: 10ms=0.649 20ms=0.757 30ms=0.757
+      final display timing: offset_f1=0.054 rhythm_precision=0.071 note_value_acc=0.071 note_value_n=14 avg_beat_error=1.744
+      final display structure: cluster_f1=0.632 onset_align_recall=1.000 avg_jaccard=1.000 exact=6/6 pred=13 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.56] profiles={'soft_sparse_recall': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=-7.99 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=-3.9 stabilize_p50_ms=-5.7 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['runtime_only_win', 'high_revision_slow_stabilization', 'note_value_offset_failure']
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.5ms, features=0.6ms, model=10.6ms, decode=2.1ms | TOTAL=13.7ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.2ms, inference=16.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.8ms, model_inference=10.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.7ms, model=10.3ms, decode=2.3ms | TOTAL=13.4ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=15.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.3ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=14.8ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=12.0ms, decode=3.4ms | TOTAL=15.9ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=17.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.5ms, model_inference=12.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.6ms, decode=4.1ms | TOTAL=17.4ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=20.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.0ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.4ms, decode=5.3ms | TOTAL=18.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.1ms, model_inference=12.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.4ms, decode=5.1ms | TOTAL=18.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=21.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.9ms, model_inference=12.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.5ms, model=14.5ms, decode=6.0ms | TOTAL=21.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=23.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=14.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=16.7ms, decode=5.4ms | TOTAL=22.7ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=24.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=24.5ms, model_inference=16.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.6ms, decode=5.5ms | TOTAL=18.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=21.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.4ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.8ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=12.6ms, decode=5.8ms | TOTAL=19.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-96480d43329e45e5a904027721bec766](live_neural): decode=0.1ms, inference=21.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.1ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=10.3ms, decode=1.4ms | TOTAL=12.3ms for 600ms audio (RTF=0.02x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=13.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=13.9ms | audio=600ms, RTF=0.02x | model=enhanced_mel, neural_total=13.5ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=11.4ms, decode=2.7ms | TOTAL=14.5ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.2ms, inference=16.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.5ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=15.8ms, model_inference=11.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=11.4ms, decode=5.0ms | TOTAL=16.9ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=18.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=18.4ms, model_inference=11.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=12.9ms, decode=4.0ms | TOTAL=17.6ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.2ms, inference=19.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.1ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.4ms, model_inference=12.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.3ms, model=12.8ms, decode=4.8ms | TOTAL=18.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=20.2ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.8ms, model_inference=12.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=18.1ms, decode=4.7ms | TOTAL=23.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=25.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.2ms, model_inference=18.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=13.2ms, decode=5.2ms | TOTAL=18.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=20.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.6ms, model_inference=13.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=12.9ms, decode=5.4ms | TOTAL=18.8ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=21.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.9ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.3ms, model_inference=12.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.0ms, decode=5.7ms | TOTAL=19.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=21.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.5ms, model_inference=13.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.0ms, decode=5.5ms | TOTAL=19.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-cb9860b11254497bac03b730a3b67cd6](live_neural): decode=0.1ms, inference=21.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.1ms, model_inference=13.0ms
+
+[CLIP_011] Réminiscences de Don Juan, S.418
+  excerpt: start=37.00s end=43.00s duration=6.00s gt_notes=63 rms=0.0764 peak=0.5710 crest=7.472 rms_std=0.0452
+    control:
+      note metrics: precision=0.875 recall=0.889 f1=0.882 matched=56/63 pred=64
+      strict onset f1: 10ms=0.520 20ms=0.819 30ms=0.866
+      timing metrics: offset_f1=0.819 rhythm_precision=0.929 note_value_acc=0.554 note_value_n=56 avg_beat_error=0.172
+      duplicate metrics: duplicates=2 per_100_notes=3.12
+      boundary metrics: gt=18 matched=15 missed=3 miss_rate=0.167
+      latency: avg_chunk_ms=20.48 p95_chunk_ms=24.53 avg_rtf=0.034
+      notation metrics: first_correct_ms=64.8 visible_p50_ms=416.4 visible_p95_ms=594.7 stabilize_p50_ms=997.6 stabilize_p95_ms=3257.4 avg_revisions=1.18 matched=33 refined=33 snapshots=16
+      algorithmic latency: first_correct_ms=41.1 visible_p50_ms=391.1 visible_p95_ms=574.4 stabilize_p50_ms=552.1 stabilize_p95_ms=2790.5
+      final display note metrics: precision=0.875 recall=0.889 f1=0.882 matched=56/63 pred=64
+      final display strict onset f1: 10ms=0.520 20ms=0.819 30ms=0.866
+      final display timing: offset_f1=0.819 rhythm_precision=0.929 note_value_acc=0.232 note_value_n=56 avg_beat_error=0.209
+      final display structure: cluster_f1=0.686 onset_align_recall=0.865 avg_jaccard=0.895 exact=24/37 pred=33 over=4 under=2 pitch_conflicts=2 missed_gt=5
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.889 recall=0.889 f1=0.889 matched=56/63 pred=63
+      strict onset f1: 10ms=0.524 20ms=0.825 30ms=0.873
+      timing metrics: offset_f1=0.825 rhythm_precision=0.929 note_value_acc=0.554 note_value_n=56 avg_beat_error=0.172
+      duplicate metrics: duplicates=2 per_100_notes=3.17
+      boundary metrics: gt=18 matched=15 missed=3 miss_rate=0.167
+      latency: avg_chunk_ms=20.28 p95_chunk_ms=24.17 avg_rtf=0.034
+      notation metrics: first_correct_ms=62.3 visible_p50_ms=413.1 visible_p95_ms=593.0 stabilize_p50_ms=994.4 stabilize_p95_ms=3254.5 avg_revisions=1.18 matched=33 refined=33 snapshots=16
+      algorithmic latency: first_correct_ms=41.1 visible_p50_ms=391.1 visible_p95_ms=574.4 stabilize_p50_ms=552.1 stabilize_p95_ms=2790.5
+      final display note metrics: precision=0.889 recall=0.889 f1=0.889 matched=56/63 pred=63
+      final display strict onset f1: 10ms=0.524 20ms=0.825 30ms=0.873
+      final display timing: offset_f1=0.825 rhythm_precision=0.929 note_value_acc=0.232 note_value_n=56 avg_beat_error=0.209
+      final display structure: cluster_f1=0.686 onset_align_recall=0.865 avg_jaccard=0.895 exact=24/37 pred=33 over=4 under=2 pitch_conflicts=2 missed_gt=5
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.100 thresholds=[0.6, 0.62] profiles={'baseline_nominal': 9, 'loud_dense_precision': 1}
+    delta treatment-control: precision=+0.014 recall=+0.000 f1=+0.007 offset_f1=+0.006 note_value_acc=+0.000 dup_per_100=+0.05 boundary_miss_rate=+0.000 p95_chunk_ms=-0.36 f1_10ms=+0.004 f1_20ms=+0.006 f1_30ms=+0.007 visible_p50_ms=-3.3 stabilize_p50_ms=-3.2 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.007 display_offset_f1=+0.006 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['boundary_miss_failure', 'high_revision_slow_stabilization']
+      boundary diagnostics: missed=3 by_arm={'control': 3, 'treatment': 3} tags={'control_boundary_miss': 3, 'no_control_coarse_candidate': 3}
+        miss: pitch=49 onset=3.573s boundary_delta_ms=-27.1 control_coarse=False treatment_coarse=False retro=n/a
+        miss: pitch=37 onset=5.302s boundary_delta_ms=-97.9 control_coarse=False treatment_coarse=False retro=n/a
+        miss: pitch=81 onset=5.941s boundary_delta_ms=-58.6 control_coarse=False treatment_coarse=False retro=n/a
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.7ms, model=16.5ms, decode=1.4ms | TOTAL=18.9ms for 600ms audio (RTF=0.03x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.2ms, inference=20.4ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.6ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.9ms, model_inference=16.5ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=11.0ms, decode=3.9ms | TOTAL=15.6ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.1ms, inference=18.0ms, second_pass=0.0ms, contention=0.0ms, TOTAL=18.2ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.7ms, model_inference=11.0ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.8ms, decode=3.3ms | TOTAL=15.6ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.2ms, inference=17.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=17.7ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=17.1ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=14.2ms, decode=4.1ms | TOTAL=18.9ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.2ms, inference=20.9ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.2ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.6ms, model_inference=14.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=11.8ms, decode=4.8ms | TOTAL=17.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.1ms, inference=19.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.4ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.9ms, decode=4.9ms | TOTAL=17.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.1ms, inference=19.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.3ms, model_inference=11.9ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.7ms, model=14.8ms, decode=5.7ms | TOTAL=21.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.1ms, inference=23.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.7ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.2ms, model_inference=14.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.4ms, model=11.7ms, decode=5.0ms | TOTAL=17.3ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.1ms, inference=19.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=19.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.2ms, model_inference=11.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.4ms, decode=5.1ms | TOTAL=19.1ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.2ms, inference=21.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.0ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=21.3ms, model_inference=13.4ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=17.1ms, decode=5.1ms | TOTAL=23.0ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-914334eedbfb4759b6d88f9f81f01ea7](live_neural): decode=0.1ms, inference=25.6ms, second_pass=0.0ms, contention=0.0ms, TOTAL=25.8ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=25.1ms, model_inference=17.1ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=12.7ms, decode=1.7ms | TOTAL=15.2ms for 600ms audio (RTF=0.03x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=16.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=16.9ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=16.3ms, model_inference=12.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.4ms, model=10.3ms, decode=2.3ms | TOTAL=13.1ms for 1200ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.2ms, inference=14.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=15.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=14.5ms, model_inference=10.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=17.8ms, decode=3.0ms | TOTAL=21.5ms for 1800ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=23.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=23.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=23.0ms, model_inference=17.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=13.2ms, decode=5.0ms | TOTAL=18.8ms for 2400ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=20.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.5ms, model_inference=13.2ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.3ms, features=0.6ms, model=18.3ms, decode=5.9ms | TOTAL=25.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.2ms, inference=27.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=27.8ms | audio=600ms, RTF=0.05x | model=enhanced_mel, neural_total=27.0ms, model_inference=18.3ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.8ms, decode=5.0ms | TOTAL=17.5ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=19.7ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.0ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.5ms, model_inference=11.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.6ms, model=12.6ms, decode=4.8ms | TOTAL=18.2ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.2ms, inference=20.5ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.8ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=20.1ms, model_inference=12.6ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.1ms, features=0.6ms, model=12.8ms, decode=4.9ms | TOTAL=18.4ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=20.8ms, second_pass=0.0ms, contention=0.0ms, TOTAL=21.1ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=20.2ms, model_inference=12.8ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.5ms, model=11.7ms, decode=5.4ms | TOTAL=17.9ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=20.1ms, second_pass=0.0ms, contention=0.0ms, TOTAL=20.4ms | audio=600ms, RTF=0.03x | model=enhanced_mel, neural_total=19.7ms, model_inference=11.7ms
+[TIMING] EnhancedMel.transcribe: audio_to_gpu=0.2ms, features=0.9ms, model=13.4ms, decode=5.1ms | TOTAL=19.6ms for 3000ms audio (RTF=0.01x)
+[TIMING] stream_chunk[experiment-eb9bd5f913114ac480cfc80cb2f9ef30](live_neural): decode=0.1ms, inference=22.3ms, second_pass=0.0ms, contention=0.0ms, TOTAL=22.5ms | audio=600ms, RTF=0.04x | model=enhanced_mel, neural_total=22.0ms, model_inference=13.4ms
+
+[CLIP_012] Sonata No. 9
+  excerpt: start=0.00s end=6.00s duration=6.00s gt_notes=18 rms=0.0169 peak=0.0999 crest=5.898 rms_std=0.0093
+    control:
+      note metrics: precision=0.783 recall=1.000 f1=0.878 matched=18/18 pred=23
+      strict onset f1: 10ms=0.732 20ms=0.878 30ms=0.878
+      timing metrics: offset_f1=0.098 rhythm_precision=0.111 note_value_acc=0.056 note_value_n=18 avg_beat_error=1.538
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=1 matched=1 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=20.89 p95_chunk_ms=24.84 avg_rtf=0.035
+      notation metrics: first_correct_ms=116.9 visible_p50_ms=202.6 visible_p95_ms=410.7 stabilize_p50_ms=1845.1 stabilize_p95_ms=2813.7 avg_revisions=2.21 matched=14 refined=14 snapshots=19
+      algorithmic latency: first_correct_ms=91.1 visible_p50_ms=180.6 visible_p95_ms=390.8 stabilize_p50_ms=1371.1 stabilize_p95_ms=2403.1
+      final display note metrics: precision=0.783 recall=1.000 f1=0.878 matched=18/18 pred=23
+      final display strict onset f1: 10ms=0.732 20ms=0.878 30ms=0.878
+      final display timing: offset_f1=0.098 rhythm_precision=0.111 note_value_acc=0.056 note_value_n=18 avg_beat_error=1.269
+      final display structure: cluster_f1=0.783 onset_align_recall=1.000 avg_jaccard=1.000 exact=9/9 pred=14 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=0.000 thresholds=[0.6] profiles={'fixed_baseline': 10}
+    treatment:
+      note metrics: precision=0.783 recall=1.000 f1=0.878 matched=18/18 pred=23
+      strict onset f1: 10ms=0.732 20ms=0.878 30ms=0.878
+      timing metrics: offset_f1=0.098 rhythm_precision=0.111 note_value_acc=0.056 note_value_n=18 avg_beat_error=1.538
+      duplicate metrics: duplicates=0 per_100_notes=0.00
+      boundary metrics: gt=1 matched=1 missed=0 miss_rate=0.000
+      latency: avg_chunk_ms=20.90 p95_chunk_ms=25.85 avg_rtf=0.035
+      notation metrics: first_correct_ms=113.6 visible_p50_ms=201.0 visible_p95_ms=418.5 stabilize_p50_ms=1845.1 stabilize_p95_ms=2812.4 avg_revisions=2.21 matched=14 refined=14 snapshots=19
+      algorithmic latency: first_correct_ms=91.1 visible_p50_ms=180.6 visible_p95_ms=390.8 stabilize_p50_ms=1371.1 stabilize_p95_ms=2403.1
+      final display note metrics: precision=0.783 recall=1.000 f1=0.878 matched=18/18 pred=23
+      final display strict onset f1: 10ms=0.732 20ms=0.878 30ms=0.878
+      final display timing: offset_f1=0.098 rhythm_precision=0.111 note_value_acc=0.056 note_value_n=18 avg_beat_error=1.269
+      final display structure: cluster_f1=0.783 onset_align_recall=1.000 avg_jaccard=1.000 exact=9/9 pred=14 over=0 under=0 pitch_conflicts=0 missed_gt=0
+      final display score edit: pending batch MusicXML comparison
+      threshold profiles: hit_rate=1.000 thresholds=[0.56] profiles={'soft_sparse_recall': 10}
+    delta treatment-control: precision=+0.000 recall=+0.000 f1=+0.000 offset_f1=+0.000 note_value_acc=+0.000 dup_per_100=+0.00 boundary_miss_rate=+0.000 p95_chunk_ms=+1.01 f1_10ms=+0.000 f1_20ms=+0.000 f1_30ms=+0.000 visible_p50_ms=-1.6 stabilize_p50_ms=+0.1 algo_visible_p50_ms=+0.0 algo_stabilize_p50_ms=+0.0 avg_revisions=+0.00 display_note_f1=+0.000 display_offset_f1=+0.000 display_cluster_f1=+0.000 display_cluster_jaccard=+0.000
+    failure buckets: ['high_revision_slow_stabilization', 'note_value_offset_failure']
+Reference MusicXML score metrics: 24/24 payloads scored
+    paired_stats treatment-control:
+      display_cluster_f1: ref=0.6820 cand=0.6784 diff=-0.0036 95%CI=[-0.0155, +0.0039] p=1.0000 signs=2/1/9 best=clip_008 +0.0129 worst=clip_003 -0.0649
+      display_note_f1: ref=0.8566 cand=0.8537 diff=-0.0029 95%CI=[-0.0140, +0.0037] p=1.0000 signs=4/1/7 best=clip_004 +0.0099 worst=clip_003 -0.0599
+      display_offset_f1: ref=0.5230 cand=0.5222 diff=-0.0007 95%CI=[-0.0067, +0.0031] p=1.0000 signs=4/1/7 best=clip_004 +0.0069 worst=clip_003 -0.0299
+      display_score_edit_accuracy: ref=0.2820 cand=0.2707 diff=-0.0114 95%CI=[-0.0467, +0.0110] p=1.0000 signs=3/1/8 best=clip_002 +0.0421 worst=clip_003 -0.1905
+      display_score_exact_token_f1: ref=0.0268 cand=0.0306 diff=+0.0037 95%CI=[+0.0000, +0.0103] p=0.4992 signs=2/0/10 best=clip_004 +0.0339 worst=clip_001 +0.0000
+
+Failure buckets:
+  runtime_only_win: 5 clips -> clip_001, clip_002, clip_006, clip_009, clip_010
+  boundary_miss_failure: 7 clips -> clip_001, clip_002, clip_004, clip_006, clip_008, clip_009, clip_011
+  high_revision_slow_stabilization: 12 clips -> clip_001, clip_002, clip_003, clip_004, clip_005, clip_006, clip_007, clip_008, clip_009, clip_010, clip_011, clip_012
+  note_value_offset_failure: 8 clips -> clip_001, clip_002, clip_003, clip_004, clip_005, clip_007, clip_010, clip_012
+
+Boundary failure tags:
+  control_boundary_miss: 20
+  no_control_coarse_candidate: 20
+
+Saved full results to benchmark_artifacts\gold12_reference_prep_20260612\gold12_oracle_results.json

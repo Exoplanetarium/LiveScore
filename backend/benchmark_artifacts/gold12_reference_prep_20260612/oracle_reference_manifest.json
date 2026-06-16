@@ -1,0 +1,78 @@
+{
+  "generated_at": "2026-06-12T23:00:31.077Z",
+  "kind": "maestro_gt_midi_through_generateMusicXML",
+  "generated": [
+    {
+      "clip_id": "clip_001",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_001.musicxml",
+      "notes": 9,
+      "bytes": 6243
+    },
+    {
+      "clip_id": "clip_002",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_002.musicxml",
+      "notes": 96,
+      "bytes": 17436
+    },
+    {
+      "clip_id": "clip_003",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_003.musicxml",
+      "notes": 20,
+      "bytes": 5571
+    },
+    {
+      "clip_id": "clip_004",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_004.musicxml",
+      "notes": 42,
+      "bytes": 9776
+    },
+    {
+      "clip_id": "clip_005",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_005.musicxml",
+      "notes": 12,
+      "bytes": 5670
+    },
+    {
+      "clip_id": "clip_006",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_006.musicxml",
+      "notes": 188,
+      "bytes": 25604
+    },
+    {
+      "clip_id": "clip_007",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_007.musicxml",
+      "notes": 12,
+      "bytes": 6387
+    },
+    {
+      "clip_id": "clip_008",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_008.musicxml",
+      "notes": 161,
+      "bytes": 23428
+    },
+    {
+      "clip_id": "clip_009",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_009.musicxml",
+      "notes": 130,
+      "bytes": 21562
+    },
+    {
+      "clip_id": "clip_010",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_010.musicxml",
+      "notes": 16,
+      "bytes": 5399
+    },
+    {
+      "clip_id": "clip_011",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_011.musicxml",
+      "notes": 63,
+      "bytes": 12441
+    },
+    {
+      "clip_id": "clip_012",
+      "path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\reference_musicxml\\clip_012.musicxml",
+      "notes": 18,
+      "bytes": 6538
+    }
+  ]
+}

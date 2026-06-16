@@ -1,0 +1,231 @@
+{
+  "clip_id": "clip_003",
+  "benchmark_clip_id": "clip_003",
+  "title": "Sonata in D Minor, K. 213",
+  "bpm": 120.0,
+  "notes": [
+    {
+      "time_seconds": 0.0,
+      "onset_time": 0.0,
+      "offset_time": 0.177273,
+      "duration_seconds": 0.177273,
+      "duration": 0.177273,
+      "midi_note": 70,
+      "velocity": 52,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.0,
+      "onset_time": 0.0,
+      "offset_time": 0.45,
+      "duration_seconds": 0.45,
+      "duration": 0.45,
+      "midi_note": 79,
+      "velocity": 61,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.181818,
+      "onset_time": 0.181818,
+      "offset_time": 1.254545,
+      "duration_seconds": 1.072727,
+      "duration": 1.072727,
+      "midi_note": 67,
+      "velocity": 40,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.404545,
+      "onset_time": 0.404545,
+      "offset_time": 0.65,
+      "duration_seconds": 0.245455,
+      "duration": 0.245455,
+      "midi_note": 77,
+      "velocity": 59,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 0.656818,
+      "onset_time": 0.656818,
+      "offset_time": 1.261364,
+      "duration_seconds": 0.604545,
+      "duration": 0.604545,
+      "midi_note": 76,
+      "velocity": 52,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.215909,
+      "onset_time": 1.215909,
+      "offset_time": 2.493182,
+      "duration_seconds": 1.277273,
+      "duration": 1.277273,
+      "midi_note": 69,
+      "velocity": 32,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.447727,
+      "onset_time": 1.447727,
+      "offset_time": 1.654545,
+      "duration_seconds": 0.206818,
+      "duration": 0.206818,
+      "midi_note": 76,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.697727,
+      "onset_time": 1.697727,
+      "offset_time": 1.906818,
+      "duration_seconds": 0.209091,
+      "duration": 0.209091,
+      "midi_note": 74,
+      "velocity": 45,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 1.920455,
+      "onset_time": 1.920455,
+      "offset_time": 2.361364,
+      "duration_seconds": 0.440909,
+      "duration": 0.440909,
+      "midi_note": 73,
+      "velocity": 41,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.370455,
+      "onset_time": 2.370455,
+      "offset_time": 3.186364,
+      "duration_seconds": 0.815909,
+      "duration": 0.815909,
+      "midi_note": 74,
+      "velocity": 39,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.395455,
+      "onset_time": 2.395455,
+      "offset_time": 3.947727,
+      "duration_seconds": 1.552273,
+      "duration": 1.552273,
+      "midi_note": 62,
+      "velocity": 17,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.670455,
+      "onset_time": 2.670455,
+      "offset_time": 2.872727,
+      "duration_seconds": 0.202273,
+      "duration": 0.202273,
+      "midi_note": 77,
+      "velocity": 50,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 2.902273,
+      "onset_time": 2.902273,
+      "offset_time": 3.05,
+      "duration_seconds": 0.147727,
+      "duration": 0.147727,
+      "midi_note": 81,
+      "velocity": 55,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.122727,
+      "onset_time": 3.122727,
+      "offset_time": 3.229545,
+      "duration_seconds": 0.106818,
+      "duration": 0.106818,
+      "midi_note": 85,
+      "velocity": 58,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 3.461364,
+      "onset_time": 3.461364,
+      "offset_time": 4.054545,
+      "duration_seconds": 0.593182,
+      "duration": 0.593182,
+      "midi_note": 85,
+      "velocity": 51,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 4.102273,
+      "onset_time": 4.102273,
+      "offset_time": 5.470455,
+      "duration_seconds": 1.368182,
+      "duration": 1.368182,
+      "midi_note": 86,
+      "velocity": 49,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.113636,
+      "onset_time": 5.113636,
+      "offset_time": 6.0,
+      "duration_seconds": 0.886364,
+      "duration": 0.886364,
+      "midi_note": 67,
+      "velocity": 28,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.484091,
+      "onset_time": 5.484091,
+      "offset_time": 5.615909,
+      "duration_seconds": 0.131818,
+      "duration": 0.131818,
+      "midi_note": 84,
+      "velocity": 51,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.759091,
+      "onset_time": 5.759091,
+      "offset_time": 6.0,
+      "duration_seconds": 0.240909,
+      "duration": 0.240909,
+      "midi_note": 84,
+      "velocity": 56,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    },
+    {
+      "time_seconds": 5.984091,
+      "onset_time": 5.984091,
+      "offset_time": 6.0,
+      "duration_seconds": 0.015909,
+      "duration": 0.015909,
+      "midi_note": 82,
+      "velocity": 66,
+      "confidence": 1.0,
+      "source": "maestro_gt_midi_oracle"
+    }
+  ],
+  "chords": [],
+  "source_midi_path": "C:\\Users\\ToniH\\Documents\\GitHub\\LiveScore\\backend\\benchmark_artifacts\\gold12_reference_prep_20260612\\midi_excerpt\\clip_003__Sonata in D Minor_ K. 213.mid",
+  "oracle_kind": "maestro_gt_midi_through_generateMusicXML"
+}

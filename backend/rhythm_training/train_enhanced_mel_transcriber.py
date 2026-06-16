@@ -45,7 +45,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset, WeightedRandomSampler
+from torch.utils.data import (ConcatDataset, DataLoader, Dataset, Subset,
+                              WeightedRandomSampler)
 from train_mel_baseline import (FEATURES_DIR, HOP_LENGTH, INDEX_DIR,
                                 MIDI_OFFSET, N_FFT, N_MELS, NOTE_VALUE_BEATS,
                                 NOTE_VALUE_CLASSES, NOTE_VALUE_NAMES,
@@ -60,7 +61,14 @@ OFFSET_TENT_SEC = 0.05
 PEDAL_CC = 64
 PEDAL_DOWN_THRESHOLD = 64
 SCORE_GRID_BEATS = 0.25
-SCORE_DURATION_POLICIES = ("head", "decoded_duration", "same_pitch_cap", "ioi_same_hand", "hybrid_cleanup")
+SCORE_DURATION_POLICIES = (
+    "head",
+    "decoded_duration",
+    "same_pitch_cap",
+    "ioi_same_hand",
+    "hybrid_cleanup",
+    "lookup_ioi_head_sound",
+)
 
 
 def _time_to_frame(time_sec: float, frame_time: float) -> int:
@@ -289,10 +297,27 @@ class EnhancedPrecomputedMelDataset(Dataset):
         split: str,
         augment: bool = False,
         segment_ids: Optional[Sequence[int]] = None,
+        train_window_sec: float = 0.0,
+        emit_window_sec: float = 0.0,
+        include_teacher_features: bool = False,
     ):
         self.split = split
         self.split_dir = FEATURES_DIR / split
         self.augment = augment
+        self.include_teacher_features = bool(include_teacher_features)
+        self.train_window_frames = (
+            int(round(float(train_window_sec) * SAMPLE_RATE / HOP_LENGTH))
+            if train_window_sec and train_window_sec > 0 else 0
+        )
+        self.emit_window_frames = (
+            int(round(float(emit_window_sec) * SAMPLE_RATE / HOP_LENGTH))
+            if emit_window_sec and emit_window_sec > 0 else self.train_window_frames
+        )
+        if self.train_window_frames > 0:
+            if self.emit_window_frames <= 0:
+                raise ValueError("--emit-window-sec must be positive when --train-window-sec is set")
+            if self.emit_window_frames > self.train_window_frames:
+                raise ValueError("--emit-window-sec cannot exceed --train-window-sec")
 
         if not self.split_dir.exists():
             raise RuntimeError(
@@ -321,7 +346,13 @@ class EnhancedPrecomputedMelDataset(Dataset):
 
         self.files = [file_lookup[segment_id] for segment_id in self.segment_ids]
         aug = " with augmentation" if augment else ""
-        print(f"[EnhancedDataset] {split}: {len(self.files)} segments{aug}")
+        window = ""
+        if self.train_window_frames > 0:
+            window_sec = self.train_window_frames * HOP_LENGTH / SAMPLE_RATE
+            emit_sec = self.emit_window_frames * HOP_LENGTH / SAMPLE_RATE
+            teacher = ", teacher full-context" if self.include_teacher_features else ""
+            window = f" (live-window {window_sec:.3f}s, emit {emit_sec:.3f}s{teacher})"
+        print(f"[EnhancedDataset] {split}: {len(self.files)} segments{aug}{window}")
 
     def __len__(self) -> int:
         return len(self.files)
@@ -361,7 +392,7 @@ class EnhancedPrecomputedMelDataset(Dataset):
                 features, onset, offset, frame, sounding_frame, velocity, note_value
             )
 
-        return {
+        item = {
             "features": features,
             "onset": onset,
             "offset": offset,
@@ -376,6 +407,11 @@ class EnhancedPrecomputedMelDataset(Dataset):
             "start_sec": torch.tensor(start_sec, dtype=torch.float32),
             "gt_events": gt_events,
         }
+        if self.include_teacher_features:
+            item["teacher_features"] = features.detach().clone().contiguous()
+        if self.train_window_frames > 0:
+            item = self._crop_live_window(item)
+        return item
 
     @staticmethod
     def _augment(
@@ -425,6 +461,74 @@ class EnhancedPrecomputedMelDataset(Dataset):
             note_value = shift_keys(note_value, fill_value=0)
 
         return features, onset, offset, frame, sounding_frame, velocity, note_value
+
+    def _crop_live_window(self, item: Dict) -> Dict:
+        features = item["features"]
+        total_frames = int(features.size(0))
+        window_frames = self.train_window_frames
+        crop_frames = min(window_frames, total_frames)
+        if total_frames > crop_frames:
+            if self.split == "train":
+                start = int(np.random.randint(0, total_frames - crop_frames + 1))
+            else:
+                start = int((total_frames - crop_frames) // 2)
+        else:
+            start = 0
+        end = start + crop_frames
+
+        cropped = dict(item)
+        tensor_keys = [
+            "features", "onset", "offset", "frame", "sounding_frame",
+            "velocity", "note_value", "pedal",
+        ]
+        for key in tensor_keys:
+            value = cropped.get(key)
+            if torch.is_tensor(value) and value.dim() >= 1:
+                cropped[key] = value[start:end].clone()
+        for key in tensor_keys:
+            value = cropped.get(key)
+            if torch.is_tensor(value) and value.dim() >= 1:
+                cropped[key] = self._pad_time_dim(value, window_frames)
+
+        loss_mask = torch.zeros(window_frames, dtype=torch.float32)
+        emit_frames = min(self.emit_window_frames, crop_frames)
+        if emit_frames > 0:
+            emit_start = max(crop_frames - emit_frames, 0)
+            loss_mask[emit_start:crop_frames] = 1.0
+        cropped["loss_mask"] = loss_mask
+        cropped["crop_start_frame"] = torch.tensor(start, dtype=torch.long)
+
+        frame_time = HOP_LENGTH / SAMPLE_RATE
+        crop_start_sec = start * frame_time
+        crop_end_sec = end * frame_time
+        adjusted_events = []
+        for event in item.get("gt_events", []):
+            onset_time = float(event["onset_time"])
+            if crop_start_sec <= onset_time < crop_end_sec:
+                adjusted = dict(event)
+                adjusted["onset_time"] = onset_time - crop_start_sec
+                for offset_key in ("offset_time", "sounding_offset_time"):
+                    if offset_key in adjusted:
+                        adjusted[offset_key] = max(
+                            adjusted["onset_time"] + frame_time,
+                            float(adjusted[offset_key]) - crop_start_sec,
+                        )
+                adjusted_events.append(adjusted)
+        cropped["gt_events"] = adjusted_events
+        return cropped
+
+    @staticmethod
+    def _pad_time_dim(value: torch.Tensor, target_frames: int) -> torch.Tensor:
+        current_frames = int(value.size(0))
+        if current_frames == target_frames:
+            return value
+        if current_frames > target_frames:
+            return value[:target_frames].clone()
+        padded_shape = (target_frames, *value.shape[1:])
+        padded = torch.zeros(padded_shape, dtype=value.dtype, device=value.device)
+        if current_frames > 0:
+            padded[:current_frames] = value
+        return padded
 
 
 class SourceTaggedDataset(Dataset):
@@ -787,10 +891,25 @@ class EnhancedTranscriptionLoss(nn.Module):
         self.focal_gamma = focal_gamma
 
     @staticmethod
-    def _event_loss(logits: torch.Tensor, target: torch.Tensor, pos_weight: float) -> torch.Tensor:
+    def _masked_mean(value: torch.Tensor, mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+        if mask is None:
+            return value.mean()
+        mask_value = mask.to(device=value.device, dtype=value.dtype)
+        if mask_value.shape != value.shape:
+            mask_value = mask_value.expand_as(value)
+        weighted = value * mask_value
+        return weighted.sum() / mask_value.sum().clamp_min(1.0)
+
+    def _event_loss(
+        self,
+        logits: torch.Tensor,
+        target: torch.Tensor,
+        pos_weight: float,
+        mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
         sample_weight = 1.0 + (pos_weight - 1.0) * target
-        return (bce * sample_weight).mean()
+        return self._masked_mean(bce * sample_weight, mask)
 
     def forward(self, out: Dict[str, torch.Tensor], batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         onset_gt = batch["onset"]
@@ -801,10 +920,13 @@ class EnhancedTranscriptionLoss(nn.Module):
         vel_gt = batch["velocity"]
         nv_gt = batch["note_value"]
 
-        onset_loss = self._event_loss(out["onset_logits"], onset_gt, self.pos_weight)
-        raw_onset_loss = self._event_loss(out["raw_onset_logits"], onset_gt, self.pos_weight)
-        offset_loss = self._event_loss(out["offset_logits"], offset_gt, self.pos_weight)
-        raw_offset_loss = self._event_loss(out["raw_offset_logits"], offset_gt, self.pos_weight)
+        time_mask = batch.get("loss_mask")
+        event_mask = time_mask.unsqueeze(-1) if torch.is_tensor(time_mask) else None
+
+        onset_loss = self._event_loss(out["onset_logits"], onset_gt, self.pos_weight, event_mask)
+        raw_onset_loss = self._event_loss(out["raw_onset_logits"], onset_gt, self.pos_weight, event_mask)
+        offset_loss = self._event_loss(out["offset_logits"], offset_gt, self.pos_weight, event_mask)
+        raw_offset_loss = self._event_loss(out["raw_offset_logits"], offset_gt, self.pos_weight, event_mask)
 
         frame_prob = torch.sigmoid(out["frame_logits"])
         p_t = torch.where(frame_gt > 0.5, frame_prob, 1.0 - frame_prob)
@@ -815,7 +937,7 @@ class EnhancedTranscriptionLoss(nn.Module):
             torch.ones_like(frame_gt),
         )
         frame_bce = F.binary_cross_entropy_with_logits(out["frame_logits"], frame_gt, reduction="none")
-        frame_loss = (focal * frame_bce * frame_sample_weight).mean()
+        frame_loss = self._masked_mean(focal * frame_bce * frame_sample_weight, event_mask)
 
         sounding_frame_prob = torch.sigmoid(out["sounding_frame_logits"])
         sounding_p_t = torch.where(sounding_frame_gt > 0.5, sounding_frame_prob, 1.0 - sounding_frame_prob)
@@ -830,13 +952,18 @@ class EnhancedTranscriptionLoss(nn.Module):
             sounding_frame_gt,
             reduction="none",
         )
-        sounding_frame_loss = (sounding_focal * sounding_frame_bce * sounding_frame_sample_weight).mean()
+        sounding_frame_loss = self._masked_mean(
+            sounding_focal * sounding_frame_bce * sounding_frame_sample_weight,
+            event_mask,
+        )
 
         pedal_bce = F.binary_cross_entropy_with_logits(out["pedal_logits"], pedal_gt, reduction="none")
         pedal_sample_weight = 1.0 + (self.pos_weight - 1.0) * (pedal_gt >= (PEDAL_DOWN_THRESHOLD / 127.0)).float()
-        pedal_loss = (pedal_bce * pedal_sample_weight).mean()
+        pedal_loss = self._masked_mean(pedal_bce * pedal_sample_weight, time_mask)
 
         active = frame_gt > 0.5
+        if event_mask is not None:
+            active = active & (event_mask.to(device=frame_gt.device) > 0.5)
         velocity_loss = (
             F.mse_loss(out["velocity"][active], vel_gt[active])
             if active.any()
@@ -844,6 +971,8 @@ class EnhancedTranscriptionLoss(nn.Module):
         )
 
         onset_mask = (onset_gt > 0.5) & (frame_gt > 0.5)
+        if event_mask is not None:
+            onset_mask = onset_mask & (event_mask.to(device=onset_gt.device) > 0.5)
         if onset_mask.any() and self.nv_weight > 0:
             nv_loss = F.cross_entropy(out["note_value_logits"][onset_mask], nv_gt[onset_mask])
         else:
@@ -1070,12 +1199,11 @@ def decode_enhanced_note_events(
 
     if lattice_rescue:
         try:
-            from lattice_candidate_decoder import load_calibrator, rescue_lattice_events
+            from lattice_candidate_decoder import (load_calibrator,
+                                                   rescue_lattice_events)
         except ImportError:
             from backend.lattice_candidate_decoder import (  # type: ignore
-                load_calibrator,
-                rescue_lattice_events,
-            )
+                load_calibrator, rescue_lattice_events)
         calibrator = load_calibrator(lattice_model_path)
         if calibrator is not None:
             lattice_events = rescue_lattice_events(
@@ -1187,15 +1315,18 @@ def _pred_score_note_value_class(
     duration_policy: str,
     next_same_pitch: Optional[Dict[int, float]] = None,
     next_same_hand: Optional[Dict[int, float]] = None,
+    duration_lookup: Optional[Dict[Tuple[int, int, int], int]] = None,
 ) -> int:
     event = events[event_idx]
     onset = float(event["onset_time"])
     decoded_end = float(event.get("offset_time", onset))
+    head_class = _event_note_value_class(event, bpm)
+    decoded_class = _duration_to_note_value_class(max(decoded_end - onset, 1e-6), bpm)
 
     if duration_policy == "head":
-        return _event_note_value_class(event, bpm)
+        return head_class
     if duration_policy == "decoded_duration":
-        return _duration_to_note_value_class(max(decoded_end - onset, 1e-6), bpm)
+        return decoded_class
 
     if next_same_pitch is None or next_same_hand is None:
         next_same_pitch, next_same_hand = _next_policy_onsets(events)
@@ -1209,6 +1340,10 @@ def _pred_score_note_value_class(
     ioi_class = _duration_to_note_value_class(max(same_hand_end - onset, 1e-6), bpm)
     if duration_policy == "ioi_same_hand":
         return ioi_class
+    if duration_policy == "lookup_ioi_head_sound":
+        if duration_lookup is None:
+            return ioi_class
+        return int(duration_lookup.get((ioi_class, head_class, decoded_class), ioi_class))
 
     capped_class = _duration_to_note_value_class(max(same_pitch_end - onset, 1e-6), bpm)
     if duration_policy == "hybrid_cleanup":
@@ -1229,6 +1364,7 @@ def match_score_events(
     onset_slot_tolerance: int = 0,
     duration_class_tolerance: int = 0,
     duration_policy: str = "head",
+    duration_lookup: Optional[Dict[Tuple[int, int, int], int]] = None,
 ) -> Dict[str, float]:
     used_gt = set()
     onset_matched = 0
@@ -1247,6 +1383,7 @@ def match_score_events(
                 duration_policy,
                 next_same_pitch,
                 next_same_hand,
+                duration_lookup,
             ),
         )
         for idx, event in enumerate(pred)
@@ -1313,6 +1450,9 @@ def enhanced_collate(batch: Sequence[Dict]) -> Dict:
         "features", "onset", "offset", "frame", "sounding_frame", "velocity", "note_value",
         "pedal", "bpm", "segment_id", "start_sec",
     ]
+    for optional_key in ("teacher_features", "loss_mask", "crop_start_frame"):
+        if optional_key in batch[0]:
+            tensor_keys.append(optional_key)
     if "sample_source" in batch[0]:
         tensor_keys.append("sample_source")
     out = {}
@@ -1352,6 +1492,7 @@ def evaluate(
     score_onset_slot_tolerance: int = 0,
     score_duration_class_tolerance: int = 0,
     score_duration_policy: str = "head",
+    score_duration_lookup_path: Optional[str] = None,
     max_batches: Optional[int] = None,
     decode_use_sounding_frame: bool = True,
 ) -> Dict:
@@ -1368,6 +1509,7 @@ def evaluate(
     event_samples = 0
     score_samples = 0
     seen_samples = 0
+    duration_lookup = load_score_duration_lookup(score_duration_lookup_path)
 
     def make_sample_selection(max_samples: int, max_sample_batches: int, sampling: str) -> Tuple[int, Optional[set]]:
         sample_limit = int(max_samples or 0)
@@ -1482,6 +1624,7 @@ def evaluate(
                         onset_slot_tolerance=score_onset_slot_tolerance,
                         duration_class_tolerance=score_duration_class_tolerance,
                         duration_policy=score_duration_policy,
+                        duration_lookup=duration_lookup,
                     )
                     for key in (
                         "matched", "onset_matched", "predicted", "ground_truth",
@@ -1582,6 +1725,19 @@ def _build_model_from_config(config: Dict) -> EnhancedMelTranscriber:
     )
 
 
+def _load_teacher_model(checkpoint_path: Path, fallback_args, device: torch.device) -> nn.Module:
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    config = checkpoint.get("config")
+    if isinstance(config, dict) and config.get("model_type") == "EnhancedMelTranscriber":
+        model = _build_model_from_config(config).to(device).eval()
+    else:
+        model = _build_model_from_args(fallback_args).to(device).eval()
+    model.load_state_dict(checkpoint["model_state_dict"], strict=False)
+    for param in model.parameters():
+        param.requires_grad = False
+    return model
+
+
 def _checkpoint_config(args) -> Dict:
     return {
         "model_type": "EnhancedMelTranscriber",
@@ -1616,7 +1772,19 @@ def _checkpoint_config(args) -> Dict:
         "finetune": bool(args.finetune),
         "finetune_scope": args.finetune_scope,
         "finetune_hard_ratio": args.finetune_hard_ratio,
+        "train_window_sec": float(args.train_window_sec),
+        "emit_window_sec": float(args.emit_window_sec),
         "teacher_preserve_weight": args.teacher_preserve_weight,
+        "teacher_from": args.teacher_from,
+        "live_window_distill_weight": float(args.live_window_distill_weight),
+        "live_distill_temperature": float(args.live_distill_temperature),
+        "live_distill_onset_weight": float(args.live_distill_onset_weight),
+        "live_distill_offset_weight": float(args.live_distill_offset_weight),
+        "live_distill_frame_weight": float(args.live_distill_frame_weight),
+        "live_distill_sounding_frame_weight": float(args.live_distill_sounding_frame_weight),
+        "live_distill_pedal_weight": float(args.live_distill_pedal_weight),
+        "live_distill_velocity_weight": float(args.live_distill_velocity_weight),
+        "live_distill_note_value_weight": float(args.live_distill_note_value_weight),
         "lr": args.lr,
         "pos_weight": args.pos_weight,
         "onset_weight": args.onset_weight,
@@ -1636,6 +1804,7 @@ def _checkpoint_config(args) -> Dict:
         "score_onset_slot_tolerance": int(args.score_onset_slot_tolerance),
         "score_duration_class_tolerance": int(args.score_duration_class_tolerance),
         "score_duration_policy": args.score_duration_policy,
+        "score_duration_lookup_path": args.score_duration_lookup_path,
         "velocity_weight": args.velocity_weight,
         "nv_weight": args.nv_weight,
         "focal_gamma": args.focal_gamma,
@@ -1768,6 +1937,31 @@ def load_segment_manifest(path: Optional[str], split: str) -> Optional[List[int]
     return ids
 
 
+def load_score_duration_lookup(path: Optional[str]) -> Optional[Dict[Tuple[int, int, int], int]]:
+    if not path:
+        return None
+    lookup_path = Path(path)
+    if not lookup_path.exists():
+        raise FileNotFoundError(f"Score duration lookup not found: {lookup_path}")
+    with lookup_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+
+    table_payload = payload.get("table")
+    if table_payload is None and isinstance(payload.get("best_lookup"), dict):
+        table_payload = payload["best_lookup"].get("table")
+    if table_payload is None:
+        raise ValueError(f"Score duration lookup {lookup_path} has no table or best_lookup.table")
+
+    table: Dict[Tuple[int, int, int], int] = {}
+    for raw_key, raw_value in table_payload.items():
+        parts = tuple(int(part) for part in str(raw_key).split("|"))
+        if len(parts) != 3:
+            raise ValueError(f"Expected 3-part ioi|head|sound lookup key, got {raw_key!r}")
+        table[parts] = int(raw_value)
+    print(f"[ScoreDurationLookup] loaded {len(table)} entries from {lookup_path}")
+    return table
+
+
 def _cap_validation_dataset(dataset: Dataset, max_samples: int, sampling: str, name: str) -> Dataset:
     max_samples = int(max_samples or 0)
     total = len(dataset)
@@ -1796,22 +1990,39 @@ def _cap_validation_dataset(dataset: Dataset, max_samples: int, sampling: str, n
 
 def _build_train_dataset_and_sampler(args) -> Tuple[Dataset, Optional[WeightedRandomSampler], bool]:
     hard_segment_ids = load_segment_manifest(args.train_segment_manifest, "train")
+    include_teacher_features = bool(args.live_window_distill_weight > 0)
     if not args.finetune or hard_segment_ids is None or args.finetune_hard_ratio >= 0.999:
         dataset = EnhancedPrecomputedMelDataset(
             "train",
             augment=args.train_augment,
             segment_ids=hard_segment_ids,
+            train_window_sec=args.train_window_sec,
+            emit_window_sec=args.emit_window_sec,
+            include_teacher_features=include_teacher_features,
         )
         if args.finetune and hard_segment_ids is not None:
             dataset = SourceTaggedDataset(dataset, source_id=1)
         return dataset, None, True
 
     general_dataset = SourceTaggedDataset(
-        EnhancedPrecomputedMelDataset("train", augment=args.train_augment),
+        EnhancedPrecomputedMelDataset(
+            "train",
+            augment=args.train_augment,
+            train_window_sec=args.train_window_sec,
+            emit_window_sec=args.emit_window_sec,
+            include_teacher_features=include_teacher_features,
+        ),
         source_id=0,
     )
     hard_dataset = SourceTaggedDataset(
-        EnhancedPrecomputedMelDataset("train", augment=args.train_augment, segment_ids=hard_segment_ids),
+        EnhancedPrecomputedMelDataset(
+            "train",
+            augment=args.train_augment,
+            segment_ids=hard_segment_ids,
+            train_window_sec=args.train_window_sec,
+            emit_window_sec=args.emit_window_sec,
+            include_teacher_features=include_teacher_features,
+        ),
         source_id=1,
     )
     dataset = ConcatDataset([general_dataset, hard_dataset])
@@ -1882,6 +2093,80 @@ def _build_validation_loaders(args, device: torch.device) -> Dict[str, DataLoade
     return loaders
 
 
+def _slice_teacher_time_window(value: torch.Tensor, starts: torch.Tensor, target_frames: int) -> torch.Tensor:
+    windows = []
+    total_frames = int(value.size(1))
+    for batch_idx, start_value in enumerate(starts.detach().cpu().tolist()):
+        start = max(0, int(start_value))
+        end = min(start + target_frames, total_frames)
+        window = value[batch_idx, start:end]
+        current_frames = int(window.size(0))
+        if current_frames < target_frames:
+            padded_shape = (target_frames, *window.shape[1:])
+            padded = torch.zeros(padded_shape, dtype=value.dtype, device=value.device)
+            if current_frames > 0:
+                padded[:current_frames] = window
+            window = padded
+        windows.append(window)
+    return torch.stack(windows, dim=0)
+
+
+def _maybe_slice_teacher_out(
+    teacher_out: Dict[str, torch.Tensor],
+    student_out: Dict[str, torch.Tensor],
+    batch: Dict[str, torch.Tensor],
+) -> Dict[str, torch.Tensor]:
+    target_frames = int(student_out["onset_logits"].size(1))
+    teacher_frames = int(teacher_out["onset_logits"].size(1))
+    if teacher_frames == target_frames:
+        return teacher_out
+    if "crop_start_frame" not in batch:
+        raise ValueError("Teacher output length differs from student output, but batch has no crop_start_frame")
+    starts = batch["crop_start_frame"].to(student_out["onset_logits"].device)
+    sliced = {}
+    for key, value in teacher_out.items():
+        if torch.is_tensor(value) and value.dim() >= 2 and int(value.size(1)) == teacher_frames:
+            sliced[key] = _slice_teacher_time_window(value, starts, target_frames)
+        else:
+            sliced[key] = value
+    return sliced
+
+
+def _time_key_mask(
+    student_tensor: torch.Tensor,
+    batch: Dict[str, torch.Tensor],
+    sample_mask: Optional[torch.Tensor] = None,
+) -> torch.Tensor:
+    if "loss_mask" in batch:
+        mask = batch["loss_mask"].to(student_tensor.device) > 0.5
+        while mask.dim() < student_tensor.dim():
+            mask = mask.unsqueeze(-1)
+        mask = mask.expand_as(student_tensor)
+    else:
+        mask = torch.ones_like(student_tensor, dtype=torch.bool)
+    if sample_mask is not None:
+        batch_mask = sample_mask.to(student_tensor.device).bool()
+        view_shape = [batch_mask.size(0)] + [1] * (student_tensor.dim() - 1)
+        mask = mask & batch_mask.view(*view_shape)
+    return mask
+
+
+def _teacher_bce_loss(
+    student_logits: torch.Tensor,
+    teacher_logits: torch.Tensor,
+    mask: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    if not mask.any():
+        return torch.tensor(0.0, device=student_logits.device)
+    temp = max(float(temperature), 1e-6)
+    teacher_prob = torch.sigmoid(teacher_logits.float() / temp).detach()
+    return F.binary_cross_entropy_with_logits(
+        student_logits.float()[mask] / temp,
+        teacher_prob[mask],
+    ) * (temp * temp)
+
+
 def _teacher_preservation_loss(
     student_out: Dict[str, torch.Tensor],
     teacher_out: Dict[str, torch.Tensor],
@@ -1902,6 +2187,7 @@ def _teacher_preservation_loss(
             device=student_out["onset_logits"].device,
         )
 
+    teacher_out = _maybe_slice_teacher_out(teacher_out, student_out, batch)
     loss = torch.tensor(0.0, device=student_out["onset_logits"].device)
     weighted_terms = 0.0
     for key, weight in (
@@ -1911,26 +2197,100 @@ def _teacher_preservation_loss(
     ):
         if weight <= 0:
             continue
-        teacher_prob = torch.sigmoid(teacher_out[key][preserve_mask].float()).detach()
-        term = F.binary_cross_entropy_with_logits(student_out[key][preserve_mask].float(), teacher_prob)
+        mask = _time_key_mask(student_out[key], batch, preserve_mask)
+        if not mask.any():
+            continue
+        teacher_prob = torch.sigmoid(teacher_out[key].float()).detach()
+        term = F.binary_cross_entropy_with_logits(student_out[key].float()[mask], teacher_prob[mask])
         loss = loss + weight * term
         weighted_terms += weight
 
     if args.teacher_velocity_weight > 0:
-        term = F.mse_loss(student_out["velocity"][preserve_mask].float(), teacher_out["velocity"][preserve_mask].float().detach())
-        loss = loss + args.teacher_velocity_weight * term
-        weighted_terms += args.teacher_velocity_weight
+        mask = _time_key_mask(student_out["velocity"], batch, preserve_mask)
+        if mask.any():
+            term = F.mse_loss(student_out["velocity"][mask].float(), teacher_out["velocity"][mask].float().detach())
+            loss = loss + args.teacher_velocity_weight * term
+            weighted_terms += args.teacher_velocity_weight
 
     if args.teacher_note_value_weight > 0:
-        student_log_prob = F.log_softmax(student_out["note_value_logits"][preserve_mask].float(), dim=-1)
-        teacher_prob = F.softmax(teacher_out["note_value_logits"][preserve_mask].float(), dim=-1).detach()
-        term = F.kl_div(student_log_prob, teacher_prob, reduction="none").sum(dim=-1).mean()
-        loss = loss + args.teacher_note_value_weight * term
-        weighted_terms += args.teacher_note_value_weight
+        mask = _time_key_mask(student_out["note_value_logits"][..., 0], batch, preserve_mask)
+        if mask.any():
+            student_log_prob = F.log_softmax(student_out["note_value_logits"].float(), dim=-1)
+            teacher_prob = F.softmax(teacher_out["note_value_logits"].float(), dim=-1).detach()
+            term = F.kl_div(student_log_prob[mask], teacher_prob[mask], reduction="none").sum(dim=-1).mean()
+            loss = loss + args.teacher_note_value_weight * term
+            weighted_terms += args.teacher_note_value_weight
 
     if weighted_terms <= 0:
         return torch.tensor(0.0, device=student_out["onset_logits"].device)
     return args.teacher_preserve_weight * loss / weighted_terms
+
+
+def _live_window_distillation_loss(
+    student_out: Dict[str, torch.Tensor],
+    teacher_out: Dict[str, torch.Tensor],
+    batch: Dict[str, torch.Tensor],
+    args,
+) -> Dict[str, torch.Tensor]:
+    zero = torch.tensor(0.0, device=student_out["onset_logits"].device)
+    if args.live_window_distill_weight <= 0:
+        return {"total": zero}
+    if "crop_start_frame" not in batch or "loss_mask" not in batch:
+        raise ValueError("Live-window distillation requires --train-window-sec and --emit-window-sec")
+
+    teacher_out = _maybe_slice_teacher_out(teacher_out, student_out, batch)
+    temperature = args.live_distill_temperature
+    losses: Dict[str, torch.Tensor] = {}
+    weighted_total = zero
+    total_weight = 0.0
+    for name, key, weight in (
+        ("onset", "onset_logits", args.live_distill_onset_weight),
+        ("offset", "offset_logits", args.live_distill_offset_weight),
+        ("frame", "frame_logits", args.live_distill_frame_weight),
+        ("sounding_frame", "sounding_frame_logits", args.live_distill_sounding_frame_weight),
+    ):
+        if weight <= 0:
+            continue
+        mask = _time_key_mask(student_out[key], batch)
+        term = _teacher_bce_loss(student_out[key], teacher_out[key], mask, temperature)
+        losses[name] = term
+        weighted_total = weighted_total + weight * term
+        total_weight += weight
+
+    if args.live_distill_pedal_weight > 0:
+        mask = _time_key_mask(student_out["pedal_logits"], batch)
+        term = _teacher_bce_loss(student_out["pedal_logits"], teacher_out["pedal_logits"], mask, temperature)
+        losses["pedal"] = term
+        weighted_total = weighted_total + args.live_distill_pedal_weight * term
+        total_weight += args.live_distill_pedal_weight
+
+    if args.live_distill_velocity_weight > 0:
+        mask = _time_key_mask(student_out["velocity"], batch)
+        if mask.any():
+            term = F.mse_loss(student_out["velocity"][mask].float(), teacher_out["velocity"][mask].float().detach())
+        else:
+            term = zero
+        losses["velocity"] = term
+        weighted_total = weighted_total + args.live_distill_velocity_weight * term
+        total_weight += args.live_distill_velocity_weight
+
+    if args.live_distill_note_value_weight > 0:
+        mask = _time_key_mask(student_out["note_value_logits"][..., 0], batch)
+        if mask.any():
+            student_log_prob = F.log_softmax(student_out["note_value_logits"].float(), dim=-1)
+            teacher_prob = F.softmax(teacher_out["note_value_logits"].float(), dim=-1).detach()
+            term = F.kl_div(student_log_prob[mask], teacher_prob[mask], reduction="none").sum(dim=-1).mean()
+        else:
+            term = zero
+        losses["note_value"] = term
+        weighted_total = weighted_total + args.live_distill_note_value_weight * term
+        total_weight += args.live_distill_note_value_weight
+
+    if total_weight <= 0:
+        losses["total"] = zero
+    else:
+        losses["total"] = args.live_window_distill_weight * weighted_total / total_weight
+    return losses
 
 
 def train(args) -> None:
@@ -1939,6 +2299,12 @@ def train(args) -> None:
         print("CUDA not available, using CPU")
         device = torch.device("cpu")
     print(f"Using device: {device}")
+
+    if args.live_window_distill_weight > 0:
+        if args.train_window_sec <= 0 or args.emit_window_sec <= 0:
+            raise ValueError("Live-window distillation requires --train-window-sec and --emit-window-sec")
+        if args.emit_window_sec > args.train_window_sec:
+            raise ValueError("--emit-window-sec cannot exceed --train-window-sec")
 
     init_checkpoint_path, save_path = _resolve_training_paths(args)
     if args.finetune and init_checkpoint_path is None:
@@ -1968,16 +2334,19 @@ def train(args) -> None:
         print(f"  missing={len(missing)} unexpected={len(unexpected)}")
 
     teacher_model = None
-    if args.finetune and args.teacher_preserve_weight > 0:
+    teacher_preserve_enabled = bool(args.finetune and args.teacher_preserve_weight > 0)
+    if teacher_preserve_enabled or args.live_window_distill_weight > 0:
         teacher_path = Path(args.teacher_from) if args.teacher_from else init_checkpoint_path
         if teacher_path is None:
-            raise ValueError("Teacher preservation requires --teacher-from or a fine-tune init checkpoint")
-        teacher_model = _build_model_from_args(args).to(device).eval()
-        teacher_checkpoint = torch.load(teacher_path, map_location=device, weights_only=False)
-        teacher_model.load_state_dict(teacher_checkpoint["model_state_dict"], strict=False)
-        for param in teacher_model.parameters():
-            param.requires_grad = False
-        print(f"Teacher preservation: {teacher_path} weight={args.teacher_preserve_weight:.3f}")
+            raise ValueError("Teacher losses require --teacher-from or an init checkpoint")
+        if not teacher_path.exists():
+            raise FileNotFoundError(f"Teacher checkpoint not found: {teacher_path}")
+        teacher_model = _load_teacher_model(teacher_path, args, device)
+        print(
+            f"Teacher model: {teacher_path} "
+            f"preserve={(args.teacher_preserve_weight if teacher_preserve_enabled else 0.0):.3f} "
+            f"live_distill={args.live_window_distill_weight:.3f}"
+        )
 
     n_params = sum(param.numel() for param in model.parameters())
     print(f"Model parameters: {n_params:,}")
@@ -2077,10 +2446,22 @@ def train(args) -> None:
                 losses = criterion(out, batch)
                 if teacher_model is not None:
                     with torch.no_grad():
-                        teacher_out = teacher_model(batch["features"])
-                    teacher_loss = _teacher_preservation_loss(out, teacher_out, batch, args)
-                    losses["teacher"] = teacher_loss
-                    losses["total"] = losses["total"] + teacher_loss
+                        if args.live_window_distill_weight > 0:
+                            teacher_out = teacher_model(batch["teacher_features"])
+                        else:
+                            teacher_out = teacher_model(batch["features"])
+                    if teacher_preserve_enabled:
+                        teacher_loss = _teacher_preservation_loss(out, teacher_out, batch, args)
+                        losses["teacher"] = teacher_loss
+                        losses["total"] = losses["total"] + teacher_loss
+                    if args.live_window_distill_weight > 0:
+                        distill_losses = _live_window_distillation_loss(out, teacher_out, batch, args)
+                        distill_total = distill_losses["total"]
+                        losses["live_distill"] = distill_total
+                        for distill_key, distill_value in distill_losses.items():
+                            if distill_key != "total":
+                                losses[f"live_distill_{distill_key}"] = distill_value
+                        losses["total"] = losses["total"] + distill_total
             scaler.scale(losses["total"]).backward()
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(grad_params, args.grad_clip)
@@ -2123,6 +2504,7 @@ def train(args) -> None:
                 score_onset_slot_tolerance=args.score_onset_slot_tolerance,
                 score_duration_class_tolerance=args.score_duration_class_tolerance,
                 score_duration_policy=args.score_duration_policy,
+                score_duration_lookup_path=args.score_duration_lookup_path,
                 max_batches=max_batches,
                 decode_use_sounding_frame=args.decode_use_sounding_frame,
             )
@@ -2307,6 +2689,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--head-lr-scale", type=float, default=1.0)
     parser.add_argument("--decoder-lr-scale", type=float, default=0.35)
     parser.add_argument("--backbone-lr-scale", type=float, default=0.1)
+    parser.add_argument("--train-window-sec", type=float, default=0.0,
+                        help="Crop student training examples to this many seconds of live-style context")
+    parser.add_argument("--emit-window-sec", type=float, default=0.0,
+                        help="Compute supervised/distillation loss only over the final emit window")
     parser.add_argument("--teacher-from", type=str, default=None)
     parser.add_argument("--teacher-preserve-weight", type=float, default=0.20)
     parser.add_argument("--teacher-onset-weight", type=float, default=1.0)
@@ -2314,6 +2700,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--teacher-frame-weight", type=float, default=0.5)
     parser.add_argument("--teacher-velocity-weight", type=float, default=0.1)
     parser.add_argument("--teacher-note-value-weight", type=float, default=0.0)
+    parser.add_argument("--live-window-distill-weight", type=float, default=0.0,
+                        help="Distill cropped live-window student outputs from a full-context teacher")
+    parser.add_argument("--live-distill-temperature", type=float, default=2.0)
+    parser.add_argument("--live-distill-onset-weight", type=float, default=1.0)
+    parser.add_argument("--live-distill-offset-weight", type=float, default=0.5)
+    parser.add_argument("--live-distill-frame-weight", type=float, default=0.5)
+    parser.add_argument("--live-distill-sounding-frame-weight", type=float, default=0.25)
+    parser.add_argument("--live-distill-pedal-weight", type=float, default=0.0)
+    parser.add_argument("--live-distill-velocity-weight", type=float, default=0.1)
+    parser.add_argument("--live-distill-note-value-weight", type=float, default=0.0)
     parser.add_argument("--pos-weight", type=float, default=4.0)
     parser.add_argument("--onset-weight", type=float, default=1.0)
     parser.add_argument("--raw-onset-weight", type=float, default=0.25)
@@ -2341,7 +2737,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--score-grid-beats", type=float, default=SCORE_GRID_BEATS)
     parser.add_argument("--score-onset-slot-tolerance", type=int, default=0)
     parser.add_argument("--score-duration-class-tolerance", type=int, default=0)
+    # NOTE: lookup_ioi_head_sound is kept opt-in, NOT defaulted. It improves the
+    # offline note_value duration_accuracy metric, but the score renderer
+    # (generateMeasureXmls in components/PianoSheetMusic.tsx) discards note_value
+    # and prints each note's duration as the per-voice start_beat IOI, so this
+    # policy does not reach the app or the gold12/scorediff score. Pass
+    # --score-duration-policy lookup_ioi_head_sound --score-duration-lookup-path
+    # score_duration_lookup.json to measure it. See live-change-log 2026-06-14.
     parser.add_argument("--score-duration-policy", choices=SCORE_DURATION_POLICIES, default="ioi_same_hand")
+    parser.add_argument("--score-duration-lookup-path", type=str, default=None)
     parser.add_argument("--decode-use-sounding-frame", action="store_true", default=True)
     parser.add_argument("--decode-use-physical-frame", action="store_false", dest="decode_use_sounding_frame")
     parser.add_argument("--log-every", type=int, default=100)

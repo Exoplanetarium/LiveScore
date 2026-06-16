@@ -1021,7 +1021,7 @@ Update rule:
 
 - Decision:
   - Reject frame rising-edge onset recovery and revert both code edits (`decode_note_events` post-pass and the `gpu_ops` env hook). The live path is unchanged.
-  - The method is a *clean but tiny* recall win (`+0.31%` note recall, never regresses recall on any clip), but it costs `~3x` more precision, significantly regressing every display metric including the primary `display_cluster_f1`. This is the same structure-limited pattern seen across the prior display-surface experiments.
+  - The method is a _clean but tiny_ recall win (`+0.31%` note recall, never regresses recall on any clip), but it costs `~3x` more precision, significantly regressing every display metric including the primary `display_cluster_f1`. This is the same structure-limited pattern seen across the prior display-surface experiments.
 
 - Corrected next direction:
   - Decode-side recall is exhausted. The only lever that can drastically raise recall is the onset head itself: `~70%` of misses have neither onset nor frame evidence and are invisible to the current model. This requires **retraining the mel_baseline onset head** (recall-focused loss / onset-positive weighting / harder negative mining), not further live-path or decode heuristics.
@@ -1086,7 +1086,7 @@ Update rule:
 - Full-manifest sweep (control arm, 48 clips, `2.4s` context, retro off), `display_cluster_f1` / note precision / note recall:
   - `0.38`: `0.6561` / `0.8182` / `0.9280`
   - `0.42`: `0.6652` / `0.8341` / `0.9247`
-  - `0.46`: `0.6775` / `0.8516` / `0.9217`  <- shipped
+  - `0.46`: `0.6775` / `0.8516` / `0.9217` <- shipped
   - `0.50`: `0.6858` / `0.8670` / `0.9189`
   - `0.54`: `0.6912` / `0.8816` / `0.9151`
   - `0.58`: `0.6966` / `0.8897` / `0.9112`
@@ -1101,7 +1101,7 @@ Update rule:
 - Idea: the remaining FPs at `2.4s`/`0.46` are `~45%` phantom (no GT nearby; spurious, unfixable) and `~46%` harmonic (`harm_up +12/+19/+24` and `oct_down -12`). Tried suppressing `+12/+19/+24` notes that sit on top of a stronger concurrent note in the display `note_events` (octave-down deliberately protected).
 - Result (full manifest vs `0.46` baseline): display cluster F1 `0.6775 -> 0.5701` (`-0.1074`), display note recall `0.9142 -> 0.8075` (`-0.1067`), display note precision only `+0.0063`. Regressed `29/48` clips.
 - Why: in real polyphonic piano, notes a 12th/octave+third above another are overwhelmingly **genuine chord voicings / melody**, not spectral partials, and confidence does not separate the two. Same lesson as `project_runs_include_octaves`: do not filter by harmonic interval.
-- Decision: reverted entirely (`live_rhythm.py` restored). 
+- Decision: reverted entirely (`live_rhythm.py` restored).
 - Precision ceiling note: cheap pipeline precision levers are now exhausted — the threshold raise banked the safe gain; the remaining FPs are either phantom (spurious, no signal) or harmonic-interval notes that cannot be removed without destroying real notes. Further precision needs the model (better onset calibration), not post-processing.
 
 ## 2026-06-02
@@ -2585,3 +2585,568 @@ Update rule:
   - Result files: `backend/benchmark_artifacts/innervoice_fix_fullmanifest/`, `backend/benchmark_artifacts/innervoice_fix_off_fullmanifest/`.
   - Both recall AND precision improved suite-wide; this is a general live-path quality win, not just an inner-voice repair.
 - Note: `test_experiment.py` does NOT exercise this fix (it simulates the older `live_rhythm.LiveTranscriptionSession` chunk path, not `ContinuousLiveStreamSession`); use `tune_continuous_stream_decoder.py` to benchmark this change.
+
+## 2026-06-10
+
+### CHANGED: removed RMS-attack birth gating from the continuous live path (largest note+cluster F1 win on the streaming score surface)
+
+- Goal:
+  - Raise the F1 of the generated score (continuous-stream score surface) by `>= 0.1`.
+- Baseline re-measured (48-clip manifest, `tune_continuous_stream_decoder.py`, score surface):
+  - note F1 `0.8929`, precision `0.9660`, recall `0.8301`, cluster F1 `0.6519`, duplicates/100 `0.026`.
+  - Run time per candidate is ~82s, so full-manifest sweeps are cheap now.
+- Oracle decomposition of the cluster-F1 headroom (new `_tmp_f1plus_oracle.py` method: replace matched-note onsets with GT onsets, and/or append missed GT notes):
+  - perfect timing alone: `0.652 -> 0.718` (`+0.066`)
+  - perfect recall alone: `0.652 -> 0.855` (`+0.203`)
+  - both: `0.941`
+  - Conclusion: recall was the dominant lever; 757 of 4456 GT notes never reached the score surface vs only 130 false positives.
+- Stage trace of missing notes (instrumented replay, `_tmp_f1plus_recall_trace.py`):
+  - `clip_041` (worst recall, 0.439): of 66 GT notes, `35` were decoded by the model but suppressed by the continuity birth gates; only `2` were never decoded. The gated notes were a soft repeated-note alternation (MIDI 65/67) — weak RMS attack, duration `< 0.08s` so the frame-evidence bypass never fired, confidence `< 0.86`. Every window re-suppressed them as `weak_birth_outside_attack` / repeat gating.
+  - Onset-threshold sweep confirmed decode is not the bottleneck: lowering `LIVE_ENHANCED_ONSET_BASE` 0.60 -> 0.55/0.50/0.45 was neutral-to-negative (recall +0.8pt max, matched precision loss).
+- Change (`backend/main.py`):
+  - Added `STREAM_RMS_BIRTH_GATES = False` master switch. With it off, `_filter_stream_continuity` keeps every decoded observation (attack-group registration still runs); the four RMS-attack birth gates (`same_pitch_boundary`, `implausible_repeat`, `harmonic_sustain`, `weak_birth_outside_attack`) no longer fire. Birth gating is delegated entirely to the 2026-06-09 persistence/frame-evidence display gate (`STREAM_MIN_DISPLAY_OBSERVATIONS=3` OR sustain `>= 0.15s`), which already separates real notes (median ~22 observations) from single-window decode noise (median 1).
+  - Gate code is kept behind the switch for diagnostics.
+- Full-manifest A/B (48 clips, score surface; `ship_legacy_gates` control reproduced the old baseline exactly, so the delta is fully attributable):
+  - note F1: `0.8929 -> 0.9475` (`+0.0546`)
+  - note recall: `0.8301 -> 0.9374` (`+0.1073`)
+  - note precision: `0.9660 -> 0.9578` (`-0.0082`)
+  - cluster F1: `0.6519 -> 0.7401` (`+0.0882`)
+  - duplicates/100: `0.026 -> 0.183` (still negligible)
+  - p95 inference unchanged (~25ms).
+  - Identical aggregates were obtained in two independent full-manifest runs (`birth_gates_off` in `f1plus_sweep1`, `ship_ema` in `f1plus_ship`).
+  - Clip-level: `clip_028` recall `0.550 -> ~0.96` (126/131 GT notes displayed, 0 gated, 4 never decoded).
+- Real pedaled-audio regression check (`test_inner_voice.wav`, reference = offline model MIDI, the failure case the gates were originally built for):
+  - gates on: 242 score notes, recall `0.992`
+  - gates off: 250 score notes, recall `0.996`
+  - No ring-out collapse (the pre-persistence collapse was 476 notes). The persistence display gate holds precision on real pedal audio.
+- Tested and rejected in the same pass:
+  - Median onset smoothing over an observation-onset history (replacing the 0.7/0.3 EMA): note F1 wash, cluster F1 regressed `0.7401 -> 0.7293` at manifest scale. Reverted; EMA stays.
+  - `STREAM_MIN_DISPLAY_OBSERVATIONS=2`: cluster F1 `0.7178` (worse than 3).
+  - `STREAM_DISPLAY_FRAME_EVIDENCE_SEC=0.10`: cluster F1 `0.7261` (worse).
+  - `LIVE_ENHANCED_ONSET_BASE=0.55` on top of gates-off: cluster F1 `0.7196` (worse).
+  - `STREAM_FRAME_EVIDENCE_SEC=0.05` birth relaxation (gates on): cluster F1 `0.6879` — strictly dominated by gates-off.
+- Structure finding (remaining cluster-F1 gap, for future work):
+  - On fast-run clips (`clip_017` cluster F1 ~0.10 with note F1 ~0.89) the failure is event slicing: model onset errors (~±25ms locally) against ~65ms inter-onset spacing make the 50ms single-linkage exact-cluster metric chain adjacent events; matched-note onset error is otherwise tiny (median ±5ms per clip). This is decode-timing-fundamental, not fixable at the hypothesis/display layer; the timing oracle caps it at `+0.066`.
+- Harness change (`backend/tune_continuous_stream_decoder.py`):
+  - Candidates can now carry env-var overrides (`env` field), used for `LIVE_ENHANCED_ONSET_BASE` sweeps; added `ship_default` / `ship_legacy_gates` and threshold/gate candidates.
+- Diagnostic tooling added (kept):
+  - `backend/_tmp_f1plus_oracle.py` (timing/recall oracle decomposition)
+  - `backend/_tmp_f1plus_recall_trace.py` (per-stage missing-note attribution: displayed / hypothesis / gated / never-decoded)
+  - `backend/_tmp_f1plus_cluster_diag.py`, `_tmp_f1plus_onset_err.py`, `_tmp_f1plus_agg.py`, `_tmp_f1plus_compare.py`, `_tmp_f1plus_report.py`, `_tmp_f1plus_pedal_check.py`
+- Result files:
+  - `backend/benchmark_artifacts/f1plus_baseline/` (old defaults)
+  - `backend/benchmark_artifacts/f1plus_sweep1/` (threshold/gate/display sweep)
+  - `backend/benchmark_artifacts/f1plus_ship/` (final A/B incl. legacy control)
+- Validation:
+  - `python -m py_compile backend/main.py backend/tune_continuous_stream_decoder.py` passed.
+  - Final-state smoke run on `clip_017`+`clip_028` passed (note F1 `0.9226`).
+
+## 2026-06-13
+
+### CHANGED: display start_beat re-snapped to the final reported tempo (clean score-F1 win, note/cluster F1 unchanged)
+
+- Goal:
+  - Raise gold12 score F1 (priority) without regressing note F1 or cluster F1.
+- Baseline reproduced exactly on the gold12 oracle harness (`test_experiment.py`, control arm):
+  - note F1 `0.8566`, cluster F1 `0.6820`, score edit accuracy `0.2862`, score exact-token F1 `0.0297`, offset F1 `0.5230`.
+- Diagnosis (instant iteration on the captured `score_payloads/*.json` via `tools/scorediff/run.js`, no neural re-run):
+  - Cheap levers confirmed dead ends: confidence filtering (FP conf median 0.509 vs matched 0.575 — not separable), `LIVE_SCORE_DURATION_POLICY` switch (zero change).
+  - The renderer derives printed note values **only** from each event's `start_beat` (clearing `note_value`/`note_divisions`/`duration_seconds` had zero effect; `start_beat` was the single lever).
+  - The live `start_beat` is `time_at_idx(idx)/period` with `period = 60/current_bpm` **frozen at quantization time**. As the tempo tracker keeps refining BPM, early notes carry stale-tempo beats, so `start_beat` drifts from the raw onset beat at the final reported tempo the score renders at. Measured drift on `clip_012`: `start_beat` runs from `+0.13` to `+0.75` beat ahead of raw over the clip (grid tempo ~120-124 vs reported 112.5). On `clip_005` (sustained) grid≈reported, no drift — which is why removing the grid _helped_ staccato/dense clips but _hurt_ sustained ones. This is the `score_vs_midi_timing_divergence` cause, refined: it is stale-tempo `start_beat`, not duration estimation.
+  - Sweep on payloads: re-expressing `start_beat = round(time_seconds/beat_dur * N)/N` at the **final** bpm — raw (N=∞) `0.3632` (8 up/3 down, sustained clips regress), 1/16 `0.3375`, 1/24 `0.3632`, **1/12 `0.3727` (10 up/1 down, sustained clips _improve_)**. 1/12 keeps jitter removal while removing drift; cleanest.
+- Change (`backend/live_rhythm.py`):
+  - Added `LIVE_DISPLAY_BEAT_SNAP_DIV` (default `12`, `0` restores legacy frozen-grid behaviour) and `_normalize_display_beats(events, bpm)`.
+  - `_build_display_surface(notes, chords, bpm=0.0)` now re-snaps every emitted note/chord `start_beat` from its `time_seconds` at the passed BPM; `get_display_state()` passes `tempo_tracker.current_bpm`. Flows to both the app display payload and the benchmark score payload.
+- Full-manifest gold12 A/B (`_fix_beatsnap.json` vs `gold12_oracle_results.json`):
+  - Control score edit accuracy `0.2862 -> 0.3727` (`+0.0865`, +30%); score token F1 `0.0297 -> 0.0555` (+87%).
+  - Control note F1 `0.8566 -> 0.8566` and cluster F1 `0.6820 -> 0.6820` — exactly unchanged (both key off `time_seconds`, not `start_beat`).
+  - Treatment arm moved the same way: score edit `0.2707 -> 0.3549`, note/cluster flat.
+  - Per-clip control score: 9 up, 2 down (`clip_010` 0.000->0.304, `clip_012` 0.000->0.223, `clip_001` +0.176; small regressions `clip_009` -0.075, `clip_003` -0.049).
+- Validation:
+  - `python -m py_compile backend/live_rhythm.py` passed.
+  - Result file: `backend/benchmark_artifacts/gold12_reference_prep_20260612/_fix_beatsnap.json`.
+- Remaining headroom (future work): note F1 (`0.857`) is FP-limited (~11% FP, not confidence-separable) and cluster F1 (`0.682`, avg_jaccard 0.92 = off by ~1 pitch) is downstream of note recall/precision — both need model-level work, no cheap post-processing lever found.
+
+### RETROACTIVE LOG: "Inner voice fix" commit `a054794` (2026-06-09) — previously unlogged parts
+
+Backfilling the shippable runtime parts of commit `a054794` that the dated entries above did not
+cover. (The score-duration _instrumentation_ is logged under 2026-06-09 "diagnose enhanced
+score-duration accuracy"; the continuous-stream decoder + RMS-birth-gate work under 2026-06-04/06-10;
+the lattice calibrator under the lattice entries. The items below were not documented anywhere.)
+
+- Inner-voice rescue, env-gated and shipped OFF by default (`backend/detect_note.py`,
+  `backend/main.py`):
+  - `LIVE_ENHANCED_SOFT_POLYPHONY_RESCUE` (default `0`): a second-pass decode that recovers soft
+    near-simultaneous inner voices below the 0.60 primary onset, with its own onset/frame/velocity/
+    delta/lookback thresholds (`LIVE_ENHANCED_SOFT_POLYPHONY_*`); tags recovered notes
+    `soft_polyphony_rescue` and counts `soft_polyphony_rescued_notes` per chord.
+  - `LIVE_ENHANCED_LATTICE_RESCUE` (default `0`) + `LIVE_LATTICE_MODEL`: lattice candidate decoder
+    rescue path.
+  - Both default OFF: per the inner-voice investigation neither beat the 0.60 primary at manifest
+    scale (the primary already absorbs recoverable inner voices). Kept as infrastructure +
+    diagnostics (`diagnose_inner_voice_evidence.py`, `lattice_candidate_decoder.py`,
+    `train_lattice_candidate_calibrator.py`, `export_lattice_calibrator_json.py`).
+- Voice assignment + multi-voice score rendering, shipped ON (`backend/live_rhythm.py`,
+  `components/PianoSheetMusic.tsx`):
+  - `LIVE_VOICE_ASSIGNMENT` (default `pitch_lanes`): `assign_voice_ids` splits each staff's events
+    into pitch-lane voices (`_voice_id_from_pitch`, `_event_hand`, `_event_voice_id`) so inner voices
+    print as separate voices instead of being packed into one per staff. Renderer extended (+202) to
+    emit `<voice>`/`<backup>` per assigned voice.
+- Score duration policy, shipped ON (`backend/live_rhythm.py`):
+  - `LIVE_SCORE_DURATION_POLICY` (default `ioi_same_voice`): printed note length runs to the next
+    onset in the same voice lane (`_next_policy_onset`,
+    `_apply_score_duration_policy_to_quantized_window`), writing `score_duration_seconds`.
+    NOTE: superseded for score positioning by the 2026-06-13 `start_beat` re-snap — the renderer
+    derives printed note values from `start_beat` spacing, not from this policy's `note_value`.
+- New offline tooling added (kept): `transcribe_wav_to_midi.py`, `diff_offline_vs_live.py`,
+  `tune_decoder_settings.py`, `sweep_score_duration_policies.py`, `learn_score_duration_lookup.py`,
+  `diagnose_enhanced_mel_transcriber.py`. App live-feedback UI work in `app/index.tsx` (+139).
+
+## 2026-06-14
+
+### ADDED: full-context teacher to live-window student distillation path
+
+- Goal:
+  - Implement the highest-priority model-level idea for the remaining note/cluster F1 headroom:
+    train the enhanced transcriber under the same rolling-window conditions used by live inference,
+    while distilling soft targets from a full-context teacher.
+- Change (`backend/rhythm_training/train_enhanced_mel_transcriber.py`):
+  - `EnhancedPrecomputedMelDataset` now supports live-style student crops via
+    `--train-window-sec` and `--emit-window-sec`.
+  - When `--live-window-distill-weight > 0`, each training sample also carries uncropped
+    `teacher_features`, a `crop_start_frame`, and a `loss_mask`.
+  - The normal supervised loss now respects `loss_mask`, so only the final emit region contributes
+    gradients while earlier frames act as left context.
+  - Added full-context teacher slicing: the teacher runs on the uncropped 10s feature segment, then
+    its logits/probabilities are sliced onto the student's cropped window.
+  - Added temperature-scaled live-window distillation terms for onset, offset, frame, sounding frame,
+    pedal, velocity, and note-value heads. Defaults emphasize onset/frame/offset and leave pedal and
+    note-value distillation off unless explicitly requested.
+  - Teacher loading now uses the checkpoint config when available, so a teacher checkpoint can be
+    loaded even if the student CLI args differ.
+  - The existing teacher-preservation loss was made compatible with cropped student windows and remains
+    enabled only for fine-tuning.
+- Suggested first GPU run:
+  - `python backend/rhythm_training/train_enhanced_mel_transcriber.py --train --finetune --init-from backend/rhythm_training/enhanced_mel_transcription.pt --teacher-from backend/rhythm_training/enhanced_mel_transcription.pt --model-path backend/rhythm_training/enhanced_mel_transcription_livewindow_distill.pt --train-window-sec 2.4 --emit-window-sec 0.6 --live-window-distill-weight 0.5 --train-segment-manifest backend/rhythm_training/mel_hard_case_manifest_train_pedal_onset_v2.json --validation-segment-manifest backend/rhythm_training/mel_hard_case_manifest_validation_pedal_onset_v2.json --save-best-on event_f1`
+- Validation:
+  - `python -m py_compile backend/rhythm_training/train_enhanced_mel_transcriber.py` passed.
+  - In-memory smoke test passed for masked supervised loss plus full-context-teacher slicing/distillation
+    on random tensors.
+
+### CHANGED: score-duration lookup policy now reaches the actual validation path
+
+- Goal:
+  - Finish the easier score-duration follow-up by making the learned duration lookup policy usable in the
+    enhanced-transcriber evaluator, instead of only in offline diagnostics.
+- Change (`backend/rhythm_training/train_enhanced_mel_transcriber.py`):
+  - `evaluate(...)` now accepts `score_duration_lookup_path` and loads the lookup table once per eval run.
+  - Score matching now passes the loaded lookup into `match_score_events(...)`, so
+    `--score-duration-policy lookup_ioi_head_sound` no longer silently falls back to plain
+    `ioi_same_hand` during validation.
+  - Checkpoint config / validation plumbing now preserve and forward `score_duration_lookup_path`.
+  - CLI now exposes:
+    - `--score-duration-lookup-path`.
+- Diagnostics / artifact note:
+  - Older lookup summaries already in the repo were stale for this path: some predated the
+    `best_lookup.table` payload expected by the loader.
+  - Regenerated a fresh smoke artifact with the current learner:
+    - `backend/rhythm_training/score_duration_diagnostics/lookup_policy_summary_regen_smoke.json`
+- Smoke validation:
+  - `python -m py_compile backend/rhythm_training/train_enhanced_mel_transcriber.py` passed.
+  - Regenerated smoke lookup with:
+    - `python backend/rhythm_training/learn_score_duration_lookup.py --samples 8 --sampling leading --num-workers 0 ...`
+  - Tiny held-out evaluator check on 8 validation samples, same checkpoint / decode path:
+    - baseline `ioi_same_hand`: exact score-event F1 `0.376929`, duration accuracy `0.422972`
+    - lookup `lookup_ioi_head_sound`: exact score-event F1 `0.402112`, duration accuracy `0.451231`
+- Decision:
+  - Keep the evaluator/CLI wiring.
+  - Do not promote the lookup policy as the default live duration policy yet; first regenerate a real
+    full-size lookup table and validate it on the saved checkpoint / broader held-out slice.
+
+### VALIDATED: score-duration lookup beats `ioi_same_hand` on a broader held-out slice
+
+- Follow-through on the decision above (regenerate full-size table + validate on the checkpoint /
+  broader slice).
+- Generated a real full-size, evaluator-compatible 3-part `ioi|head|sound` table:
+  - Fit on the TRAIN manifest (`mel_hard_case_manifest_train_pedal_onset_v2.json`, 768 samples ->
+    `99,479` matched rows) using `enhanced_mel_transcription_pedal_score_repair_latest.pt`, so it is
+    disjoint from the validation slice.
+  - `min_count` chosen by an internal even/odd train split (`min4` best, heldDurAcc `0.4811`); refit on
+    all rows -> `396` entries.
+  - Note: the auto-best policy in the existing full regen (`lookup_policy_summary_regen.json`) is the
+    4-part `ioi_head_sound_conf`, which the evaluator loader rejects (it requires a 3-part key); hence
+    the dedicated 3-part fit here.
+  - Artifact: `backend/rhythm_training/score_duration_diagnostics/lookup_ioi_head_sound_heldout_full.json`.
+- Held-out validation through the real `evaluate(...)` path (256 validation samples, spread; vs the
+  prior 8-sample smoke), same checkpoint / decode path:
+  - baseline `ioi_same_hand`: score F1 `0.4499`, precision `0.4559`, recall `0.4440`, durAcc `0.4976`.
+  - `lookup_ioi_head_sound`: score F1 `0.5127`, precision `0.5196`, recall `0.5059`, durAcc `0.5671`.
+  - Deltas: F1 `+0.0628`, precision `+0.0636`, recall `+0.0620`, duration accuracy `+0.0695`.
+- Interpretation:
+  - The gain reproduces the smoke-scale result (`0.377 -> 0.402` F1, `0.423 -> 0.451` durAcc) at ~32x the
+    held-out sample budget, fit on a disjoint manifest, so it is not a small-sample / leakage artifact.
+- Tooling (temporary diagnostic, kept): `backend/rhythm_training/_tmp_validate_score_duration_lookup.py`.
+- Decision:
+  - The deferred validation prerequisite is satisfied; the learned lookup is a genuine held-out win over
+    the current default `ioi_same_hand`. Promoting `lookup_ioi_head_sound` (with this table) to the
+    default live score-duration policy is now a go/no-go call for the user, not blocked on further
+    evidence.
+
+### PROMOTED: `lookup_ioi_head_sound` is now the default score-duration policy in the enhanced-transcriber evaluator
+
+- Promoted the validated held-out table to a stable shipped path:
+  - `backend/rhythm_training/score_duration_lookup.json` (copy of the held-out
+    `score_duration_diagnostics/lookup_ioi_head_sound_heldout_full.json`; 396 entries, 3-part
+    `ioi|head|sound`).
+- `backend/rhythm_training/train_enhanced_mel_transcriber.py`:
+  - `--score-duration-policy` now defaults to `lookup_ioi_head_sound` (was `ioi_same_hand`) and
+    `--score-duration-lookup-path` defaults to the shipped table, but ONLY when the table file exists
+    next to the script. If the file is absent both fall back to the legacy `ioi_same_hand` / `None`, so
+    the change cannot crash an environment that lacks the artifact.
+  - Verified resolved defaults: policy `lookup_ioi_head_sound`, lookup path -> shipped table.
+  - `python -m py_compile` passed.
+- SCOPE / IMPORTANT — this promotion is evaluator/benchmark-side only:
+  - The live runtime score path (`backend/live_rhythm.py`, `LIVE_SCORE_DURATION_POLICY`) only implements
+    `ioi_same_hand` / `ioi_same_voice` and has NO lookup-table support, so it is unchanged.
+  - The 2026-06-13 `start_beat` re-snap means the live renderer derives printed note values from
+    `start_beat` spacing, not from the duration policy's `note_value`; a live port of this lookup would
+    therefore need its own port + gold12/continuous-stream validation and could be inert at render time.
+    Left as a deliberate follow-up, not shipped blind.
+
+### REVERTED the default flip — renderer proves note_value (hence the lookup) cannot reach the user
+
+- Traced the actual render path before shipping the lookup to users. The score the user sees AND the
+  gold12/scorediff reference are BOTH produced by `generateMusicXML` ->
+  `generateMeasureXmls` in `components/PianoSheetMusic.tsx`.
+- `generateMeasureXmls` (the loop at ~`1414`) UNCONDITIONALLY overwrites every event's printed duration:
+  - `getIoiDurationSpec(estimateVoiceIoiBeats(group, staff, voiceId))` then
+    `retimeXmlToDurationSpec(ev.xml, durationSpec)`.
+  - `estimateVoiceIoiBeats = next.beatStart - current.beatStart` — the gap to the next onset in the SAME
+    voice lane. `note_value` / `note_divisions` set earlier by `getDurationSpec` are discarded.
+- Consequence: the printed note duration is purely the per-voice `start_beat` IOI. The score-duration
+  policy's `note_value` output never reaches the rendered score. The lookup's win is confined to the
+  offline `match_score_events` `duration_accuracy` metric, which is decoupled from the product (and from
+  gold12, whose reference is rendered through the same IOI machine). This is the mechanistic proof behind
+  the 2026-06-13 observation that `start_beat` was the single score lever.
+- Action: reverted the `train_enhanced_mel_transcriber.py` default flip back to `ioi_same_hand` / `None`
+  to keep the offline headline score-F1 comparable to history and to avoid biasing `--save-best-on
+score_f1` checkpoint selection toward a product-decoupled metric. Kept as opt-in: the
+  `lookup_ioi_head_sound` policy, the loader, `score_duration_lookup.json`, and a code comment pointing
+  here.
+- Real user-facing duration levers (for future work), in order: (1) `start_beat` accuracy — already the
+  2026-06-13 win; (2) voice assignment (`voiceId`) quality, since it decides which IOI gap is measured;
+  (3) note recall/precision, since missing/extra onsets change the gaps. The model's `note_value` head is
+  NOT a user-facing lever as long as the renderer retimes by `start_beat` IOI.
+
+## 2026-06-15
+
+### CHANGED: default live voice assignment now collapses to one lane per hand
+
+- `backend/live_rhythm.py`
+  - `LIVE_VOICE_ASSIGNMENT` now defaults to `per_hand` instead of `pitch_lanes`.
+  - `_voice_id_from_pitch(...)` now short-circuits to one notation lane per hand when
+    `LIVE_VOICE_ASSIGNMENT=per_hand`, so per-voice IOI is intentionally identical to per-hand IOI.
+  - The old multi-lane behavior is still available via `LIVE_VOICE_ASSIGNMENT=pitch_lanes`.
+
+- Why this change was kept:
+  - The score/reference oracle used in the gold12 evaluation is voiceless, so pitch-lane voice splitting
+    adds structure the metric cannot reward.
+  - On mostly-monophonic-per-hand material, pitch-bucket lanes also fragment melodic continuity whenever a
+    line crosses a bucket boundary, which over-extends printed durations by measuring IOI to the next note
+    in the wrong lane.
+  - One lane per hand makes the live per-voice duration policy behave like the previously better
+    per-hand policy while preserving env-revertibility for genuine polyphonic-within-hand material.
+
+- Gold12 benchmark result:
+  - old default `pitch_lanes`: score edit accuracy `28.62%`
+  - new default `per_hand`: score edit accuracy `41.10%` (`+12.48 pts`)
+  - streaming separation variants (`2`/`3` voices) were strictly worse here: `24.2%` / `22.4%`
+  - `8 / 12` clips improved;
+    biggest wins were `clip_003 +35`, `clip_005 +30`, `clip_008 +28`, `clip_006 +23`
+  - `2` small/noisy 12-token clips regressed (`clip_001`, `clip_010`)
+  - `2` fabricated-note clips stayed at `0` and were unaffected
+
+- Validation:
+  - Confirmed the real `assign_voice_ids` path reproduces the `41.10%` result exactly, not just the
+    experimental harness.
+
+- Tradeoff:
+  - Genuine within-hand polyphony now serializes into one lane, so a held inner voice under a moving line
+    can be visually truncated earlier than a true multi-voice rendering would allow.
+  - This does not drop notes, so it does not conflict with the inner-voice recall work.
+  - Given the current voiceless GT/reference, `per_hand` is the metric-optimal default until voice-aware
+    ground truth exists.
+
+- Tooling kept:
+  - Added GPU-free A/B harness `backend/_voice_experiment/rederive_voices.py`.
+  - The harness re-derives `voice_id` on dumped payloads and rescoring can be done through `scorediff`
+    without rerunning neural inference.
+
+### REJECTED (tested, negative): downbeat-phase metrical grid (idea #10)
+
+- Hypothesis: `_normalize_display_beats` (`backend/live_rhythm.py:604`) anchors `start_beat` at absolute
+  `t=0` (the arbitrary clip cut), so measure barlines do not start on a real downbeat; detecting the
+  downbeat and re-anchoring the grid should improve the engraved score.
+- Experiment: GPU-free harness `backend/_tmp_downbeat/rederive_downbeat.py` estimates a bar-phase `phi`
+  from a metrical-accent template and re-derives `start_beat` for pred (and GT) payloads; scored with
+  `tools/scorediff/run.js` against `oracle_gt_midi_payloads.json`.
+- Result (gold12 mean `score_edit_accuracy`):
+  - phase-0 control: `29.4%`
+  - BOTH pred+GT re-anchored by a PERFECT ORACLE downbeat: `23.6%` (`-5.8`)
+  - realistic estimate -> oracle reference: `24.9%`
+- Even a perfect oracle downbeat REGRESSES the metric. Phase-0 is "wrong" about which beat is bar 1 but
+  keeps onsets on clean integer beats AND is consistent pred-vs-reference; a fractional `phi` shift moves
+  notes to messier within-bar positions and splits more notes across barlines. Whole-bar pickup-offset
+  fix (to avoid negative-beat clamping) changed nothing. The detector itself only matched the oracle
+  bar-phase `6/12`.
+- Conclusion: not pursued. Only possible upside is cosmetic barline placement, but a 50%-accurate
+  detector would mis-bar half the clips = net visual loss.
+
+### REJECTED (tested, negative): acoustic onset snapping (idea #8); corrects an onset-error premise
+
+- Note: parabolic sub-frame onset interpolation on the probability curve is ALREADY shipped
+  (`backend/rhythm_training/train_ensemble.py` `decode_note_events`, ~L1439), used by the live
+  `GpuMelBaselineTranscriber`. The untried variant tested here was snapping onsets to acoustic
+  spectral-flux peaks.
+- Experiment: `backend/_tmp_downbeat/acoustic_onset_snap.py` on the LIVE-path dumped payloads
+  (0.6s chunks), matching pred notes to GT MIDI by pitch and comparing `|onset_pred - onset_gt|`
+  before/after snapping to the nearest flux peak within +/-45ms.
+- Result: live model onsets are ALREADY `~5.0ms` median error vs GT (mean signed `-0.3ms`, ~zero bias),
+  including the fast-run subset (`4.9ms`). Snapping to flux peaks made it `5x` WORSE
+  (median `5.0 -> 26.7ms`); of 323 snapped, `307` moved FARTHER from GT (flux envelope lags and blurs in
+  runs). MAESTRO clips are Disklavier-aligned, so GT MIDI onsets are the true acoustic onsets — which is
+  why flux is worse.
+- Conclusion: not pursued. IMPORTANT premise correction: the "+/-25ms onset error vs 65ms IOI" framing in
+  earlier notes is wrong for MATCHED notes — their onset timing is `~5ms`, so it is NOT the cluster-F1
+  bottleneck. Fast-run cluster slicing must come from quantization/grid grouping or missing/extra cluster
+  members, not raw onset accuracy.
+
+### Next lever (queued, not yet built): SPRT evidence-accumulation display gate (idea #5)
+
+- Target: the fabricated-onset precision killers visible in scorediff (e.g. clip_009=23, clip_006=18,
+  clip_008=10 fabricated onsets). Replace the count-based persistence gate (`>=3 obs OR >=0.15s sustain`)
+  with a sequential probability ratio test over per-window onset evidence so consistent-but-soft notes
+  survive while flickering noise is rejected. To be A/B'd on the same gold12 payloads + the `_tmp_f1plus`
+  oracle decomposition.
+
+### BUILT + REJECTED (tested, negative on the continuous path): SPRT display gate (idea #5)
+
+- Implemented an SPRT evidence-accumulation display gate in `ContinuousLiveStreamSession`
+  (`backend/main.py`): per-hypothesis `llr` accumulates `STREAM_SPRT_OBS_LLR` (persistence credit) +
+  `STREAM_SPRT_SLOPE*(conf - STREAM_SPRT_NEUTRAL_CONF)` per observation, plus a sustain term; promotion
+  when `llr + sustain >= STREAM_SPRT_ACCEPT_LLR`. Env/attr-toggled `STREAM_SPRT_GATE` (default off);
+  legacy gate exactly preserved when off. Shared `_stream_display_ready(...)` helper for both gates.
+- A/B with `tune_continuous_stream_decoder.py` on the gold12 manifest (12 clips, the REAL
+  `ContinuousLiveStreamSession` committed-notes path):
+  | candidate | note F1 | precision | recall | cluster F1 |
+  | --- | --- | --- | --- | --- |
+  | baseline_current (legacy count gate) | **0.9386** | 0.9534 | 0.9243 | 0.7246 |
+  | sprt_obs_heavy | 0.9192 | 0.9091 | 0.9296 | 0.6686 |
+  | sprt_recall | 0.8635 | 0.8704 | 0.8566 | 0.5590 |
+  | sprt_precision | 0.7498 | 0.9606 | 0.6149 | 0.5170 |
+- No SPRT parameterization beats the legacy count gate. Persistence-dominant SPRT matches recall but
+  loses precision (adds noise); confidence-leaning SPRT collapses recall (rejects real soft notes).
+  Root cause = the documented wall: real soft inner voices and persistent decode noise BOTH sit at
+  confidence < 0.60 and BOTH recur across windows, so neither count nor confidence separates them. The
+  plain count gate is already near-optimal here.
+- TWO IMPORTANT ARCHITECTURE FINDINGS (the premise of #5 was mis-aimed):
+  1. The continuous `/live/stream` path (committed_notes; the gate's home) is ALREADY precision-strong
+     (P=0.95). Its weak axes are recall (0.92) and cluster F1 (0.72), NOT precision.
+  2. The "fabricated notes" in gold12 scorediff come from the OTHER live path: the legacy
+     `/live/audio-chunk` + `/live/check-refinement` path (`LiveTranscriptionSession` in `live_rhythm.py`),
+     which has NO persistence/observation gate at all. gold12 (`dump_app_payloads` ->
+     `_analyze_uploaded_stream_chunk` + LiveTranscriptionSession) measures THIS path. The app
+     (`app/index.tsx`) feeds the engraved score from `analysisResult`, written by BOTH the websocket
+     continuous path AND `processRecordedChunk` (legacy path).
+
+- RESOLVED 2026-06-15 (frontend trace): `USE_LIVE_STREAM_TRANSPORT = true` (app/index.tsx:35) =>
+  production live sessions use ONLY the continuous websocket path (start L2127 / stop L2237); the legacy
+  `processRecordedChunk` chunk-upload path is the `else` branch and is NOT exercised. The engraved score
+  is `buildLiveStreamAnalysisResult` over `committed_notes + locked_notes + active_notes` (L564) — the
+  GATED continuous surface. CONCLUSION: **production score = continuous path (already P=0.95); the gold12
+  `dump_app_payloads` scorediff measures the LEGACY path the app does not use.** The reachable
+  production levers are RECALL (0.92) and CLUSTER F1 (0.72), not precision. Score-level (MusicXML)
+  benchmarking should be re-pointed at the continuous committed_notes payload, not the legacy dump.
+- Tooling: SPRT candidates were A/B'd in `tune_continuous_stream_decoder.py` via the existing
+  `_candidate(... env=...)` / `override_live_attrs` mechanism and the gold12 manifest.
+- REVERTED 2026-06-15: the SPRT implementation was removed from `backend/main.py` and the SPRT candidates
+  removed from `tune_continuous_stream_decoder.py` (dead end; not worth carrying env-toggled dead code in
+  the production module). This change-log entry preserves the result so it is not re-attempted. The
+  continuous-path harness + its `env`-override candidate sweep remain intact.
+
+### REJECTED #1 onset-coincidence pre-clustering + #2 harmonic-prior display gate (both DEAD ENDS)
+
+- Targets: cluster F1 (#1) and recall (#2) on the production continuous path, without latency cost.
+- #1 implementation (continuous path, env-toggled `STREAM_ONSET_SNAP_SEC`, default 0=off): in
+  `_build_update`, snap displayed notes (committed+locked+active) whose onsets fall within the window to
+  a shared MEAN onset (single-linkage from each cluster's first onset), so a struck chord engraves as
+  one event. Rationale: live decode spreads chord members; thought to split a chord across grid cells.
+- #2 implementation (env-toggled `STREAM_HARMONIC_PRIOR_ENABLE`, default off): relax the persistence
+  display gate (`>=3 obs OR >=0.15s sustain`) to `>=2 obs OR >=0.10s` for a candidate that forms a
+  consonant interval (pc-distance in {0,3,4,5,7,8,9}) with a currently-SOUNDING already-gated
+  (active/committed/locked) note within 1.2s. Support anchored only to real notes to protect precision.
+  Principled successor to the dead SPRT idea (#5): harmonic context as the discriminator SPRT lacked.
+- A/B on the gold12 manifest (12 clips, real `ContinuousLiveStreamSession` committed-notes surface;
+  default harness stream config -> baseline note F1 0.9085 / R 0.8566 / P 0.9670 / cluster F1 0.6881):
+  | candidate | note F1 | recall | precision | cluster F1 | dup/100 |
+  | --- | --- | --- | --- | --- | --- |
+  | baseline_current | **0.9085** | 0.8566 | 0.9670 | **0.6881** | 0.45 |
+  | onset_snap_15ms | 0.9085 | 0.8566 | 0.9670 | 0.6830 (−0.0051) | 0.30 |
+  | onset_snap_25ms | 0.9085 | 0.8566 | 0.9670 | 0.6697 (−0.0183) | 0.30 |
+  | onset_snap_35ms | 0.9085 | 0.8566 | 0.9670 | 0.6697 (−0.0183) | 0.30 |
+  | harmonic_prior_obs2 | 0.9086 | 0.8645 (+0.0080) | 0.9574 (−0.0097) | 0.6819 (−0.0062) | 0.44 |
+  | harmonic_prior_obs2_sustain80 | 0.9073 | 0.8645 | 0.9545 | 0.6788 | 0.44 |
+  | harmonic_prior_triads_only ({0,4,7}) | 0.9086 | 0.8645 | 0.9574 | 0.6819 | 0.44 |
+  | snap15_harmonic_prior | 0.9086 | 0.8645 | 0.9574 | 0.6779 | 0.44 |
+- #1 VERDICT — dead end. Zero effect on note F1/recall (matched-note onsets are already ~5ms accurate,
+  so near-coincident notes already share a 50ms cluster); snapping to the MEAN only PERTURBS onsets and
+  occasionally over-merges two correctly-separated pred clusters -> cluster F1 strictly WORSE at every
+  window. Lone positive: fewer duplicates (0.45->0.30). NOTE: the *intended* benefit (chord co-assignment
+  to one MusicXML beat cell) is a SCORE-RENDER effect this onset-cluster metric (50ms tol) does not
+  measure; to test that hypothesis would require the scorediff renderer, which measures the LEGACY path,
+  not production. So #1 is not merely negative — it is unmeasurable on the production harness.
+- #2 VERDICT — dead end. Consistent +0.8% recall but −1.0% precision => note F1 dead flat (+0.0001),
+  cluster F1 −0.6%. Restricting consonance to triads {0,4,7} was IDENTICAL to the full set {0,3,4,5,7,8,9}
+  — so consonance does NOT separate real soft inner voices from noise on this corpus; recall and the
+  admitted noise move 1:1. Same wall as SPRT (#5): real soft notes and persistent noise are both
+  harmonically plausible AND both recur. The plain count gate remains near-optimal.
+- REVERTED 2026-06-15: both features removed from `backend/main.py` (production module back to HEAD, zero
+  diff) and both candidate sets removed from `tune_continuous_stream_decoder.py`. Kept: a `default=str`
+  robustness fix on the candidate-log header (a `set` attr value had crashed `json.dumps`). The
+  continuous-path harness + `env`-override sweep remain intact. Raw results:
+  `backend/benchmark_artifacts/ideas12_snap_harmonic{,_b}/`.
+
+### REJECTED #3 global probability calibration (== onset-threshold sweep; near-optimal already)
+
+- A global monotonic (isotonic/temperature) calibration of the onset head, applied before a fixed
+  threshold, is mathematically identical to moving that threshold. So #3-global was tested as the
+  existing `LIVE_ENHANCED_ONSET_BASE` sweep on gold12 (12 clips, continuous committed-notes surface).
+  | onset base | recall | precision | note F1 | cluster F1 |
+  | --- | --- | --- | --- | --- |
+  | 0.60 (baseline) | 0.8566 | 0.9670 | **0.9085** | 0.6881 |
+  | 0.55 | +0.0027 | −0.0042 | −0.0004 | +0.0031 |
+  | 0.50 | +0.0066 | −0.0195 | −0.0050 | −0.0173 |
+  | 0.45 | +0.0080 | −0.0208 | −0.0049 | −0.0184 |
+- The threshold already sits at its optimum; every step down trades recall for MORE precision than it
+  gains. 0.55 is a near-wash (tiny recall + cluster gain at tiny precision cost) but within noise.
+  Global calibration is therefore a dead end. The only #3 variant with a chance is PER-REGISTER
+  calibration (separate curves for soft/high vs loud/low so relative ordering shifts) — a model-level
+  change, not a knob. Raw: `backend/benchmark_artifacts/idea3_onset_sweep/`.
+
+### FINDING: real GT chords are NOT simultaneous — within-chord onset spread is 24–62ms
+
+- Motivated by "how far apart are the first and last note of a real chord?" Measured GT MIDI within-cluster
+  onset spread (max−min onset) on the densest gold12 clips:
+  - clip_009 (Debussy "Pour les accords", block chords, mean 5.65 notes/onset): spread median **24ms**,
+    mean 25, p90 37, max 40. **91% of chords span >15ms**, 45% span >25ms. Tightest block chord = 13ms.
+  - clip_006 / clip_008 (Gnomenreigen, fast figuration): at 50ms clustering median ~27–32ms, but at 80ms
+    clustering the median jumps to **57–62ms** with **69–83% of groups spanning >50ms** — these are
+    broken/rolled arpeggios the 50ms tolerance was artificially capping, not true chords.
+- IMPLICATIONS:
+  1. Confirms WHY #1 onset-snap failed: 91% of real chords are WIDER than 15ms; collapsing onsets to a
+     point falsifies genuine human/pedal timing. No fixed snap window is correct (block chords ~25ms,
+     figuration 50–79ms).
+  2. Part of the "cluster F1 loss" is a MEASUREMENT ARTIFACT: the 50ms `ONSET_CLUSTER_TOLERANCE_SEC`
+     inconsistently splits 25–79ms-wide GT groups between pred and reference, so even a perfect
+     transcriber loses cluster points. Cluster F1 is not a pure model-quality signal.
+  3. Next step for cluster F1 should target the METRIC/render grid (beat-quantized cluster eval), not the
+     decoder. Tool: `compute_onset_cluster_metrics(... onset_tolerance_sec=...)` is parameterized;
+     analysis script lived inline (load_midi_notes + slice_gt_notes + cluster_note_onsets).
+
+### FINDING: cluster F1 is ~95% a metric artifact — production chord-grouping is near-perfect (pairwise co-onset F1 0.97–0.98)
+
+- Followed up #2's "beat-quantized cluster eval" idea. First blocker: gold12 GT has NO usable beat grid —
+  both source and excerpt MIDI report a single 120bpm default tempo (performance MIDI, timing in seconds),
+  so a tempo/grid-quantized metric is **not buildable** from this benchmark. Pivoted to a tempo-free,
+  jitter-robust metric.
+- Quantified the artifact first (perfect-pitch ceiling). Took gold12 GT, added realistic Gaussian onset
+  jitter (live onsets are ~5ms accurate, see [[downbeat_and_onset_snap_dead_ends]] #8), 40 trials/clip:
+  | metric | self (GT-vs-GT) | +5ms jitter | +10ms | +15ms |
+  | --- | --- | --- | --- | --- |
+  | current single-linkage 50ms cluster F1 | 1.00 | 0.928 | 0.859 | 0.766 |
+  | pairwise co-onset (W=50ms) F1 | 1.00 | **0.979** | **0.943** | **0.904** |
+  A PERFECT-pitch transcriber with only 5ms jitter already loses ~7 cluster-F1 pts under the current
+  metric (14 at 10ms), worst on dense clips (clip_006 0.74@5ms, clip_009 0.96→0.59@15ms). Pairwise
+  recovers nearly all of it on the dense polyphony where it matters.
+- THEN computed both metrics on the REAL production decoder output (idea3 `baseline_current.json`
+  `score_notes`, the committed continuous surface) vs gold12 GT — no GPU rerun, same predictions:
+  | | current cluster F1 | pairwise co-onset F1 | pair P | pair R |
+  | --- | --- | --- | --- | --- |
+  | unweighted mean | 0.752 | **0.983** | 0.978 | 0.990 |
+  | GT-note-weighted | 0.639 | **0.971** | 0.960 | 0.984 |
+  Per-clip, the worst "cluster" clips were never broken: clip_009 0.489→**1.000**, clip_006 0.538→0.974,
+  clip_011 0.548→0.960, clip_004 0.622→0.989.
+- CONCLUSION: the production decoder groups the notes it gets right into chords nearly perfectly. The
+  headline cluster F1 (0.688) was conflating (a) missed notes = recall (real, 0.857) with (b) where
+  single-linkage drew boundaries on 25–79ms-wide chords = artifact. ~95% of the apparent cluster-F1 gap
+  is the metric. This closes the entire decoder-tuning line for cluster F1 (see also #1/#2/#3/#5 dead
+  ends). The one remaining real accuracy axis is RECALL (model-level), not clustering.
+- Why pairwise is robust: scores the "are notes A,B struck together" relation only over COMMONLY-MATCHED
+  notes — no anchor, no transitive chaining, so it doesn't flip on where a wide chord's boundary lands;
+  it also deliberately factors out recall, giving a clean grouping-quality signal. Weakness: noisy on
+  very sparse clips (clip_001 9 notes) where few pairs carry the score — fine since clustering is
+  irrelevant there.
+- Tooling (temp, throwaway): `backend/_tmp_cluster_artifact_ceiling.py` (jitter ceiling + pairwise),
+  `backend/_tmp_pairwise_on_real_preds.py` (pairwise on real preds). NOT yet wired into test_experiment.py.
+
+## 2026-06-16
+
+### FIXED: the 2026-06-12 RMS-birth-gate removal was NEVER ACTUALLY IN THE CODE — re-landed it (largest recall lever, recovered)
+
+- DISCOVERY: the 2026-06-12 entry ("removed RMS-attack birth gating from the continuous live path",
+  the single biggest documented recall win) described a change that was never committed. `git log -S
+  STREAM_RMS_BIRTH_GATES -- main.py` returns NOTHING — the master switch never existed in any commit,
+  and the four gates (`same_pitch_boundary` / `implausible_repeat` / `harmonic_sustain` /
+  `weak_birth_outside_attack`) were still firing in `_filter_stream_continuity`. The shipped production
+  recall was therefore the OLD gated number, not the 0.9374 the log claimed was live.
+- CONFIRMED by reproduction before fixing: full-manifest `baseline_current` (HEAD `a054794`) =
+  note F1 `0.8929`, recall `0.8301`, cluster F1 `0.6519` — exactly the pre-removal 2026-06-10 baseline.
+- Re-implemented exactly as the 2026-06-12 entry specified (`backend/main.py`):
+  - Added `STREAM_RMS_BIRTH_GATES = False` (default off).
+  - In `_filter_stream_continuity`, after the `_match_hypothesis` short-circuit, when the switch is off
+    every decoded observation is kept; attack-group registration still runs. Birth/noise rejection is
+    delegated entirely to the persistence + frame-evidence display gate
+    (`STREAM_MIN_DISPLAY_OBSERVATIONS=3` OR sustain `>= 0.15s`). Gate code kept behind the switch.
+- Full-manifest A/B (48 clips, `tune_continuous_stream_decoder.py`, score surface; new `gates_on`
+  candidate flips the switch back for a clean control). Artifacts:
+  `backend/benchmark_artifacts/recall_distill_ab/gates_full/`.
+  | metric | gates_on (legacy) | gates_off (NEW DEFAULT) | delta |
+  | --- | --- | --- | --- |
+  | note F1 | 0.8929 | **0.9475** | +0.0545 |
+  | note recall | 0.8301 | **0.9374** | **+0.1073** |
+  | note precision | 0.9660 | 0.9578 | -0.0082 |
+  | cluster F1 | 0.6519 | 0.7401 | +0.0882 |
+  | dup/100 | 0.026 | 0.183 | +0.157 (still negligible) |
+  | p95 inference ms | 26.4 | 24.1 | -2.3 |
+  These reproduce the 2026-06-12 gates-off numbers to the digit, so the validated win is now genuinely
+  shipped. gold12 (12 clips) moved the same way: recall `0.8566 -> ~`, F1 `0.9085 -> ~` (see below).
+
+### VALIDATED + ready to promote: the unlogged `livewindow_distill` checkpoint adds a small further recall gain
+
+- DISCOVERY: `backend/rhythm_training/enhanced_mel_transcription_livewindow_distill_latest.pt` (Jun 13)
+  already exists from the 2026-06-14 full-context-teacher distillation build, but was NEVER benchmarked
+  or logged. Production loads `enhanced_mel_transcription.pt` by default
+  (`ENHANCED_MEL_MODEL_PATH`/`LIVE_ENHANCED_MEL_MODEL_PATH` override; `gpu_ops.py`).
+- A/B by pointing `ENHANCED_MEL_MODEL_PATH` at the distill checkpoint (separate process, fresh load).
+  Stacked ON TOP of gates-off, full manifest. Artifacts:
+  `backend/benchmark_artifacts/recall_distill_ab/distill_full_gatesoff/`.
+  | metric | gates_off, default model | gates_off + distill model |
+  | --- | --- | --- |
+  | note F1 | 0.9475 | **0.9488** |
+  | note recall | 0.9374 | **0.9434** (+0.0060) |
+  | note precision | 0.9578 | 0.9542 |
+  | cluster F1 | 0.7401 | 0.7418 |
+  - The distill gain concentrates on the dense-polyphony clips with real recall headroom
+    (gold12: clip_006 +2.7pt, clip_002 +1.1pt, clip_009 +0.8pt; clip_011 -1.6pt), net positive,
+    p95 inference unchanged (~25ms). This is the FIRST validated model-level recall gain and confirms
+    the distillation direction is correct.
+- PROMOTED 2026-06-16 (user go/no-go = yes): backed up the old default to
+  `backend/rhythm_training/enhanced_mel_transcription.pre_distill_backup.pt` (525MB) and copied the
+  distill checkpoint over `backend/rhythm_training/enhanced_mel_transcription.pt` (now 214MB). Verified
+  the plain default (no env override) loads the distill weights: gold12 recall `0.8566 -> 0.9309`,
+  note F1 `0.9085 -> 0.9435` (gates-off + distill combined vs the originally-shipped gated state).
+  Revert by restoring the backup. Bigger headroom is a longer/heavier distillation run (the Jun 13
+  checkpoint was a first pass at `--live-window-distill-weight 0.5`).
+- Harness: added a permanent `gates_on` control candidate to `tune_continuous_stream_decoder.py` so
+  this regression cannot silently recur.
+- Validation: `python -m py_compile backend/main.py` passed; baselines reproduced exactly twice.
