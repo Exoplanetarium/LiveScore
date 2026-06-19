@@ -1,0 +1,214 @@
+{
+  "settings": {
+    "dataset": "validation",
+    "batch_size": 16,
+    "max_batches": 20,
+    "event_samples": 320,
+    "score_samples": 320,
+    "onset_threshold": 0.5,
+    "offset_threshold": 0.35,
+    "frame_threshold": 0.5,
+    "score_duration_policy": "ioi_same_hand",
+    "decode_use_sounding_frame": true
+  },
+  "results": {
+    "note_value_original": {
+      "checkpoint": "backend\\rhythm_training\\enhanced_mel_transcription.pt",
+      "epoch": 16,
+      "global_step": 17408,
+      "elapsed_sec": 18.56237229995895,
+      "event": {
+        "precision": 0.9591554170993424,
+        "recall": 0.9420541683979904,
+        "f1": 0.9505278804741396,
+        "samples": 320,
+        "matched": 24939,
+        "predicted": 26001,
+        "ground_truth": 26473
+      },
+      "score": {
+        "precision": 0.5300949963462944,
+        "recall": 0.5206436746874173,
+        "f1": 0.5253268285246027,
+        "onset_precision": 0.9130418060843813,
+        "onset_recall": 0.8967627393948552,
+        "onset_f1": 0.9048290582002515,
+        "duration_accuracy": 0.580581297388374,
+        "samples": 320,
+        "matched": 13783,
+        "onset_matched": 23740,
+        "predicted": 26001,
+        "ground_truth": 26473
+      },
+      "losses": {
+        "total": 0.2775134384632111,
+        "onset": 0.016072474606335162,
+        "raw_onset": 0.016099078673869373,
+        "offset": 0.02957618599757552,
+        "raw_offset": 0.02971589909866452,
+        "frame": 0.03025542451068759,
+        "sounding_frame": 0.20785819590091706,
+        "pedal": 0.7188666820526123,
+        "velocity": 0.003526110399980098,
+        "note_value": 0.6090472549200058
+      },
+      "onset": {
+        "precision": 0.8597166727206683,
+        "recall": 0.8590821647650966,
+        "f1": 0.8593993016261098
+      },
+      "offset": {
+        "precision": 0.5093842819298386,
+        "recall": 0.3837974499794353,
+        "f1": 0.4377617263764997
+      },
+      "frame": {
+        "precision": 0.6142166581764475,
+        "recall": 0.8616856641936462,
+        "f1": 0.7172042228508094
+      },
+      "sounding_frame": {
+        "precision": 0.6226509502447644,
+        "recall": 0.8985716001386781,
+        "f1": 0.735587913219244
+      },
+      "pedal": {
+        "precision": 0.9194989502693495,
+        "recall": 0.9886779245778283,
+        "f1": 0.9528344314272221
+      }
+    },
+    "no_note_value_best": {
+      "checkpoint": "backend\\rhythm_training\\enhanced_mel_transcription_no_nv.pt",
+      "epoch": 4,
+      "global_step": 17960,
+      "elapsed_sec": 11.957525199977681,
+      "event": {
+        "precision": 0.9655225966765025,
+        "recall": 0.9393721905337513,
+        "f1": 0.952267897145264,
+        "samples": 320,
+        "matched": 24868,
+        "predicted": 25756,
+        "ground_truth": 26473
+      },
+      "score": {
+        "precision": 0.5353315732256562,
+        "recall": 0.5208325463679976,
+        "f1": 0.5279825384365008,
+        "onset_precision": 0.9193974219599317,
+        "onset_recall": 0.8944962792278925,
+        "onset_f1": 0.9067759290815447,
+        "duration_accuracy": 0.5822635135135135,
+        "samples": 320,
+        "matched": 13788,
+        "onset_matched": 23680,
+        "predicted": 25756,
+        "ground_truth": 26473
+      },
+      "losses": {
+        "total": 0.17972290888428688,
+        "onset": 0.015972842136397956,
+        "raw_onset": 0.016001014201901854,
+        "offset": 0.029582506604492666,
+        "raw_offset": 0.029732515569776297,
+        "frame": 0.030151858739554883,
+        "sounding_frame": 0.0831868501380086,
+        "pedal": 0.7259888857603073,
+        "velocity": 0.003525803773663938,
+        "note_value": 0.0
+      },
+      "onset": {
+        "precision": 0.8729371304154192,
+        "recall": 0.8537464761466891,
+        "f1": 0.8632351591889164
+      },
+      "offset": {
+        "precision": 0.525534359117176,
+        "recall": 0.3652408487165219,
+        "f1": 0.43096532922251246
+      },
+      "frame": {
+        "precision": 0.6259457576285435,
+        "recall": 0.8498552691787619,
+        "f1": 0.7209146635323057
+      },
+      "sounding_frame": {
+        "precision": 0.7473039595792679,
+        "recall": 0.8662518911512627,
+        "f1": 0.8023936301396459
+      },
+      "pedal": {
+        "precision": 0.9263605153504569,
+        "recall": 0.9868696590544521,
+        "f1": 0.9556582351412723
+      }
+    },
+    "no_note_value_latest": {
+      "checkpoint": "backend\\rhythm_training\\enhanced_mel_transcription_no_nv_latest.pt",
+      "epoch": 6,
+      "global_step": 25144,
+      "elapsed_sec": 12.068484800052829,
+      "event": {
+        "precision": 0.9635709031783516,
+        "recall": 0.9402032259283043,
+        "f1": 0.9517436524931171,
+        "samples": 320,
+        "matched": 24890,
+        "predicted": 25831,
+        "ground_truth": 26473
+      },
+      "score": {
+        "precision": 0.5339708102667338,
+        "recall": 0.5210214180485778,
+        "f1": 0.5274166411746712,
+        "onset_precision": 0.9177345050520692,
+        "onset_recall": 0.8954784119669097,
+        "onset_f1": 0.9064698684613031,
+        "duration_accuracy": 0.5818358221547287,
+        "samples": 320,
+        "matched": 13793,
+        "onset_matched": 23706,
+        "predicted": 25831,
+        "ground_truth": 26473
+      },
+      "losses": {
+        "total": 0.17881052643060685,
+        "onset": 0.01595801757648587,
+        "raw_onset": 0.015978744649328292,
+        "offset": 0.02951829954981804,
+        "raw_offset": 0.02965984372422099,
+        "frame": 0.03003530455753207,
+        "sounding_frame": 0.08252268843352795,
+        "pedal": 0.720913827419281,
+        "velocity": 0.003493751375935972,
+        "note_value": 0.0
+      },
+      "onset": {
+        "precision": 0.8714224111378057,
+        "recall": 0.8557549212955681,
+        "f1": 0.8635176051179371
+      },
+      "offset": {
+        "precision": 0.5196658076035507,
+        "recall": 0.3732005903273414,
+        "f1": 0.4344201699605021
+      },
+      "frame": {
+        "precision": 0.6266700764356549,
+        "recall": 0.8504311076149492,
+        "f1": 0.7216021934947698
+      },
+      "sounding_frame": {
+        "precision": 0.7429579916896435,
+        "recall": 0.870292893350021,
+        "f1": 0.8016001307932996
+      },
+      "pedal": {
+        "precision": 0.9258232140903621,
+        "recall": 0.9873071426488174,
+        "f1": 0.9555771972166942
+      }
+    }
+  }
+}

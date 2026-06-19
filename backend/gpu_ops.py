@@ -1708,15 +1708,21 @@ class GpuEnhancedMelTranscriber(nn.Module):
         step = chunk_frames - overlap
 
         n_keys = self.config.get('n_keys', 88)
-        n_note_value_classes = self.config.get('n_note_value_classes', 12)
+        use_note_value_head = bool(self.config.get('use_note_value_head', True))
+        n_note_value_classes = int(self.config.get('n_note_value_classes', 12)) if use_note_value_head else 0
         all_onset = np.zeros((n_frames, n_keys), dtype=np.float32)
         all_offset = np.zeros((n_frames, n_keys), dtype=np.float32)
         all_frame = np.zeros((n_frames, n_keys), dtype=np.float32)
         all_vel = np.zeros((n_frames, n_keys), dtype=np.float32)
-        all_note_value = np.zeros((n_frames, n_keys, n_note_value_classes), dtype=np.float32)
+        all_note_value = (
+            np.zeros((n_frames, n_keys, n_note_value_classes), dtype=np.float32)
+            if n_note_value_classes > 0
+            else None
+        )
         counts = np.zeros(n_frames, dtype=np.float32)
 
         n_chunks = 0
+        decode_frame_source = 'frame_logits'
         for start in range(0, n_frames, step):
             end = min(start + chunk_frames, n_frames)
             chunk = features[:, start:end, :]
@@ -1725,24 +1731,28 @@ class GpuEnhancedMelTranscriber(nn.Module):
 
             onset_p = torch.sigmoid(out['onset_logits'][0]).cpu().numpy()
             offset_p = torch.sigmoid(out['offset_logits'][0]).cpu().numpy()
-            frame_p = torch.sigmoid(out['frame_logits'][0]).cpu().numpy()
+            frame_key = 'sounding_frame_logits' if 'sounding_frame_logits' in out else 'frame_logits'
+            decode_frame_source = frame_key
+            frame_p = torch.sigmoid(out[frame_key][0]).cpu().numpy()
             vel = out['velocity'][0].cpu().numpy()
-            nv_probs = F.softmax(out['note_value_logits'][0], dim=-1).cpu().numpy()
-
-            actual_nv_classes = nv_probs.shape[-1]
-            if actual_nv_classes != n_note_value_classes:
-                if actual_nv_classes < n_note_value_classes:
-                    pad = np.zeros((*nv_probs.shape[:-1], n_note_value_classes - actual_nv_classes), dtype=np.float32)
-                    nv_probs = np.concatenate([nv_probs, pad], axis=-1)
-                else:
-                    nv_probs = nv_probs[..., :n_note_value_classes]
+            nv_probs = None
+            if all_note_value is not None and 'note_value_logits' in out:
+                nv_probs = F.softmax(out['note_value_logits'][0], dim=-1).cpu().numpy()
+                actual_nv_classes = nv_probs.shape[-1]
+                if actual_nv_classes != n_note_value_classes:
+                    if actual_nv_classes < n_note_value_classes:
+                        pad = np.zeros((*nv_probs.shape[:-1], n_note_value_classes - actual_nv_classes), dtype=np.float32)
+                        nv_probs = np.concatenate([nv_probs, pad], axis=-1)
+                    else:
+                        nv_probs = nv_probs[..., :n_note_value_classes]
 
             actual_len = end - start
             all_onset[start:end] += onset_p[:actual_len]
             all_offset[start:end] += offset_p[:actual_len]
             all_frame[start:end] += frame_p[:actual_len]
             all_vel[start:end] += vel[:actual_len]
-            all_note_value[start:end] += nv_probs[:actual_len]
+            if all_note_value is not None and nv_probs is not None:
+                all_note_value[start:end] += nv_probs[:actual_len]
             counts[start:end] += 1.0
             n_chunks += 1
 
@@ -1755,7 +1765,8 @@ class GpuEnhancedMelTranscriber(nn.Module):
         all_offset /= counts[:, None]
         all_frame /= counts[:, None]
         all_vel /= counts[:, None]
-        all_note_value /= counts[:, None, None]
+        if all_note_value is not None:
+            all_note_value /= counts[:, None, None]
 
         from rhythm_training.train_enhanced_mel_transcriber import decode_enhanced_note_events  # type: ignore
         events = decode_enhanced_note_events(
@@ -1787,6 +1798,7 @@ class GpuEnhancedMelTranscriber(nn.Module):
         timings['onset_threshold'] = onset_threshold
         timings['offset_threshold'] = offset_threshold
         timings['frame_threshold'] = frame_threshold
+        timings['decode_frame_source'] = decode_frame_source
         timings['duplicate_window_sec'] = duplicate_window_sec
         timings['merge_gap_sec'] = merge_gap_sec
         timings['soft_polyphony_rescue'] = bool(soft_polyphony_rescue)
@@ -1799,6 +1811,7 @@ class GpuEnhancedMelTranscriber(nn.Module):
             1 for event in events if event.get('decode_source') == 'soft_polyphony_rescue'
         )
         timings['lattice_rescue'] = bool(lattice_rescue)
+        timings['note_value_head'] = bool(all_note_value is not None)
         timings['lattice_rescued_events'] = sum(
             1 for event in events if event.get('decode_source') == 'lattice_calibrated'
         )
@@ -1841,6 +1854,7 @@ def get_gpu_enhanced_mel_transcriber() -> Optional[GpuEnhancedMelTranscriber]:
     if override_path:
         model_paths.append(override_path)
     model_paths.extend([
+        os.path.join(os.path.dirname(__file__), 'rhythm_training', 'enhanced_mel_transcription_no_nv.pt'),
         os.path.join(os.path.dirname(__file__), 'rhythm_training', 'enhanced_mel_transcription.pt'),
         os.path.join(os.path.dirname(__file__), 'enhanced_mel_transcription.pt'),
         '/root/rhythm_training/enhanced_mel_transcription.pt',

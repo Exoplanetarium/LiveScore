@@ -54,6 +54,7 @@ maestro_midi/
 precomputed_features/
 precomputed_features_mel/
 nul
+benchmark_artifacts/
 
 # model checkpoints
 *.pt

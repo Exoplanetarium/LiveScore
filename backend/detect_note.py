@@ -8786,9 +8786,9 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             timings['neural_resample'] = (time.perf_counter() - t0) * 1000
 
             try:
-                _enhanced_base_thr = float(os.environ.get('LIVE_ENHANCED_ONSET_BASE', '0.60'))
+                _enhanced_base_thr = float(os.environ.get('LIVE_ENHANCED_ONSET_BASE', '0.70'))
             except (TypeError, ValueError):
-                _enhanced_base_thr = 0.60
+                _enhanced_base_thr = 0.70
             try:
                 _enhanced_offset_thr = float(os.environ.get('LIVE_ENHANCED_OFFSET_BASE', '0.35'))
             except (TypeError, ValueError):

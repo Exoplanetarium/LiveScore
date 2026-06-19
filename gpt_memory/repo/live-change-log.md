@@ -3150,3 +3150,65 @@ score_f1` checkpoint selection toward a product-decoupled metric. Kept as opt-in
 - Harness: added a permanent `gates_on` control candidate to `tune_continuous_stream_decoder.py` so
   this regression cannot silently recur.
 - Validation: `python -m py_compile backend/main.py` passed; baselines reproduced exactly twice.
+
+### RE-TESTED + STILL REJECTED: soft-polyphony rescue (`LIVE_ENHANCED_SOFT_POLYPHONY_RESCUE=1`) post-gates-off
+
+- The 2026-06-09 rejection of the soft inner-voice second-pass decode was made with the RMS birth gates
+  ON. Re-A/B'd on the NEW default (gates-off + distill model) since recall is the target and the
+  conditions changed. Continuous path confirmed to read the flag via `analyze_audio_live_neural`.
+- Full-manifest A/B vs current default (artifacts `backend/benchmark_artifacts/recall_distill_ab/softpoly_full/`):
+  | metric | default | +soft_poly | delta |
+  | --- | --- | --- | --- |
+  | recall | 0.9434 | 0.9511 | **+0.0076** |
+  | precision | 0.9542 | 0.9251 | **-0.0290** |
+  | note F1 | 0.9488 | 0.9379 | -0.0108 |
+  | cluster F1 | 0.7418 | 0.7137 | -0.0281 |
+  | dup/100 | 0.227 | 0.480 | +0.253 |
+  | p95 inference ms | 24.6 | 32.7 | +8.1 |
+- VERDICT: dead end even post-gates-off. +0.8pt recall costs −2.9pt precision (bad trade), F1/cluster
+  both regress, dups double, +8ms latency. The rescued sub-0.60 candidates recur across windows like
+  real notes, so the persistence display gate cannot separate them — same wall as SPRT/#2 harmonic
+  prior. Default stays `LIVE_ENHANCED_SOFT_POLYPHONY_RESCUE=0`. Recall is now genuinely model-bound;
+  the only lever left is a heavier distillation run.
+
+## 2026-06-17
+
+### VALIDATED: no-note-value model on the production continuous surface; onset 0.70 is the best current default
+
+- Corrected the benchmark surface after a false start: production live app behavior should be judged with
+  `backend/tune_continuous_stream_decoder.py` / `ContinuousLiveStreamSession`, not the legacy Gold-12
+  app-payload path (`dump_app_payloads.py` / `test_experiment.py`). The old `0.9488` note F1 came from
+  the full-manifest continuous surface in
+  `backend/benchmark_artifacts/recall_distill_ab/distill_full_gatesoff/`.
+- Evaluated the no-note-value checkpoint explicitly:
+  `backend/rhythm_training/enhanced_mel_transcription_no_nv.pt` (43,303,193 params), gates off,
+  soft-polyphony off, lattice off. Same-surface comparison at onset `0.60`:
+  | model | note F1 | precision | recall | cluster F1 | p95 ms |
+  | --- | --- | --- | --- | --- | --- |
+  | livewindow-distill, with note-value head | 0.9488 | 0.9542 | 0.9434 | 0.7418 | 24.59 |
+  | no-note-value checkpoint | 0.9490 | 0.9586 | 0.9396 | 0.7395 | 22.61 |
+  Result: no-note-value is effectively tied/slightly higher on note F1, faster, and cleaner on precision;
+  it trades away a small amount of recall/cluster.
+- Post-processing sweep at fixed onset `0.60`:
+  `backend/benchmark_artifacts/no_nv_continuous_postprocess_sweep_on060/`. Most stream-state knobs
+  (rescue window/confidence, repeat suppression, weak-birth confidence, harmonic confidence, boundary
+  window) were inert under gates-off and exactly matched baseline. Display/frame-evidence relaxations
+  regressed slightly; `gates_on` regressed hard. Separate decode-side checks rejected both alternatives:
+  soft-polyphony F1 `0.9395`, cluster `0.7161`, p95 `28.34ms`; lattice F1 `0.9480`, cluster `0.7377`,
+  p95 `25.61ms`.
+- Swept onset threshold on the same 48-clip continuous surface:
+  `backend/benchmark_artifacts/no_nv_continuous_onset_sweep_full/`.
+  | onset | note F1 | precision | recall | cluster F1 | dup/100 | p95 ms |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 0.55 | 0.9468 | 0.9503 | 0.9434 | 0.7345 | 0.27 | 22.61 |
+  | 0.60 | 0.9490 | 0.9586 | 0.9396 | 0.7395 | 0.16 | 22.63 |
+  | 0.65 | 0.9522 | 0.9689 | 0.9360 | 0.7496 | 0.09 | 24.13 |
+  | 0.70 | **0.9533** | 0.9778 | 0.9300 | **0.7534** | 0.05 | 24.17 |
+  | 0.75 | 0.9525 | 0.9837 | 0.9232 | 0.7512 | 0.02 | 22.81 |
+  | 0.80 | 0.9469 | 0.9902 | 0.9073 | 0.7459 | 0.02 | 31.02 |
+  Accuracy winner is `LIVE_ENHANCED_ONSET_BASE=0.70`. `0.75` is a conservative near-tie with slightly
+  lower latency, but worse F1/cluster/recall; `0.70` is still faster than the old distill run's p95.
+- PROMOTED: set the default `LIVE_ENHANCED_ONSET_BASE` in `backend/detect_note.py` to `0.70`. Added
+  explicit onset-sweep candidates in `backend/tune_continuous_stream_decoder.py`. `backend/gpu_ops.py`
+  and `backend/modal_deploy.py` already prefer/package the no-note-value checkpoint.
+- Validation: `env\Scripts\python.exe -m py_compile backend/detect_note.py backend/tune_continuous_stream_decoder.py`.

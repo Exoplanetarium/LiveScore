@@ -32,6 +32,7 @@ For a larger offline teacher, try d_model=512, n_layers=12, n_heads=8.
 from __future__ import annotations
 
 import argparse
+import bisect
 import json
 import math
 import time
@@ -155,6 +156,8 @@ def _make_pedal_intervals(
 
 def _pedal_extended_end(note_end: float, pedal_intervals: Sequence[Tuple[float, float]]) -> float:
     for start_sec, end_sec in pedal_intervals:
+        if start_sec > note_end:
+            break
         if start_sec <= note_end < end_sec:
             return float(end_sec)
     return float(note_end)
@@ -167,7 +170,7 @@ def _duration_to_note_value_class(duration_sec: float, bpm: float) -> int:
     return int(np.argmin(np.abs(log_nv - math.log2(beats))))
 
 
-@lru_cache(maxsize=256)
+@lru_cache(maxsize=2048)
 def _load_midi_target_cache(midi_path: str) -> Dict:
     import pretty_midi
 
@@ -213,9 +216,25 @@ def _load_midi_target_cache(midi_path: str) -> Dict:
         for idx, note in enumerate(key_notes[:-1]):
             note["next_same_pitch_start"] = float(key_notes[idx + 1]["start"])
 
+    pedal_intervals = tuple(_make_pedal_intervals(control_changes, piece_end=max(
+        [float(midi.get_end_time())]
+        + [note["end"] for note in all_notes]
+        + [cc_time for cc_time, _, _ in control_changes]
+        + [0.0]
+    )))
+    for note in all_notes:
+        note["sounding_end"] = min(
+            _pedal_extended_end(float(note["end"]), pedal_intervals),
+            float(note["next_same_pitch_start"]),
+        )
+    note_starts = tuple(float(note["start"]) for note in all_notes)
+    max_sounding_duration = max(
+        [float(note["sounding_end"]) - float(note["start"]) for note in all_notes] + [0.0]
+    )
     piece_end = max(
         [float(midi.get_end_time())]
         + [note["end"] for note in all_notes]
+        + [note["sounding_end"] for note in all_notes]
         + [cc_time for cc_time, _, _ in control_changes]
         + [0.0]
     )
@@ -224,7 +243,9 @@ def _load_midi_target_cache(midi_path: str) -> Dict:
         "piece_end": piece_end,
         "control_changes": tuple(control_changes),
         "notes": tuple(all_notes),
-        "pedal_intervals": tuple(_make_pedal_intervals(control_changes, piece_end)),
+        "note_starts": note_starts,
+        "max_sounding_duration": max_sounding_duration,
+        "pedal_intervals": pedal_intervals,
     }
 
 
@@ -237,7 +258,7 @@ def _load_segment_targets(
     hop_length: int,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, List[Dict]]:
     frame_time = hop_length / sr
-    end_sec = start_sec + SEGMENT_SECONDS
+    end_sec = start_sec + max(float(n_frames) * frame_time, frame_time)
     offset = np.zeros((n_frames, PIANO_KEYS), dtype=np.float32)
     sounding_frame = np.zeros((n_frames, PIANO_KEYS), dtype=np.float32)
     gt_events: List[Dict] = []
@@ -247,31 +268,38 @@ def _load_segment_targets(
     piece_end = max(float(midi_cache["piece_end"]), end_sec)
     control_changes = midi_cache["control_changes"]
     pedal = _make_pedal_curve(control_changes, start_sec, n_frames, frame_time)
-    pedal_intervals = midi_cache["pedal_intervals"]
+    notes = midi_cache["notes"]
+    note_starts = midi_cache["note_starts"]
+    max_sounding_duration = float(midi_cache["max_sounding_duration"])
+    start_idx = bisect.bisect_left(note_starts, start_sec - max_sounding_duration - frame_time)
+    end_idx = bisect.bisect_right(note_starts, end_sec)
 
-    for note in midi_cache["notes"]:
+    for note in notes[start_idx:end_idx]:
+        note_start = float(note["start"])
+        if note_start > end_sec:
+            break
+
         onset_rel = float(note["start"]) - start_sec
         offset_rel = float(note["end"]) - start_sec
         key = int(note["key"])
-        sounding_end = min(
-            _pedal_extended_end(float(note["end"]), pedal_intervals),
-            float(note["next_same_pitch_start"]),
-        )
+        sounding_end = float(note["sounding_end"])
+        if sounding_end < start_sec and float(note["end"]) < start_sec:
+            continue
 
-        if sounding_end >= start_sec and float(note["start"]) <= end_sec:
-            start_f = max(0, int(math.floor((float(note["start"]) - start_sec) / frame_time)))
+        if sounding_end >= start_sec and note_start <= end_sec:
+            start_f = max(0, int(math.floor((note_start - start_sec) / frame_time)))
             end_f = min(n_frames, int(math.ceil((sounding_end - start_sec) / frame_time)))
             if end_f > start_f:
                 sounding_frame[start_f:end_f, key] = 1.0
 
-        if float(note["end"]) < start_sec or float(note["start"]) > end_sec:
+        if float(note["end"]) < start_sec or note_start > end_sec:
             continue
 
         _apply_tent(offset, offset_rel, key, OFFSET_TENT_SEC, frame_time)
-        if 0.0 <= onset_rel < SEGMENT_SECONDS:
+        if 0.0 <= onset_rel < n_frames * frame_time:
             ioi = note["ioi"]
             if ioi is None or ioi < 0.03:
-                ioi = float(sounding_end - float(note["start"]))
+                ioi = float(sounding_end - note_start)
             note_value_class = _duration_to_note_value_class(float(ioi), bpm)
             gt_events.append({
                 "onset_time": float(onset_rel),
@@ -689,11 +717,13 @@ class EnhancedMelTranscriber(nn.Module):
         adapter_bottleneck: int = 0,
         adapter_dropout: float = 0.0,
         n_note_value_classes: int = NOTE_VALUE_CLASSES,
+        use_note_value_head: bool = True,
         use_checkpoint: bool = False,
     ):
         super().__init__()
         self.n_keys = PIANO_KEYS
-        self.n_nv = n_note_value_classes
+        self.use_note_value_head = bool(use_note_value_head)
+        self.n_nv = n_note_value_classes if self.use_note_value_head else 0
         self.event_residual = bool(event_residual)
         self.freq_stack = FrequencyConvStack(n_mels, conv_channels, dropout)
         self.global_proj = nn.Sequential(
@@ -782,8 +812,15 @@ class EnhancedMelTranscriber(nn.Module):
         self.sounding_frame_head = nn.Sequential(
             nn.Linear(key_dim + 4, key_dim), nn.GELU(), nn.Dropout(dropout), nn.Linear(key_dim, 1)
         )
-        self.note_value_head = nn.Sequential(
-            nn.Linear(key_dim, key_dim), nn.GELU(), nn.Dropout(dropout), nn.Linear(key_dim, n_note_value_classes)
+        self.note_value_head = (
+            nn.Sequential(
+                nn.Linear(key_dim, key_dim),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(key_dim, n_note_value_classes),
+            )
+            if self.use_note_value_head
+            else None
         )
 
     def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
@@ -847,9 +884,7 @@ class EnhancedMelTranscriber(nn.Module):
             pedal_context,
         ], dim=-1)
         sounding_frame_logits = self.sounding_frame_head(sounding_frame_in).squeeze(-1)
-        note_value_logits = self.note_value_head(key_h)
-
-        return {
+        result = {
             "onset_logits": onset_logits,
             "raw_onset_logits": raw_onset_logits,
             "offset_logits": offset_logits,
@@ -858,8 +893,10 @@ class EnhancedMelTranscriber(nn.Module):
             "sounding_frame_logits": sounding_frame_logits,
             "pedal_logits": pedal_logits,
             "velocity": velocity,
-            "note_value_logits": note_value_logits,
         }
+        if self.note_value_head is not None:
+            result["note_value_logits"] = self.note_value_head(key_h)
+        return result
 
 
 class EnhancedTranscriptionLoss(nn.Module):
@@ -973,7 +1010,7 @@ class EnhancedTranscriptionLoss(nn.Module):
         onset_mask = (onset_gt > 0.5) & (frame_gt > 0.5)
         if event_mask is not None:
             onset_mask = onset_mask & (event_mask.to(device=onset_gt.device) > 0.5)
-        if onset_mask.any() and self.nv_weight > 0:
+        if "note_value_logits" in out and onset_mask.any() and self.nv_weight > 0:
             nv_loss = F.cross_entropy(out["note_value_logits"][onset_mask], nv_gt[onset_mask])
         else:
             nv_loss = torch.tensor(0.0, device=frame_gt.device)
@@ -1579,7 +1616,11 @@ def evaluate(
             frame_key = "sounding_frame_logits" if decode_use_sounding_frame else "frame_logits"
             frame_np = torch.sigmoid(out[frame_key]).cpu().numpy()
             vel_np = out["velocity"].cpu().numpy()
-            nv_np = F.softmax(out["note_value_logits"], dim=-1).cpu().numpy()
+            nv_np = (
+                F.softmax(out["note_value_logits"], dim=-1).cpu().numpy()
+                if "note_value_logits" in out
+                else None
+            )
             for sample_idx in range(onset_np.shape[0]):
                 global_sample_idx = seen_samples + sample_idx
                 use_event_sample = True
@@ -1602,7 +1643,7 @@ def evaluate(
                     offset_np[sample_idx],
                     frame_np[sample_idx],
                     vel_np[sample_idx],
-                    nv_np[sample_idx],
+                    nv_np[sample_idx] if nv_np is not None else None,
                     onset_threshold=onset_threshold,
                     offset_threshold=offset_threshold,
                     frame_threshold=frame_threshold,
@@ -1698,6 +1739,7 @@ def _build_model_from_args(args) -> EnhancedMelTranscriber:
         cross_key_heads=getattr(args, "cross_key_heads", 4),
         adapter_bottleneck=args.adapter_bottleneck,
         adapter_dropout=args.adapter_dropout,
+        use_note_value_head=getattr(args, "use_note_value_head", True),
         use_checkpoint=args.use_checkpoint,
     )
 
@@ -1721,6 +1763,7 @@ def _build_model_from_config(config: Dict) -> EnhancedMelTranscriber:
         adapter_bottleneck=int(config.get("adapter_bottleneck", 0)),
         adapter_dropout=float(config.get("adapter_dropout", 0.0)),
         n_note_value_classes=int(config.get("n_note_value_classes", NOTE_VALUE_CLASSES)),
+        use_note_value_head=bool(config.get("use_note_value_head", True)),
         use_checkpoint=bool(config.get("use_checkpoint", False)),
     )
 
@@ -1746,7 +1789,8 @@ def _checkpoint_config(args) -> Dict:
         "n_fft": N_FFT,
         "n_mels": N_MELS,
         "n_keys": PIANO_KEYS,
-        "n_note_value_classes": NOTE_VALUE_CLASSES,
+        "n_note_value_classes": NOTE_VALUE_CLASSES if args.use_note_value_head else 0,
+        "use_note_value_head": bool(args.use_note_value_head),
         "onset_tent_sec": ONSET_TENT_SEC,
         "offset_tent_sec": OFFSET_TENT_SEC,
         "pedal_cc": PEDAL_CC,
@@ -1774,6 +1818,7 @@ def _checkpoint_config(args) -> Dict:
         "finetune_hard_ratio": args.finetune_hard_ratio,
         "train_window_sec": float(args.train_window_sec),
         "emit_window_sec": float(args.emit_window_sec),
+        "train_shuffle": bool(args.train_shuffle),
         "teacher_preserve_weight": args.teacher_preserve_weight,
         "teacher_from": args.teacher_from,
         "live_window_distill_weight": float(args.live_window_distill_weight),
@@ -1784,7 +1829,11 @@ def _checkpoint_config(args) -> Dict:
         "live_distill_sounding_frame_weight": float(args.live_distill_sounding_frame_weight),
         "live_distill_pedal_weight": float(args.live_distill_pedal_weight),
         "live_distill_velocity_weight": float(args.live_distill_velocity_weight),
-        "live_distill_note_value_weight": float(args.live_distill_note_value_weight),
+        "live_distill_note_value_weight": (
+            float(args.live_distill_note_value_weight)
+            if args.use_note_value_head
+            else 0.0
+        ),
         "lr": args.lr,
         "pos_weight": args.pos_weight,
         "onset_weight": args.onset_weight,
@@ -1806,7 +1855,7 @@ def _checkpoint_config(args) -> Dict:
         "score_duration_policy": args.score_duration_policy,
         "score_duration_lookup_path": args.score_duration_lookup_path,
         "velocity_weight": args.velocity_weight,
-        "nv_weight": args.nv_weight,
+        "nv_weight": args.nv_weight if args.use_note_value_head else 0.0,
         "focal_gamma": args.focal_gamma,
     }
 
@@ -1846,9 +1895,10 @@ def _build_optimizer_param_groups(model: EnhancedMelTranscriber, args):
             ("frame_head", model.frame_head),
             ("sounding_frame_head", model.sounding_frame_head),
             ("pedal_head", model.pedal_head),
-            ("note_value_head", model.note_value_head),
         ],
     }
+    if model.note_value_head is not None:
+        component_groups["heads"].append(("note_value_head", model.note_value_head))
     if model.event_context_head is not None:
         component_groups["heads"].append(("event_context_head", model.event_context_head))
     if model.conformer_adapters is not None:
@@ -2002,7 +2052,7 @@ def _build_train_dataset_and_sampler(args) -> Tuple[Dataset, Optional[WeightedRa
         )
         if args.finetune and hard_segment_ids is not None:
             dataset = SourceTaggedDataset(dataset, source_id=1)
-        return dataset, None, True
+        return dataset, None, bool(args.train_shuffle)
 
     general_dataset = SourceTaggedDataset(
         EnhancedPrecomputedMelDataset(
@@ -2212,7 +2262,11 @@ def _teacher_preservation_loss(
             loss = loss + args.teacher_velocity_weight * term
             weighted_terms += args.teacher_velocity_weight
 
-    if args.teacher_note_value_weight > 0:
+    if (
+        args.teacher_note_value_weight > 0
+        and "note_value_logits" in student_out
+        and "note_value_logits" in teacher_out
+    ):
         mask = _time_key_mask(student_out["note_value_logits"][..., 0], batch, preserve_mask)
         if mask.any():
             student_log_prob = F.log_softmax(student_out["note_value_logits"].float(), dim=-1)
@@ -2274,7 +2328,11 @@ def _live_window_distillation_loss(
         weighted_total = weighted_total + args.live_distill_velocity_weight * term
         total_weight += args.live_distill_velocity_weight
 
-    if args.live_distill_note_value_weight > 0:
+    if (
+        args.live_distill_note_value_weight > 0
+        and "note_value_logits" in student_out
+        and "note_value_logits" in teacher_out
+    ):
         mask = _time_key_mask(student_out["note_value_logits"][..., 0], batch)
         if mask.any():
             student_log_prob = F.log_softmax(student_out["note_value_logits"].float(), dim=-1)
@@ -2294,6 +2352,11 @@ def _live_window_distillation_loss(
 
 
 def train(args) -> None:
+    if not args.use_note_value_head:
+        args.nv_weight = 0.0
+        args.teacher_note_value_weight = 0.0
+        args.live_distill_note_value_weight = 0.0
+
     device = torch.device(args.device)
     if device.type == "cuda" and not torch.cuda.is_available():
         print("CUDA not available, using CPU")
@@ -2654,7 +2717,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--epochs", type=int, default=80)
     parser.add_argument("--batch-size", type=int, default=8)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=0,
+        help="DataLoader workers. Keep 0 on Windows if training stalls before the first batch.",
+    )
     parser.add_argument("--lr", type=float, default=None)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--warmup-steps", type=int, default=8000)
@@ -2679,6 +2747,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-checkpoint", action="store_false", dest="use_checkpoint")
     parser.add_argument("--train-augment", action="store_true", default=True)
     parser.add_argument("--no-train-augment", action="store_false", dest="train_augment")
+    parser.add_argument("--train-shuffle", action="store_true", default=True)
+    parser.add_argument("--no-train-shuffle", action="store_false", dest="train_shuffle")
     parser.add_argument("--finetune-scope", choices=["heads", "decoder", "full"], default="decoder")
     parser.add_argument("--finetune-hard-ratio", type=float, default=0.25)
     parser.add_argument("--finetune-samples-per-epoch", type=int, default=0)
@@ -2721,6 +2791,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--velocity-weight", type=float, default=0.3)
     parser.add_argument("--nv-weight", type=float, default=0.1)
     parser.add_argument("--focal-gamma", type=float, default=1.0)
+    parser.add_argument("--no-note-value-head", action="store_false", dest="use_note_value_head", default=True,
+                        help="Ablation: remove the note-value classification head, loss, distillation, and decode metadata.")
     parser.add_argument("--onset-threshold", type=float, default=0.5)
     parser.add_argument("--offset-threshold", type=float, default=0.35)
     parser.add_argument("--frame-threshold", type=float, default=0.5)

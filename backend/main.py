@@ -306,7 +306,7 @@ STREAM_FRAME_EVIDENCE_SEC = 0.08
 # either re-observed across enough overlapping windows (real notes recur many
 # times; noise is seen once or twice) OR carries strong frame evidence. This is
 # what rejects the noise that floods in when the birth gates are merely relaxed.
-STREAM_MIN_DISPLAY_OBSERVATIONS = 3
+STREAM_MIN_DISPLAY_OBSERVATIONS = 2
 STREAM_DISPLAY_FRAME_EVIDENCE_SEC = 0.15
 # Master switch for the RMS-attack birth gates in _filter_stream_continuity
 # (same_pitch_boundary / implausible_repeat / harmonic_sustain /
@@ -331,8 +331,8 @@ class ContinuousLiveStreamSession:
         session_id: str,
         sample_rate: int = 44100,
         context_sec: float = 2.4,
-        inference_interval_sec: float = 0.10,
-        trusted_delay_sec: float = 0.18,
+        inference_interval_sec: float = 0.05,
+        trusted_delay_sec: float = 0.10,
         commit_delay_sec: float = 0.50,
         lock_delay_sec: float = 2.0,
         max_buffer_sec: float = 12.0,
@@ -1108,8 +1108,8 @@ def _get_continuous_live_stream_session(
         session_id=session_id,
         sample_rate=sample_rate,
         context_sec=float(context_sec if context_sec is not None else LIVE_CONTEXT_SEC),
-        inference_interval_sec=float(inference_interval_ms if inference_interval_ms is not None else 100.0) / 1000.0,
-        trusted_delay_sec=float(trusted_delay_ms if trusted_delay_ms is not None else 180.0) / 1000.0,
+        inference_interval_sec=float(inference_interval_ms if inference_interval_ms is not None else 50.0) / 1000.0,
+        trusted_delay_sec=float(trusted_delay_ms if trusted_delay_ms is not None else 100.0) / 1000.0,
         commit_delay_sec=float(commit_delay_ms if commit_delay_ms is not None else 500.0) / 1000.0,
         lock_delay_sec=float(lock_delay_ms if lock_delay_ms is not None else 2000.0) / 1000.0,
     )

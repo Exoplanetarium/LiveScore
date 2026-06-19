@@ -113,6 +113,48 @@ def build_candidates(preset: str) -> List[Candidate]:
             env={"LIVE_ENHANCED_ONSET_BASE": "0.55"},
         ),
         _candidate(
+            "onset_060",
+            {},
+            "Explicit current/reference enhanced onset threshold.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.60"},
+        ),
+        _candidate(
+            "onset_065",
+            {},
+            "Moderately stricter enhanced onset threshold.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.65"},
+        ),
+        _candidate(
+            "onset_070",
+            {},
+            "Stricter enhanced onset threshold for precision.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.70"},
+        ),
+        _candidate(
+            "onset_075",
+            {},
+            "Old enhanced-onset operating point used by prior heuristic sweeps.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.75"},
+        ),
+        _candidate(
+            "onset_080",
+            {},
+            "High-precision enhanced onset threshold.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.80"},
+        ),
+        _candidate(
+            "onset_085",
+            {},
+            "Aggressive precision threshold; checks recall collapse.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.85"},
+        ),
+        _candidate(
+            "onset_090",
+            {},
+            "Very strict threshold; likely recall-limited.",
+            env={"LIVE_ENHANCED_ONSET_BASE": "0.90"},
+        ),
+        _candidate(
             "onset_050",
             {},
             "Lower enhanced onset threshold further for recall.",
