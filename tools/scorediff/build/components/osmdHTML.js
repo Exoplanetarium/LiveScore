@@ -73,7 +73,17 @@ exports.OSMD_HTML = `
       width: 100%;
       min-width: 0;
     }
-    
+
+    /* Windowed live engrave: stack of frozen (already-engraved) chunks. */
+    #osmd-frozen {
+      display: block;
+      width: 100%;
+    }
+    #osmd-frozen .frozen-chunk {
+      display: block;
+      width: 100%;
+    }
+
     /* Fullscreen playback controls overlay */
     #fullscreen-controls {
       display: none;
@@ -121,6 +131,9 @@ exports.OSMD_HTML = `
   
   <div id="osmd-container" class="portrait-mode">
     <div id="osmd-stage" class="portrait-mode">
+      <!-- Windowed live engrave: completed measure-chunks are frozen here as
+           static SVG (no re-render), the growing tail is engraved into #osmd. -->
+      <div id="osmd-frozen"></div>
       <div id="osmd" class="portrait-mode"></div>
     </div>
   </div>
@@ -1783,6 +1796,83 @@ exports.OSMD_HTML = `
       }
     }
 
+    function getFrozenStack() {
+      return document.getElementById('osmd-frozen');
+    }
+
+    function clearFrozenChunks() {
+      const stack = getFrozenStack();
+      if (stack) stack.innerHTML = '';
+    }
+
+    // Windowed live engrave. Renders zero or more completed chunks into the
+    // static frozen stack (each engraved once, then never touched again), then
+    // engraves the still-growing tail into #osmd. Render cost is therefore
+    // O(tail) — constant — instead of O(whole score) like renderXml.
+    async function renderWindowed(payload, requestId) {
+      try {
+        const freezeChunks = (payload && payload.freezeChunks) || [];
+        const tailXml = payload && payload.tailXml;
+        applyLayoutOptions();
+
+        if (payload && payload.reset) {
+          clearFrozenChunks();
+        }
+
+        const stack = getFrozenStack();
+        const scoreRoot = getScoreRoot();
+
+        // Freeze each newly-completed chunk: engrave it through the normal
+        // scale pipeline, then snapshot its DOM into the frozen stack. The
+        // subsequent tail render below overwrites #osmd, so the snapshot must
+        // be taken before that happens.
+        for (let i = 0; i < freezeChunks.length; i++) {
+          await osmd.load(freezeChunks[i]);
+          await osmd.render();
+          applyRenderedSvgScale();
+          if (stack && scoreRoot) {
+            const div = document.createElement('div');
+            div.className = 'frozen-chunk';
+            div.innerHTML = scoreRoot.innerHTML;
+            stack.appendChild(div);
+          }
+        }
+
+        if (tailXml) {
+          currentXml = tailXml; // tail drives playback/cursor of the live region
+          await osmd.load(tailXml);
+          await osmd.render();
+          applyRenderedSvgScale();
+        }
+
+        updateCameraMetrics();
+        syncPortraitScrollExtent();
+        moveCameraTo(0, true);
+        scrollLiveTailIntoView();
+        post({
+          type: "rendered",
+          requestId: requestId == null ? null : requestId,
+          measures: osmd.Sheet && osmd.Sheet.Measures ? osmd.Sheet.Measures.length : 0,
+          frozenChunks: stack ? stack.children.length : 0,
+          windowed: true,
+        });
+        postDebugSnapshot('rendered-windowed', requestId);
+      } catch (e) {
+        post({ type: "error", requestId: requestId == null ? null : requestId, error: String(e) });
+      }
+    }
+
+    // In portrait (vertically-scrolling) live mode, keep the growing tail in
+    // view by pinning the scroll container to the bottom.
+    function scrollLiveTailIntoView() {
+      if (fullscreenMode || !usesWrappedPortraitLayout()) return;
+      const container = getContainer();
+      if (!container) return;
+      requestAnimationFrame(() => {
+        container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      });
+    }
+
     function toggleCursor(show){
       if (!osmd) return;
       if (show) osmd.cursor.show(); else osmd.cursor.hide();
@@ -1792,6 +1882,7 @@ exports.OSMD_HTML = `
 
     window.__OSMD_INIT = function(options) { return init(options); };
     window.__OSMD_RENDER_XML = function(xml, requestId) { return renderXml(xml, requestId); };
+    window.__OSMD_RENDER_WINDOWED = function(payload, requestId) { return renderWindowed(payload, requestId); };
     window.__OSMD_SET_FOLLOW_TAIL = function(enabled) { return setFollowTail(enabled); };
     window.__OSMD_TOGGLE_CURSOR = function(show) { return toggleCursor(show); };
     window.__OSMD_CURSOR_NEXT = function() { return cursorNext(); };
@@ -1809,6 +1900,7 @@ exports.OSMD_HTML = `
         const msg = JSON.parse(e.data);
         if (msg.type === "init") return init(msg.options);
         if (msg.type === "renderXml") return renderXml(msg.xml, msg.requestId);
+        if (msg.type === "renderWindowed") return renderWindowed(msg.payload, msg.requestId);
         if (msg.type === "setFollowTail") return setFollowTail(msg.enabled);
         if (msg.type === "toggleCursor") return toggleCursor(msg.show);
         if (msg.type === "cursorNext") return cursorNext();

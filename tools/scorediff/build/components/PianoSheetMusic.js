@@ -33,6 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.RENDER_LATENCY_SAMPLES = void 0;
 exports.generateMusicXML = generateMusicXML;
 exports.default = PianoSheetMusic;
 const ScreenOrientation = __importStar(require("expo-screen-orientation"));
@@ -41,6 +42,13 @@ const react_native_1 = require("react-native");
 const react_native_webview_1 = require("react-native-webview");
 const ThemedText_1 = require("./ThemedText");
 const osmdHTML_1 = require("./osmdHTML");
+exports.RENDER_LATENCY_SAMPLES = [];
+function recordRenderLatency(sample) {
+    exports.RENDER_LATENCY_SAMPLES.push(sample);
+    if (exports.RENDER_LATENCY_SAMPLES.length > 1000)
+        exports.RENDER_LATENCY_SAMPLES.shift();
+    console.log("[RENDER_LATENCY]", JSON.stringify(sample));
+}
 function midiToStepOctaveForKey(midi, fifths = 0) {
     const map = [
         ["C", 0],
@@ -1596,6 +1604,43 @@ function generateMusicXML(notes, chords, timeSignature = "4/4", bpm = 120, fifth
     const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n<score-partwise version="3.1">\n  <part-list><score-part id="P1"><part-name>Piano</part-name></score-part></part-list>\n  <part id="P1">${measures.join("")}</part></score-partwise>`;
     return xml;
 }
+const LIVE_WINDOWED_ENGRAVE = true;
+const LIVE_CHUNK_MEASURES = 4;
+const MUSICXML_DOC_HEADER = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+    '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n' +
+    '<score-partwise version="3.1">\n' +
+    "  <part-list><score-part id=\"P1\"><part-name>Piano</part-name></score-part></part-list>\n" +
+    '  <part id="P1">';
+const MUSICXML_DOC_FOOTER = "</part></score-partwise>";
+function buildChunkAttributesXml(timeSignature, fifths) {
+    const [beats, beatType] = timeSignature === "6/8"
+        ? ["6", "8"]
+        : timeSignature === "3/4"
+            ? ["3", "4"]
+            : ["4", "4"];
+    return (`<attributes><divisions>24</divisions><key><fifths>${fifths}</fifths></key>` +
+        `<time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time><staves>2</staves>` +
+        `<clef number="1"><sign>G</sign><line>2</line></clef>` +
+        `<clef number="2"><sign>F</sign><line>4</line></clef></attributes>`);
+}
+function buildStandaloneDocFromMeasures(measureXmls, start, end, timeSignature, fifths) {
+    const slice = [];
+    const stop = Math.min(end, measureXmls.length);
+    for (let i = start; i < stop; i++) {
+        let body = measureXmls[i];
+        const localNum = i - start + 1;
+        body = body.replace(/number="\d+"/, `number="${localNum}"`);
+        if (localNum === 1) {
+            body = body.replace(/<print[^>]*\/>/, "");
+            if (start > 0 && !/<attributes>/.test(body)) {
+                const attrs = buildChunkAttributesXml(timeSignature, fifths);
+                body = body.replace(/(<measure number="1">)/, `$1${attrs}`);
+            }
+        }
+        slice.push(body);
+    }
+    return MUSICXML_DOC_HEADER + slice.join("") + MUSICXML_DOC_FOOTER;
+}
 function generateBlankPageMusicXML(timeSignature = "4/4", bpm = 120, fifths = 0, measureCount = 12) {
     const timeConfig = timeSignature === "6/8"
         ? {
@@ -1784,9 +1829,12 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
     const playAfterRenderRef = (0, react_1.useRef)(false);
     const pendingSentAtRef = (0, react_1.useRef)(0);
     const pendingRenderIdRef = (0, react_1.useRef)(null);
+    const renderTimingRef = (0, react_1.useRef)(null);
     const nextRenderIdRef = (0, react_1.useRef)(1);
     const renderProbeTimeoutRef = (0, react_1.useRef)(null);
     const renderRefinementRef = (0, react_1.useRef)(undefined);
+    const frozenMeasureCountRef = (0, react_1.useRef)(0);
+    const windowedStartedRef = (0, react_1.useRef)(false);
     const [, setDebugSnapshot] = (0, react_1.useState)(null);
     const [, setDebugEvents] = (0, react_1.useState)([]);
     const appendDebugEvent = (0, react_1.useCallback)((message) => {
@@ -1831,6 +1879,12 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
         pendingXmlRef.current = xml;
         pendingSentAtRef.current = Date.now();
         pendingRenderIdRef.current = requestId;
+        renderTimingRef.current = {
+            requestId,
+            description,
+            sentAt: pendingSentAtRef.current,
+            xmlLength: xml.length,
+        };
         appendDebugEvent(`render request #${requestId} (${description}) xml=${xml.length}`);
         if (renderProbeTimeoutRef.current) {
             clearTimeout(renderProbeTimeoutRef.current);
@@ -1842,6 +1896,31 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
         injectWebCommand(`
           if (window.__OSMD_RENDER_XML) window.__OSMD_RENDER_XML(${JSON.stringify(xml)}, ${requestId});
           ${extraScript}
+        `, description);
+    }, [appendDebugEvent, injectWebCommand, requestDebugSnapshot]);
+    const sendRenderWindowed = (0, react_1.useCallback)((freezeChunks, tailXml, reset, description) => {
+        const requestId = nextRenderIdRef.current;
+        nextRenderIdRef.current += 1;
+        const xmlLength = tailXml.length + freezeChunks.reduce((sum, c) => sum + c.length, 0);
+        pendingSentAtRef.current = Date.now();
+        pendingRenderIdRef.current = requestId;
+        renderTimingRef.current = {
+            requestId,
+            description,
+            sentAt: pendingSentAtRef.current,
+            xmlLength,
+        };
+        appendDebugEvent(`windowed render #${requestId} (${description}) freeze=${freezeChunks.length} tail=${tailXml.length}`);
+        if (renderProbeTimeoutRef.current) {
+            clearTimeout(renderProbeTimeoutRef.current);
+        }
+        renderProbeTimeoutRef.current = setTimeout(() => {
+            renderProbeTimeoutRef.current = null;
+            requestDebugSnapshot(`render-timeout:${description}`, requestId);
+        }, 1500);
+        const payload = JSON.stringify({ freezeChunks, tailXml, reset });
+        injectWebCommand(`
+          if (window.__OSMD_RENDER_WINDOWED) window.__OSMD_RENDER_WINDOWED(${payload}, ${requestId});
         `, description);
     }, [appendDebugEvent, injectWebCommand, requestDebugSnapshot]);
     const [isLandscape, setIsLandscape] = (0, react_1.useState)(false);
@@ -1948,6 +2027,20 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
                 if (renderProbeTimeoutRef.current) {
                     clearTimeout(renderProbeTimeoutRef.current);
                     renderProbeTimeoutRef.current = null;
+                }
+                const timing = renderTimingRef.current;
+                if (timing && timing.requestId === msg.requestId) {
+                    const ackAt = Date.now();
+                    recordRenderLatency({
+                        requestId: timing.requestId,
+                        description: timing.description,
+                        renderMs: ackAt - timing.sentAt,
+                        measures: typeof msg.measures === "number" ? msg.measures : -1,
+                        xmlLength: timing.xmlLength,
+                        sentAt: timing.sentAt,
+                        ackAt,
+                    });
+                    renderTimingRef.current = null;
                 }
                 if (typeof msg.measures === "number") {
                     measuresSentRef.current = msg.measures;
@@ -2077,6 +2170,8 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
             pendingXmlRef.current = null;
             pendingSentAtRef.current = 0;
             pendingRenderIdRef.current = null;
+            frozenMeasureCountRef.current = 0;
+            windowedStartedRef.current = false;
         }
         if (pendingXmlRef.current &&
             pendingSentAtRef.current > 0 &&
@@ -2091,6 +2186,42 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
         const currentScoreUsesFallback = score === FALLBACK_XML;
         const pendingScoreUsesFallback = pendingXmlRef.current === FALLBACK_XML;
         const lastScoreUsesFallback = lastXmlRef.current === FALLBACK_XML;
+        if (shouldFollowLatest && LIVE_WINDOWED_ENGRAVE) {
+            const chunkFifths = keySignature !== null && keySignature !== void 0 ? keySignature : 0;
+            if (currentScoreUsesFallback) {
+                frozenMeasureCountRef.current = 0;
+                windowedStartedRef.current = false;
+                try {
+                    sendRenderWindowed([], score, true, "render-windowed-fallback");
+                }
+                catch (e) {
+                    console.warn("windowed fallback render failed", e);
+                }
+                return;
+            }
+            const total = measures.length;
+            if (total < frozenMeasureCountRef.current) {
+                frozenMeasureCountRef.current = 0;
+                windowedStartedRef.current = false;
+            }
+            let frozen = frozenMeasureCountRef.current;
+            const freezeChunks = [];
+            while (total - frozen >= 2 * LIVE_CHUNK_MEASURES) {
+                freezeChunks.push(buildStandaloneDocFromMeasures(measures, frozen, frozen + LIVE_CHUNK_MEASURES, timeSignature, chunkFifths));
+                frozen += LIVE_CHUNK_MEASURES;
+            }
+            const tailXml = buildStandaloneDocFromMeasures(measures, frozen, total, timeSignature, chunkFifths);
+            const reset = !windowedStartedRef.current;
+            frozenMeasureCountRef.current = frozen;
+            windowedStartedRef.current = true;
+            try {
+                sendRenderWindowed(freezeChunks, tailXml, reset, "render-windowed");
+            }
+            catch (e) {
+                console.warn("windowed render failed", e);
+            }
+            return;
+        }
         if (!currentScoreUsesFallback &&
             (pendingScoreUsesFallback || lastScoreUsesFallback)) {
             pendingXmlRef.current = null;
@@ -2163,6 +2294,8 @@ function PianoSheetMusic({ results, timeSignature = "4/4", keySignature = 0, com
         refinementVersion,
         injectWebCommand,
         sendRenderXml,
+        sendRenderWindowed,
+        shouldFollowLatest,
         webViewReady,
     ]);
     (0, react_1.useEffect)(() => {

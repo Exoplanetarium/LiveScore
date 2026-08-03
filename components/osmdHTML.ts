@@ -70,7 +70,17 @@ export const OSMD_HTML = `
       width: 100%;
       min-width: 0;
     }
-    
+
+    /* Windowed live engrave: stack of frozen (already-engraved) chunks. */
+    #osmd-frozen {
+      display: block;
+      width: 100%;
+    }
+    #osmd-frozen .frozen-chunk {
+      display: block;
+      width: 100%;
+    }
+
     /* Fullscreen playback controls overlay */
     #fullscreen-controls {
       display: none;
@@ -118,6 +128,9 @@ export const OSMD_HTML = `
   
   <div id="osmd-container" class="portrait-mode">
     <div id="osmd-stage" class="portrait-mode">
+      <!-- Windowed live engrave: completed measure-chunks are frozen here as
+           static SVG (no re-render), the growing tail is engraved into #osmd. -->
+      <div id="osmd-frozen"></div>
       <div id="osmd" class="portrait-mode"></div>
     </div>
   </div>
@@ -179,6 +192,19 @@ export const OSMD_HTML = `
 
     function getScoreRoot() {
       return document.getElementById('osmd');
+    }
+
+    // OSMD's MusicSheet exposes SourceMeasures (Measures is not a real property,
+    // which is why earlier telemetry always read 0). Fall back defensively.
+    function getSourceMeasureCount() {
+      try {
+        var sheet = osmd && osmd.Sheet;
+        if (!sheet) return 0;
+        var list = sheet.SourceMeasures || sheet.Measures;
+        return list && typeof list.length === 'number' ? list.length : 0;
+      } catch (e) {
+        return 0;
+      }
     }
 
     function clamp(value, min, max) {
@@ -445,6 +471,9 @@ export const OSMD_HTML = `
       });
 
       syncPortraitScrollExtent();
+      // A re-render recreates/repositions the cursor in unscaled space; keep it
+      // mapped onto the freshly scaled SVG.
+      alignCursorsToScale();
     }
 
     function syncPortraitScrollExtent() {
@@ -458,28 +487,46 @@ export const OSMD_HTML = `
         return;
       }
 
-      const shells = scoreRoot.querySelectorAll('.osmd-svg-scale-shell');
-      let maxBottom = 0;
-
-      for (let index = 0; index < shells.length; index++) {
-        const shell = shells[index];
-        const rect = shell.getBoundingClientRect();
-        const shellHeight = Math.max(
-          shell.offsetHeight || 0,
-          Number.isFinite(rect.height) ? rect.height : 0,
-        );
-        maxBottom = Math.max(maxBottom, shell.offsetTop + shellHeight);
+      // Measure the true on-screen bottom of the scaled content from the
+      // transformed SVG rects rather than the scale-shells' set heights. The
+      // shell height is computed before the SVG's final layout has fully settled,
+      // so it can under-count and leave the last system (~3 measures) unreachable.
+      // Rects are viewport-relative; subtracting the root's own top yields a
+      // scroll-independent content height.
+      const rootTop = scoreRoot.getBoundingClientRect().top;
+      let contentBottom = 0;
+      const svgs = scoreRoot.querySelectorAll('svg');
+      for (let index = 0; index < svgs.length; index++) {
+        const rect = svgs[index].getBoundingClientRect();
+        if (Number.isFinite(rect.bottom)) {
+          contentBottom = Math.max(contentBottom, rect.bottom - rootTop);
+        }
       }
 
-      const fallbackHeight = Math.max(
-        scoreRoot.scrollHeight || 0,
-        Math.ceil(scoreRoot.getBoundingClientRect().height || 0),
-      );
-      const targetHeight = Math.max(
-        fallbackHeight,
-        Math.ceil(maxBottom + (cameraState.paddingBottom || 24)),
-      );
+      // Fall back to the shells / scrollHeight if no SVGs were found yet.
+      if (contentBottom <= 0) {
+        const shells = scoreRoot.querySelectorAll('.osmd-svg-scale-shell');
+        for (let index = 0; index < shells.length; index++) {
+          const shell = shells[index];
+          contentBottom = Math.max(
+            contentBottom,
+            shell.offsetTop + (shell.offsetHeight || 0),
+          );
+        }
+        contentBottom = Math.max(contentBottom, scoreRoot.scrollHeight || 0);
+      }
 
+      // When the score overflows the viewport, add headroom so the final system
+      // can be scrolled up off the bottom edge instead of sitting flush against
+      // it (or just beyond reach).
+      const container = getContainer();
+      const viewport = container ? container.clientHeight : 0;
+      let bottomPad = cameraState.paddingBottom || 24;
+      if (viewport > 0 && contentBottom > viewport) {
+        bottomPad += Math.min(viewport * 0.5, 180);
+      }
+
+      const targetHeight = Math.ceil(contentBottom + bottomPad);
       if (targetHeight > 0) {
         const targetHeightPx = targetHeight + 'px';
         scoreRoot.style.minHeight = targetHeightPx;
@@ -579,7 +626,7 @@ export const OSMD_HTML = `
 
     function collectMeasureMetrics(contentWidth) {
       const rawMeasures = [];
-      const measureCount = osmd && osmd.Sheet && osmd.Sheet.Measures ? osmd.Sheet.Measures.length : 0;
+      const measureCount = getSourceMeasureCount();
 
       try {
         const graphicMeasureList = osmd && osmd.GraphicSheet && osmd.GraphicSheet.MeasureList;
@@ -976,12 +1023,82 @@ export const OSMD_HTML = `
       }, { passive: true });
     }
 
-    function scrollCursorIntoView() {
-      if (fullscreenMode || usesWrappedPortraitLayout() || Date.now() < cameraSuspendUntil) return;
+    // All cursor elements OSMD owns (it keeps a primary cursor plus a cursors
+    // array; both expose the same cursorElement when single-cursor).
+    function getOsmdCursorElements() {
+      const els = [];
+      if (!osmd) return els;
+      try {
+        if (osmd.cursor && osmd.cursor.cursorElement) {
+          els.push(osmd.cursor.cursorElement);
+        }
+        if (Array.isArray(osmd.cursors)) {
+          osmd.cursors.forEach(function (c) {
+            if (c && c.cursorElement && els.indexOf(c.cursorElement) === -1) {
+              els.push(c.cursorElement);
+            }
+          });
+        }
+      } catch (e) {}
+      return els;
+    }
 
-      const focusX = getCursorFocusX();
-      if (focusX == null) return;
-      updateCameraForFocus(focusX, false);
+    // OSMD positions its cursor in the *unscaled* layout space. In portrait we
+    // render against a wide virtual page and then CSS-scale each SVG down to
+    // PORTRAIT_SVG_SCALE, so the raw cursor lands where the wide ("horizontal")
+    // layout would put it. Re-map each cursor element so it scales about the
+    // score root's origin (its own coordinate origin) and then shifts by the
+    // scaled SVG's on-screen offset — keeping it locked onto the visible notes.
+    function alignCursorsToScale() {
+      if (!osmd) return;
+      const els = getOsmdCursorElements();
+      if (els.length === 0) return;
+
+      const scale = getRenderedSvgScale();
+      const portrait = usesWrappedPortraitLayout();
+      const scoreRoot = getScoreRoot();
+
+      if (!portrait || scale === 1 || !scoreRoot) {
+        // Landscape / fullscreen render at scale 1 — OSMD's placement is correct.
+        els.forEach(function (el) {
+          el.style.transform = '';
+          el.style.transformOrigin = '';
+        });
+        return;
+      }
+
+      const svg = scoreRoot.querySelector('svg');
+      if (!svg) return;
+      const scoreRootRect = scoreRoot.getBoundingClientRect();
+      const svgRect = svg.getBoundingClientRect();
+
+      els.forEach(function (el) {
+        // Measure the raw (OSMD-placed) position with no transform applied.
+        el.style.transform = '';
+        el.style.transformOrigin = '';
+        if (el.style.display === 'none' || el.offsetParent === null) return;
+
+        const cursorRect = el.getBoundingClientRect();
+        // Scale about the score-root origin (== the cursor's own coordinate
+        // origin), then translate by the scaled SVG's offset within the root so
+        // the cursor honours the centred portrait layout.
+        const originX = scoreRootRect.left - cursorRect.left;
+        const originY = scoreRootRect.top - cursorRect.top;
+        const svgOffX = svgRect.left - scoreRootRect.left;
+        const svgOffY = svgRect.top - scoreRootRect.top;
+        el.style.transformOrigin = originX.toFixed(2) + 'px ' + originY.toFixed(2) + 'px';
+        el.style.transform =
+          'translate(' + svgOffX.toFixed(2) + 'px,' + svgOffY.toFixed(2) + 'px) scale(' + scale.toFixed(4) + ')';
+      });
+    }
+
+    function scrollCursorIntoView() {
+      // Keep the cursor element aligned with the scaled portrait SVG so it tracks
+      // the played notes. Auto-scroll / camera-follow during playback is
+      // intentionally disabled: the user scrolls the score manually, and any
+      // follow here yanked the viewport back toward the cursor (snap-back) the
+      // moment they tried to scroll away.
+      alignCursorsToScale();
     }
     
     // ─── Fullscreen Control Handlers ───
@@ -1066,6 +1183,9 @@ export const OSMD_HTML = `
     }
 
     window.addEventListener('resize', function() {
+      if (osmd && currentXml) {
+        applyRenderedSvgScale();
+      }
       updateCameraMetrics();
 
       if (fullscreenMode) {
@@ -1545,6 +1665,7 @@ export const OSMD_HTML = `
       if (osmd && osmd.cursor) {
         osmd.cursor.reset();
         osmd.cursor.show();
+        alignCursorsToScale();
       }
       updateCameraMetrics();
       moveCameraTo(0, true);
@@ -1586,6 +1707,7 @@ export const OSMD_HTML = `
           // Reset cursor to start
           osmd.cursor.reset();
           osmd.cursor.show();
+          alignCursorsToScale();
           currentCursorIndex = 0;
           
           // Use requestAnimationFrame for smooth cursor tracking
@@ -1705,7 +1827,7 @@ export const OSMD_HTML = `
         dependenciesReady: !!window.opensheetmusicdisplay && !!window.Tone,
         hasOsmd: !!osmd,
         currentXmlLength: currentXml ? currentXml.length : 0,
-        renderedMeasureCount: osmd && osmd.Sheet && osmd.Sheet.Measures ? osmd.Sheet.Measures.length : 0,
+        renderedMeasureCount: getSourceMeasureCount(),
         stageChildElementCount: stage ? stage.children.length : 0,
         stageInnerHtmlLength: stage ? stage.innerHTML.length : 0,
         stageSvgCount: stage ? stage.querySelectorAll('svg').length : 0,
@@ -1773,22 +1895,102 @@ export const OSMD_HTML = `
         updateCameraMetrics();
         moveCameraTo(0, true);
         scheduleFollowTailScroll(true);
-        post({ type: "rendered", requestId: requestId == null ? null : requestId, measures: osmd.Sheet?.Measures?.length || 0 });
+        post({ type: "rendered", requestId: requestId == null ? null : requestId, measures: getSourceMeasureCount() });
         postDebugSnapshot('rendered', requestId);
       } catch (e) {
         post({ type: "error", requestId: requestId == null ? null : requestId, error: String(e) });
       }
     }
 
+    function getFrozenStack() {
+      return document.getElementById('osmd-frozen');
+    }
+
+    function clearFrozenChunks() {
+      const stack = getFrozenStack();
+      if (stack) stack.innerHTML = '';
+    }
+
+    // Windowed live engrave. Renders zero or more completed chunks into the
+    // static frozen stack (each engraved once, then never touched again), then
+    // engraves the still-growing tail into #osmd. Render cost is therefore
+    // O(tail) — constant — instead of O(whole score) like renderXml.
+    async function renderWindowed(payload, requestId) {
+      try {
+        const freezeChunks = (payload && payload.freezeChunks) || [];
+        const tailXml = payload && payload.tailXml;
+        applyLayoutOptions();
+
+        if (payload && payload.reset) {
+          clearFrozenChunks();
+        }
+
+        const stack = getFrozenStack();
+        const scoreRoot = getScoreRoot();
+
+        // Freeze each newly-completed chunk: engrave it through the normal
+        // scale pipeline, then snapshot its DOM into the frozen stack. The
+        // subsequent tail render below overwrites #osmd, so the snapshot must
+        // be taken before that happens.
+        for (let i = 0; i < freezeChunks.length; i++) {
+          await osmd.load(freezeChunks[i]);
+          await osmd.render();
+          applyRenderedSvgScale();
+          if (stack && scoreRoot) {
+            const div = document.createElement('div');
+            div.className = 'frozen-chunk';
+            div.innerHTML = scoreRoot.innerHTML;
+            stack.appendChild(div);
+          }
+        }
+
+        if (tailXml) {
+          currentXml = tailXml; // tail drives playback/cursor of the live region
+          await osmd.load(tailXml);
+          await osmd.render();
+          applyRenderedSvgScale();
+        }
+
+        updateCameraMetrics();
+        syncPortraitScrollExtent();
+        moveCameraTo(0, true);
+        scrollLiveTailIntoView();
+        post({
+          type: "rendered",
+          requestId: requestId == null ? null : requestId,
+          measures: getSourceMeasureCount(),
+          frozenChunks: stack ? stack.children.length : 0,
+          windowed: true,
+        });
+        postDebugSnapshot('rendered-windowed', requestId);
+      } catch (e) {
+        post({ type: "error", requestId: requestId == null ? null : requestId, error: String(e) });
+      }
+    }
+
+    // In portrait (vertically-scrolling) live mode, keep the growing tail in
+    // view by pinning the scroll container to the bottom — but never while the
+    // user is actively scrolling, so this can't snap them back.
+    function scrollLiveTailIntoView() {
+      if (fullscreenMode || !usesWrappedPortraitLayout()) return;
+      if (scoreScrollActive) return;
+      const container = getContainer();
+      if (!container) return;
+      requestAnimationFrame(() => {
+        container.scrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+      });
+    }
+
     function toggleCursor(show){
       if (!osmd) return;
-      if (show) osmd.cursor.show(); else osmd.cursor.hide();
+      if (show) { osmd.cursor.show(); alignCursorsToScale(); } else osmd.cursor.hide();
     }
     function cursorNext(){ osmd?.cursor?.next(); }
     function cursorReset(){ osmd?.cursor?.reset(); }
 
     window.__OSMD_INIT = function(options) { return init(options); };
     window.__OSMD_RENDER_XML = function(xml, requestId) { return renderXml(xml, requestId); };
+    window.__OSMD_RENDER_WINDOWED = function(payload, requestId) { return renderWindowed(payload, requestId); };
     window.__OSMD_SET_FOLLOW_TAIL = function(enabled) { return setFollowTail(enabled); };
     window.__OSMD_TOGGLE_CURSOR = function(show) { return toggleCursor(show); };
     window.__OSMD_CURSOR_NEXT = function() { return cursorNext(); };
@@ -1806,6 +2008,7 @@ export const OSMD_HTML = `
         const msg = JSON.parse(e.data);
         if (msg.type === "init") return init(msg.options);
         if (msg.type === "renderXml") return renderXml(msg.xml, msg.requestId);
+        if (msg.type === "renderWindowed") return renderWindowed(msg.payload, msg.requestId);
         if (msg.type === "setFollowTail") return setFollowTail(msg.enabled);
         if (msg.type === "toggleCursor") return toggleCursor(msg.show);
         if (msg.type === "cursorNext") return cursorNext();

@@ -11,6 +11,30 @@ import { WebView, WebViewMessageEvent } from "react-native-webview";
 import { ThemedText } from "./ThemedText";
 import { OSMD_HTML } from "./osmdHTML";
 
+// ─── Render-latency telemetry ───
+// Each OSMD re-engrave is a whole-score load()+render() (see osmdHTML.renderXml),
+// so its cost scales with the accumulated score length. To quantify the
+// audio→score render latency for the paper we time the send→`rendered` ack
+// round-trip per update and keep a parseable record. Harvest from device logs
+// by grepping the `[RENDER_LATENCY]` tag, or read RENDER_LATENCY_SAMPLES at runtime.
+export interface RenderLatencySample {
+  requestId: number;
+  description: string;
+  renderMs: number;
+  measures: number; // source-measure count of the rendered tail
+  xmlLength: number; // per-tick render work (tail + any frozen chunks this tick)
+  sentAt: number;
+  ackAt: number;
+  frozenChunks?: number; // total frozen (static) chunks after this render
+}
+export const RENDER_LATENCY_SAMPLES: RenderLatencySample[] = [];
+function recordRenderLatency(sample: RenderLatencySample) {
+  RENDER_LATENCY_SAMPLES.push(sample);
+  if (RENDER_LATENCY_SAMPLES.length > 1000) RENDER_LATENCY_SAMPLES.shift();
+  // Single parseable line: tag, then JSON for easy harvest (Metro/adb logcat).
+  console.log("[RENDER_LATENCY]", JSON.stringify(sample));
+}
+
 interface NoteResult {
   time_seconds: number;
   start_beat?: number;
@@ -137,6 +161,15 @@ interface PianoSheetMusicProps {
   compact?: boolean;
   showCompactPlaybackOverlay?: boolean;
   viewportHeight?: number;
+  /**
+   * Force the live windowed-follow engrave path on/off. Live capture relies on
+   * the method (`live`/`live_stream`) to enable it, but a *finished* score —
+   * a stopped session or a recording reloaded from the Library — must render as
+   * a single static full score so it lays out correctly (no frozen/squished
+   * chunks) and supports full-score playback. Pass `false` for finished scores.
+   * When omitted, the method-based heuristic is used.
+   */
+  liveFollow?: boolean;
   /**
    * Version number for live refinement updates.
    * When this changes, the component will re-render the score even if
@@ -2430,6 +2463,77 @@ export function generateMusicXML(
   return xml;
 }
 
+// ─── Windowed live engrave config ───
+// During live capture, render only the trailing window of measures with OSMD;
+// older measures are frozen as static SVG (see osmdHTML.renderWindowed). This
+// caps render cost at O(window) instead of O(whole score). The full score is
+// still engraved normally once capture stops (non-live methods skip this path).
+const LIVE_WINDOWED_ENGRAVE = true;
+// Measures per frozen chunk. Freezing engages once the tail reaches 2*CHUNK
+// measures, so this also sets how soon windowing kicks in (2 => ~4 measures
+// ~8s @ 4/4 120bpm). Keep small so the re-rendered tail — and thus per-tick
+// render cost — stays bounded even for note-dense (chordal) music.
+const LIVE_CHUNK_MEASURES = 2;
+
+const MUSICXML_DOC_HEADER =
+  '<?xml version="1.0" encoding="UTF-8"?>\n' +
+  '<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.1 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">\n' +
+  '<score-partwise version="3.1">\n' +
+  "  <part-list><score-part id=\"P1\"><part-name>Piano</part-name></score-part></part-list>\n" +
+  '  <part id="P1">';
+const MUSICXML_DOC_FOOTER = "</part></score-partwise>";
+
+function buildChunkAttributesXml(
+  timeSignature: "4/4" | "3/4" | "6/8",
+  fifths: number,
+): string {
+  const [beats, beatType] =
+    timeSignature === "6/8"
+      ? ["6", "8"]
+      : timeSignature === "3/4"
+        ? ["3", "4"]
+        : ["4", "4"];
+  // Clef/key/time only — no tempo direction, so chunks past the first don't
+  // each stamp a redundant metronome mark on the engraving.
+  return (
+    `<attributes><divisions>24</divisions><key><fifths>${fifths}</fifths></key>` +
+    `<time><beats>${beats}</beats><beat-type>${beatType}</beat-type></time><staves>2</staves>` +
+    `<clef number="1"><sign>G</sign><line>2</line></clef>` +
+    `<clef number="2"><sign>F</sign><line>4</line></clef></attributes>`
+  );
+}
+
+// Build a valid standalone MusicXML document from a slice [start, end) of the
+// per-measure fragments returned by generateMeasureXmls. Measures are renumbered
+// from 1; a non-zero-start slice gets the attributes/clef header injected (the
+// fragments only carry it on global measure 1) and any leading system break
+// stripped, so each chunk engraves cleanly on its own.
+function buildStandaloneDocFromMeasures(
+  measureXmls: string[],
+  start: number,
+  end: number,
+  timeSignature: "4/4" | "3/4" | "6/8",
+  fifths: number,
+): string {
+  const slice: string[] = [];
+  const stop = Math.min(end, measureXmls.length);
+  for (let i = start; i < stop; i++) {
+    let body = measureXmls[i];
+    const localNum = i - start + 1;
+    // The measure's own number is the first number="..." in the fragment.
+    body = body.replace(/number="\d+"/, `number="${localNum}"`);
+    if (localNum === 1) {
+      body = body.replace(/<print[^>]*\/>/, ""); // no leading system break
+      if (start > 0 && !/<attributes>/.test(body)) {
+        const attrs = buildChunkAttributesXml(timeSignature, fifths);
+        body = body.replace(/(<measure number="1">)/, `$1${attrs}`);
+      }
+    }
+    slice.push(body);
+  }
+  return MUSICXML_DOC_HEADER + slice.join("") + MUSICXML_DOC_FOOTER;
+}
+
 function generateBlankPageMusicXML(
   timeSignature: "4/4" | "3/4" | "6/8" = "4/4",
   bpm: number = 120,
@@ -2524,6 +2628,7 @@ export default function PianoSheetMusic({
   compact = false,
   showCompactPlaybackOverlay = true,
   viewportHeight,
+  liveFollow,
   refinementVersion,
   onScoreRendered,
   onScoreScrollActiveChange,
@@ -2681,19 +2786,33 @@ export default function PianoSheetMusic({
     [],
   );
   const shouldFollowLatest =
-    results?.analysis_summary?.method === "live" ||
-    results?.analysis_summary?.method === "live_stream";
+    liveFollow ??
+    (results?.analysis_summary?.method === "live" ||
+      results?.analysis_summary?.method === "live_stream");
   const measuresSentRef = useRef<number>(0);
   const lastXmlRef = useRef<string | null>(null);
   const pendingXmlRef = useRef<string | null>(null);
   const playAfterRenderRef = useRef(false);
   const pendingSentAtRef = useRef<number>(0);
   const pendingRenderIdRef = useRef<number | null>(null);
+  // Send-time metadata for the in-flight render, consumed by the `rendered` ack
+  // to compute render latency. Keyed by requestId so a stale ack is ignored.
+  const renderTimingRef = useRef<{
+    requestId: number;
+    description: string;
+    sentAt: number;
+    xmlLength: number;
+  } | null>(null);
   const nextRenderIdRef = useRef<number>(1);
   const renderProbeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
   const renderRefinementRef = useRef<number | undefined>(undefined);
+  // Windowed-engrave state: how many measures are already frozen as static SVG
+  // in the webview, and whether the current live session has emitted its first
+  // windowed render (which must reset the frozen stack from any prior session).
+  const frozenMeasureCountRef = useRef<number>(0);
+  const windowedStartedRef = useRef<boolean>(false);
   const [, setDebugSnapshot] = useState<OsmdDebugSnapshot | null>(null);
   const [, setDebugEvents] = useState<string[]>([]);
 
@@ -2757,6 +2876,12 @@ export default function PianoSheetMusic({
       pendingXmlRef.current = xml;
       pendingSentAtRef.current = Date.now();
       pendingRenderIdRef.current = requestId;
+      renderTimingRef.current = {
+        requestId,
+        description,
+        sentAt: pendingSentAtRef.current,
+        xmlLength: xml.length,
+      };
       appendDebugEvent(
         `render request #${requestId} (${description}) xml=${xml.length}`,
       );
@@ -2774,6 +2899,52 @@ export default function PianoSheetMusic({
         `
           if (window.__OSMD_RENDER_XML) window.__OSMD_RENDER_XML(${JSON.stringify(xml)}, ${requestId});
           ${extraScript}
+        `,
+        description,
+      );
+    },
+    [appendDebugEvent, injectWebCommand, requestDebugSnapshot],
+  );
+
+  // Windowed-engrave send path: freezes zero or more completed chunks and
+  // re-engraves only the growing tail. Mirrors sendRenderXml's render-latency
+  // telemetry; xmlLength records the per-tick render work (tail + any freezes).
+  const sendRenderWindowed = useCallback(
+    (
+      freezeChunks: string[],
+      tailXml: string,
+      reset: boolean,
+      description: string,
+    ) => {
+      const requestId = nextRenderIdRef.current;
+      nextRenderIdRef.current += 1;
+
+      const xmlLength =
+        tailXml.length + freezeChunks.reduce((sum, c) => sum + c.length, 0);
+      pendingSentAtRef.current = Date.now();
+      pendingRenderIdRef.current = requestId;
+      renderTimingRef.current = {
+        requestId,
+        description,
+        sentAt: pendingSentAtRef.current,
+        xmlLength,
+      };
+      appendDebugEvent(
+        `windowed render #${requestId} (${description}) freeze=${freezeChunks.length} tail=${tailXml.length}`,
+      );
+
+      if (renderProbeTimeoutRef.current) {
+        clearTimeout(renderProbeTimeoutRef.current);
+      }
+      renderProbeTimeoutRef.current = setTimeout(() => {
+        renderProbeTimeoutRef.current = null;
+        requestDebugSnapshot(`render-timeout:${description}`, requestId);
+      }, 1500);
+
+      const payload = JSON.stringify({ freezeChunks, tailXml, reset });
+      injectWebCommand(
+        `
+          if (window.__OSMD_RENDER_WINDOWED) window.__OSMD_RENDER_WINDOWED(${payload}, ${requestId});
         `,
         description,
       );
@@ -2939,6 +3110,28 @@ export default function PianoSheetMusic({
           if (renderProbeTimeoutRef.current) {
             clearTimeout(renderProbeTimeoutRef.current);
             renderProbeTimeoutRef.current = null;
+          }
+
+          // Render-latency: time from send to this ack. Round-trip includes the
+          // bridge inject + osmd.load() + osmd.render() — i.e. the full re-engrave.
+          const timing = renderTimingRef.current;
+          if (timing && timing.requestId === msg.requestId) {
+            const ackAt = Date.now();
+            recordRenderLatency({
+              requestId: timing.requestId,
+              description: timing.description,
+              renderMs: ackAt - timing.sentAt,
+              measures:
+                typeof msg.measures === "number" ? msg.measures : -1,
+              xmlLength: timing.xmlLength,
+              sentAt: timing.sentAt,
+              ackAt,
+              frozenChunks:
+                typeof msg.frozenChunks === "number"
+                  ? msg.frozenChunks
+                  : undefined,
+            });
+            renderTimingRef.current = null;
           }
 
           // initial main render completed; mark how many measures are present
@@ -3108,6 +3301,10 @@ export default function PianoSheetMusic({
       pendingXmlRef.current = null;
       pendingSentAtRef.current = 0;
       pendingRenderIdRef.current = null;
+      // Refinement can rewrite already-frozen measures (rhythm) without changing
+      // the count, so re-engrave the windowed score from scratch.
+      frozenMeasureCountRef.current = 0;
+      windowedStartedRef.current = false;
     }
 
     // Recover from a missed `rendered` ack: if a pending XML has been waiting
@@ -3134,6 +3331,66 @@ export default function PianoSheetMusic({
     const currentScoreUsesFallback = score === FALLBACK_XML;
     const pendingScoreUsesFallback = pendingXmlRef.current === FALLBACK_XML;
     const lastScoreUsesFallback = lastXmlRef.current === FALLBACK_XML;
+
+    // ─── Windowed live engrave path ───
+    // Only re-engrave the growing tail; freeze completed chunks as static SVG.
+    // Active for live methods only; non-live (loaded) scores use the full path.
+    if (shouldFollowLatest && LIVE_WINDOWED_ENGRAVE) {
+      const chunkFifths = keySignature ?? 0;
+
+      if (currentScoreUsesFallback) {
+        // Blank waiting page: clear any prior session's frozen chunks.
+        frozenMeasureCountRef.current = 0;
+        windowedStartedRef.current = false;
+        try {
+          sendRenderWindowed([], score, true, "render-windowed-fallback");
+        } catch (e) {
+          console.warn("windowed fallback render failed", e);
+        }
+        return;
+      }
+
+      const total = measures.length;
+      if (total < frozenMeasureCountRef.current) {
+        // Score shrank (new session / reset): start the window over.
+        frozenMeasureCountRef.current = 0;
+        windowedStartedRef.current = false;
+      }
+
+      let frozen = frozenMeasureCountRef.current;
+      const freezeChunks: string[] = [];
+      // Freeze whole chunks while the live tail would exceed 2*CHUNK measures,
+      // so frozen measures sit >= CHUNK measures (past the lock horizon) behind
+      // the live edge and won't be rewritten by late/stale notes.
+      while (total - frozen >= 2 * LIVE_CHUNK_MEASURES) {
+        freezeChunks.push(
+          buildStandaloneDocFromMeasures(
+            measures,
+            frozen,
+            frozen + LIVE_CHUNK_MEASURES,
+            timeSignature,
+            chunkFifths,
+          ),
+        );
+        frozen += LIVE_CHUNK_MEASURES;
+      }
+      const tailXml = buildStandaloneDocFromMeasures(
+        measures,
+        frozen,
+        total,
+        timeSignature,
+        chunkFifths,
+      );
+      const reset = !windowedStartedRef.current;
+      frozenMeasureCountRef.current = frozen;
+      windowedStartedRef.current = true;
+      try {
+        sendRenderWindowed(freezeChunks, tailXml, reset, "render-windowed");
+      } catch (e) {
+        console.warn("windowed render failed", e);
+      }
+      return;
+    }
 
     if (
       !currentScoreUsesFallback &&
@@ -3224,6 +3481,8 @@ export default function PianoSheetMusic({
     refinementVersion,
     injectWebCommand,
     sendRenderXml,
+    sendRenderWindowed,
+    shouldFollowLatest,
     webViewReady,
   ]);
 

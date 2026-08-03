@@ -24,18 +24,21 @@ export default function RootLayout() {
         }}
       />
       <Tabs.Screen
-        name="classic"
+        name="library"
         options={{
-          title: "Classic",
+          title: "Library",
           tabBarIcon: ({ color, focused }) => (
             <Ionicons
-              name={focused ? "disc" : "disc-outline"}
+              name={focused ? "albums" : "albums-outline"}
               color={color}
               size={28}
             />
           ),
         }}
       />
+      {/* Classic record-then-analyze screen is retained in code but hidden from
+          the tab bar (href: null) — same pattern as the legacy index screens. */}
+      <Tabs.Screen name="classic" options={{ href: null }} />
       <Tabs.Screen name="index_old" options={{ href: null }} />
       <Tabs.Screen name="index_backup" options={{ href: null }} />
     </Tabs>

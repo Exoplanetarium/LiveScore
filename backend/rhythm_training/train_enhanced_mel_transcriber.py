@@ -1170,7 +1170,10 @@ def decode_enhanced_note_events(
                 candidates.append(int(later_offsets[0]))
             if frame_drop is not None:
                 candidates.append(int(frame_drop))
-            offset_f = min(candidates) if candidates else min(n_frames, onset_f + int(round(2.0 / frame_time)))
+            # No offset-head peak and no sounding-frame drop within the window:
+            # let the note run to the end of the available frames rather than
+            # imposing a fixed-duration cap.
+            offset_f = min(candidates) if candidates else n_frames
             offset_f = max(offset_f, min_offset_f)
 
             vel_avg = float(velocity[onset_f:offset_f, key].mean()) if offset_f > onset_f else float(velocity[onset_f, key])

@@ -57,6 +57,12 @@ def build_candidates(preset: str) -> List[Candidate]:
             "More recall from the enhanced model onset head.",
         ),
         _candidate(
+            "enhanced_onset_075",
+            {"LIVE_ENHANCED_ONSET_BASE": "0.75"},
+            "Pins the live base to the offline-validated 0.75 operating point; "
+            "control arm = fixed 0.75, treatment arm = adaptive-from-0.75.",
+        ),
+        _candidate(
             "enhanced_onset_080",
             {"LIVE_ENHANCED_ONSET_BASE": "0.80"},
             "More precision from the enhanced model onset head.",

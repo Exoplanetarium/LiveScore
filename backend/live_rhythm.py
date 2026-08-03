@@ -92,6 +92,25 @@ LIVE_TEMPO_NATURAL_MAX_BPM = 160.0
 # tempo error and the tracker collapses to 193/230/240 on busy passages. Fold the
 # estimate back into the natural range as a prior. Env-gated for A/B testing.
 LIVE_TEMPO_OCTAVE_GUARD = os.environ.get("LIVE_TEMPO_OCTAVE_GUARD", "1") != "0"
+# Ternary tempo rescue. The binary tempo metric can't distinguish a triplet-
+# eighth passage from its exact 0.75x binary alias (each 1/3-beat triplet reads
+# as a clean 16th, each eighth as a dotted-16th), so a true-132 triplet run locks
+# ~99-100 and the refine pass then engraves every triplet as a 16th. Rather than
+# perturb the (heavily tuned) binary selection — which regresses ordinary binary
+# music badly — we leave it untouched and add a narrow POST-HOC rescue: after the
+# binary tracker picks a tempo, test the single specific hypothesis that the true
+# tempo is 4/3x that (un-aliasing the 16th→triplet-eighth read), and switch ONLY
+# when the rescaled tempo shows both a binary backbone (notes on the half grid)
+# AND genuine sub-beat triplets riding on it. Pure binary music fails the triplet
+# test; a bare triplet stream fails the anchor test — both are left unchanged.
+LIVE_TEMPO_TERNARY_AWARE = os.environ.get("LIVE_TEMPO_TERNARY_AWARE", "1") != "0"
+# Fraction of IOIs that must sit on a genuine sub-beat third (1/3, 2/3) at the
+# rescaled tempo before a triplet reading is even considered.
+LIVE_TEMPO_RESCUE_THIRD_FRAC = float(os.environ.get("LIVE_TEMPO_RESCUE_THIRD_FRAC", "0.18"))
+# Fraction of IOIs that must anchor to the binary grid (a beat/half backbone) at
+# the rescaled tempo — this is what separates real triplets-over-a-beat from a
+# pure eighth run that merely aliases onto thirds.
+LIVE_TEMPO_RESCUE_ANCHOR_FRAC = float(os.environ.get("LIVE_TEMPO_RESCUE_ANCHOR_FRAC", "0.15"))
 LIVE_SCORE_DURATION_POLICY = os.environ.get("LIVE_SCORE_DURATION_POLICY", "ioi_same_voice")
 LIVE_VOICE_ASSIGNMENT = os.environ.get("LIVE_VOICE_ASSIGNMENT", "per_hand")
 # Re-express each display event's start_beat from its raw onset at the *final*
@@ -164,6 +183,52 @@ def _cluster_live_onset_times(
         if not clustered or onset_time - clustered[-1] > tolerance_sec:
             clustered.append(onset_time)
     return clustered
+
+
+def estimate_bpm_from_notes(notes: List[Dict], seed_bpm: float = 0.0) -> float:
+    """One-shot global tempo estimate from a note list, for stateless re-notation.
+
+    The continuous /live/stream path never runs a tempo tracker, so the bpm the
+    client sends to /live/refine is just its 120 default. Re-notating against 120
+    aliases fast straight passages onto the triplet grid (a ~170bpm eighth at
+    0.18s reads as a 0.167-beat triplet-eighth at 120) — which is exactly the
+    "everything became triplets" failure. Here we rebuild the tempo from the note
+    onsets themselves: cluster co-struck notes to one onset, seed a tracker with a
+    coarse whole-piece IOI-histogram peak so its EMA doesn't lag from 120, then
+    replay the onsets through the tuned tracker (octave guard + ternary rescue
+    included) and read the settled tempo. Folds to the natural range like live.
+    """
+    onsets = _cluster_live_onset_times(notes)
+    if len(onsets) < 5:
+        return float(seed_bpm) if seed_bpm and seed_bpm > 1.0 else 120.0
+
+    tracker = IncrementalTempoTracker()
+
+    # Coarse global seed from the whole-piece IOI histogram (same candidate
+    # divisors the tracker uses per-window), so the EMA starts near the truth
+    # instead of crawling up from the 120 default over the first few updates.
+    iois = np.diff(np.asarray(onsets, dtype=float))
+    iois = iois[np.isfinite(iois) & (iois > 0)]
+    candidates: List[float] = []
+    for ioi in iois:
+        for divisor in (0.25, 0.5, 1.0, 2.0, 4.0):
+            bpm = 60.0 / (ioi / divisor)
+            if tracker.min_bpm <= bpm <= tracker.max_bpm:
+                candidates.append(bpm)
+    if candidates:
+        hist, edges = np.histogram(
+            candidates, bins=80, range=(tracker.min_bpm, tracker.max_bpm)
+        )
+        peak = int(np.argmax(hist))
+        seed = float((edges[peak] + edges[peak + 1]) / 2.0)
+        tracker.current_bpm = seed
+        tracker.initial_bpm = seed
+        tracker.beat_grid.period = 60.0 / max(seed, 1.0)
+
+    for onset in onsets:
+        tracker.add_onset(onset)
+
+    return float(tracker.current_bpm)
 
 
 def _note_name_from_midi(midi_note: int) -> str:
@@ -914,6 +979,11 @@ class IncrementalTempoTracker:
             ):
                 best_bpm /= 2.0
 
+        # Ternary rescue (see constant block): only un-aliases a triplet passage
+        # the binary metric locked 0.75x low. No-op for binary music.
+        if LIVE_TEMPO_TERNARY_AWARE:
+            best_bpm = self._ternary_rescue(iois, best_bpm)
+
         alpha = 0.5 if self.confidence >= 0.5 else 0.2
         self.current_bpm = self.current_bpm * (1 - alpha) + best_bpm * alpha
         common_tempos = [60, 72, 80, 90, 100, 108, 120, 132, 140, 160, 180, 200]
@@ -965,6 +1035,88 @@ class IncrementalTempoTracker:
             dist = abs(ratio - nearest)
             score += math.exp(-(dist ** 2) / (2 * 0.08 ** 2))
         return score / len(iois)
+
+    @staticmethod
+    def _ternary_alignment_score(iois, beat_period):
+        """Alignment that credits both the half grid and genuine sub-beat thirds.
+
+        Used only to confirm a ternary rescue: a real triplet-over-a-beat texture
+        scores far higher here at its true tempo than the plain (half-only) score
+        does at the aliased binary tempo.
+        """
+        score = 0.0
+        for ioi in iois:
+            ratio = ioi / beat_period
+            half = round(ratio * 2) / 2
+            best = 0.0
+            if half >= 0.25:
+                best = math.exp(-((ratio - half) ** 2) / (2 * 0.08 ** 2))
+            if ratio < 1.0:
+                third = round(ratio * 3) / 3
+                if third >= 0.25:
+                    best = max(best, math.exp(-((ratio - third) ** 2) / (2 * 0.08 ** 2)))
+            score += best
+        return score / len(iois)
+
+    def _ternary_rescue(self, iois, best_bpm: float) -> float:
+        """Un-alias a triplet passage the binary metric locked to a 2:3 alias.
+
+        A triplet-eighth run has two exact binary aliases: read as 16ths it locks
+        0.75x low (true tempo = 4/3 x), read as eighths it locks 1.5x high (true
+        tempo = 2/3 x). This tests both rescaled tempos and switches to one only
+        when, there, the onsets show BOTH a binary backbone (a beat/half grid the
+        triplets ride on) AND grouped sub-beat triplets, AND the ternary alignment
+        clearly beats the binary alignment at the locked tempo. Every gate must
+        pass, so ordinary binary music — no grouped sub-beat thirds at the rescaled
+        tempo, or no anchor — is returned unchanged.
+        """
+        n = len(iois)
+        if n < 4:
+            return best_bpm
+        binary_align = self._alignment_score(iois, 60.0 / max(best_bpm, 1.0))
+        best_target = best_bpm
+        best_gain = 0.05  # ternary alignment must beat binary by at least this
+        for factor in (4.0 / 3.0, 2.0 / 3.0):
+            target = best_bpm * factor
+            # Only rescue into a musically plausible range.
+            if not (LIVE_TEMPO_NATURAL_MIN_BPM <= target <= LIVE_TEMPO_NATURAL_MAX_BPM):
+                continue
+            period = 60.0 / target
+            tol = 0.06
+            is_third = []
+            n_anchor = 0
+            for ioi in iois:
+                ratio = float(ioi) / period
+                third = (
+                    0.0 < ratio < 1.0
+                    and (abs(ratio - 1.0 / 3) <= tol or abs(ratio - 2.0 / 3) <= tol)
+                )
+                is_third.append(third)
+                # Binary backbone: an onset on the half/beat grid (nearest half-beat
+                # multiple >= 0.5). Rounding, not a hard ratio>=0.5 floor, so a
+                # half-beat note landing at 0.499 (target a hair off) still counts.
+                if not third and ratio <= 8.0 and round(ratio * 2) >= 1 \
+                        and abs(ratio * 2 - round(ratio * 2)) <= tol * 2:
+                    n_anchor += 1
+
+            # Count only GROUPED thirds — a third whose neighbour is also a third,
+            # i.e. a run of >=2 equal sub-beat IOIs (a real triplet figure). This
+            # rejects a dotted-eighth+16th binary rhythm, whose 16th aliases onto
+            # 1/3 but sits ISOLATED between binary anchors, not in a run.
+            n_grouped_third = 0
+            for i, third in enumerate(is_third):
+                if third and ((i > 0 and is_third[i - 1]) or (i < n - 1 and is_third[i + 1])):
+                    n_grouped_third += 1
+
+            if n_grouped_third / n < LIVE_TEMPO_RESCUE_THIRD_FRAC:
+                continue
+            if n_anchor / n < LIVE_TEMPO_RESCUE_ANCHOR_FRAC:
+                continue
+            gain = self._ternary_alignment_score(iois, period) - binary_align
+            if gain > best_gain:
+                best_gain = gain
+                best_target = target
+        return best_target
 
     def get_beat_duration(self) -> float:
         return 60.0 / self.current_bpm
@@ -1218,6 +1370,221 @@ def apply_window_decode(
         note['quantization_confidence'] = max(
             0.55, 1.0 - timing_err / max(grid.period, 0.01)
         )
+
+
+def _note_onset_seconds(note: Dict) -> Optional[float]:
+    for key in ('time_seconds', 'onset_time', 'onset'):
+        v = note.get(key)
+        if v is not None:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def refine_notes_lookahead(
+    notes: List[Dict],
+    bpm: float,
+    grid: Optional[BeatGrid] = None,
+) -> Tuple[List[Dict], int]:
+    """Lookahead-only re-notation of already-streamed notes.
+
+    The streaming path (`quantizeStreamDurationBeats`, frontend) notates each
+    note's ACOUSTIC duration (offset - onset = how long the key was physically
+    held), snapped per-note with no lookahead. The intended score convention —
+    used elsewhere by `quantize_coarse` via `next_onset` — is the grid-snapped
+    INTER-ONSET INTERVAL to the next note in the same hand. Switching to IOI is
+    exactly what the per-note acoustic snap cannot do without seeing the
+    successor, and it is what this pass applies. It subsumes:
+
+      * staccato fragmentation (short key-press -> 16th + rest) -> the notated
+        value now fills to the next onset,
+      * over-extended legato (held note overlapping the next) -> trimmed to IOI,
+      * coherent TRIPLET groups (three consecutive ~1/3-beat IOIs snap ternary,
+        then a coherence pass demotes any isolated triplet the per-note snap
+        would have left dangling),
+      * the trailing note of each hand, which has no successor and therefore
+        keeps its acoustic duration (best available).
+
+    A note is only rewritten when the IOI value actually differs from what the
+    stream produced, so already-correct notes (acoustic ~= IOI) are untouched.
+    Onsets/`start_beat` are left as the stream placed them; only note VALUES
+    change. Mutates `notes` in place; returns (notes, changed_count).
+    """
+    valid = [n for n in notes if _note_onset_seconds(n) is not None]
+    n = len(valid)
+    if n < 1:
+        return notes, 0
+    beat = 60.0 / max(bpm, 1.0)
+
+    order = sorted(range(n), key=lambda i: _note_onset_seconds(valid[i]))
+    onset = [_note_onset_seconds(valid[i]) for i in order]
+    hand = [_event_hand(valid[i]) for i in order]
+
+    # next onset in the SAME hand (a bass note's value must not be cut by a
+    # treble onset, and vice versa — matches the per_hand voice convention).
+    next_same: List[Optional[float]] = [None] * n
+    seen: Dict[str, float] = {}
+    for pos in range(n - 1, -1, -1):
+        next_same[pos] = seen.get(hand[pos])
+        seen[hand[pos]] = onset[pos]
+
+    # Positions (in sorted order) of the previous/next note in the SAME hand.
+    # Needed by the triplet coherence pass: in a two-hand texture the immediate
+    # sorted neighbours (pos±1) are usually the OTHER hand, so a triplet run in
+    # one hand looks isolated unless we skip across to its same-hand partners.
+    prev_same_pos: List[Optional[int]] = [None] * n
+    next_same_pos: List[Optional[int]] = [None] * n
+    last_pos: Dict[str, int] = {}
+    for pos in range(n):
+        h = hand[pos]
+        if h in last_pos:
+            prev_same_pos[pos] = last_pos[h]
+            next_same_pos[last_pos[h]] = pos
+        last_pos[h] = pos
+
+    # IOI -> beats -> nearest musical value (triplet candidates included).
+    # None = keep the streamed value (trailing note with no measurable duration).
+    snap: List[Optional[Tuple[str, float, bool, bool]]] = [None] * n
+    for pos in range(n):
+        nxt = next_same[pos]
+        if nxt is not None:
+            ioi = nxt - onset[pos]
+        else:
+            # trailing note of this hand: no successor, so IOI is undefined. Fall
+            # back to its own acoustic duration; if we don't even have that, leave
+            # the streamed value alone rather than guess.
+            ac = valid[order[pos]].get('duration')
+            if ac is None:
+                ac = valid[order[pos]].get('duration_seconds')
+            if ac is None:
+                continue
+            ioi = float(ac)
+        beats = min(4.0, max(1.0 / 12.0, ioi / beat))
+        snap[pos] = _snap_beats_to_value(beats)
+
+    # Coherence: a lone triplet cannot be engraved as a valid tuplet, so demote
+    # any triplet without a same-hand triplet neighbour to its nearest binary
+    # value. (Real triplet runs keep each other; strays fall back.)
+    def _is_trip(p: int) -> bool:
+        return snap[p] is not None and snap[p][3]
+
+    for pos in range(n):
+        if snap[pos] is None or not snap[pos][3]:
+            continue
+        p = prev_same_pos[pos]
+        nx = next_same_pos[pos]
+        prev_t = p is not None and _is_trip(p)
+        next_t = nx is not None and _is_trip(nx)
+        if not (prev_t or next_t):
+            snap[pos] = _snap_beats_to_value(snap[pos][1], allow_triplet=False)
+
+    # Group same-hand triplet runs into complete triples and assign
+    # start/middle/end. The renderer (PianoSheetMusic.tsx) only emits a
+    # <tuplet> bracket for a complete start->middle->end chain with matching
+    # triplet_type on all three, and silently drops anything else — so a
+    # `triplet: true` flag with no position/type here is invisible on the
+    # score even though the beat-level math is correct. A run whose length
+    # isn't a multiple of 3 has its tail demoted to the nearest binary value,
+    # same as an isolated triplet above.
+    triplet_position: List[Optional[str]] = [None] * n
+    hand_positions: Dict[str, List[int]] = {}
+    for pos in range(n):
+        hand_positions.setdefault(hand[pos], []).append(pos)
+
+    def _flush_run(run: List[int]) -> None:
+        i = 0
+        while i + 3 <= len(run):
+            triplet_position[run[i]] = 'start'
+            triplet_position[run[i + 1]] = 'middle'
+            triplet_position[run[i + 2]] = 'end'
+            i += 3
+        for j in range(i, len(run)):
+            p = run[j]
+            snap[p] = _snap_beats_to_value(snap[p][1], allow_triplet=False)
+
+    for positions in hand_positions.values():
+        run: List[int] = []
+        for pos in positions:
+            if _is_trip(pos):
+                run.append(pos)
+            else:
+                if run:
+                    _flush_run(run)
+                    run = []
+        if run:
+            _flush_run(run)
+
+    changed = 0
+    for pos in range(n):
+        if snap[pos] is None:
+            continue
+        note = valid[order[pos]]
+        note_value, divisions, dotted, is_trip = snap[pos]
+        pos_label = triplet_position[pos] if is_trip else None
+        differs = (
+            note.get('note_value') != note_value
+            or abs(float(note.get('note_divisions') or 0.0) - divisions) > 1e-6
+            or bool(note.get('dotted', False)) != dotted
+            or bool(note.get('triplet', False)) != is_trip
+            or note.get('triplet_position') != pos_label
+        )
+        if not differs:
+            continue
+        note['note_value'] = note_value
+        note['note_divisions'] = divisions
+        note['dotted'] = dotted
+        note['triplet'] = is_trip
+        note['is_triplet'] = is_trip
+        if is_trip:
+            note['triplet_position'] = pos_label
+            note['triplet_type'] = note_value
+            note['actual_notes'] = 3
+            note['normal_notes'] = 2
+        else:
+            note['triplet_position'] = None
+            note['triplet_type'] = None
+            note.pop('actual_notes', None)
+            note.pop('normal_notes', None)
+        note['_refined'] = True
+        note['_refine_reason'] = 'ioi'
+        changed += 1
+    return notes, changed
+
+
+# (beats -> value) candidate table; ordered fine->coarse doesn't matter, we pick
+# the nearest by |beats - candidate|. Mirrors the frontend stream candidates plus
+# their ternary partners so refinement and streaming share one vocabulary.
+_VALUE_CANDIDATES: List[Tuple[float, str, bool, bool]] = [
+    (4.0,     'whole',   False, False),
+    (3.0,     'half',    True,  False),
+    (8.0 / 3, 'whole',   False, True),
+    (2.0,     'half',    False, False),
+    (1.5,     'quarter', True,  False),
+    (4.0 / 3, 'half',    False, True),
+    (1.0,     'quarter', False, False),
+    (0.75,    'eighth',  True,  False),
+    (2.0 / 3, 'quarter', False, True),
+    (0.5,     'eighth',  False, False),
+    (0.375,   '16th',    True,  False),
+    (1.0 / 3, 'eighth',  False, True),
+    (0.25,    '16th',    False, False),
+    (1.0 / 6, '16th',    False, True),
+    (0.125,   '32nd',    False, False),
+    (1.0 / 12, '32nd',   False, True),
+]
+
+
+def _snap_beats_to_value(
+    beats: float, allow_triplet: bool = True
+) -> Tuple[str, float, bool, bool]:
+    """Nearest (note_value, beats, dotted, triplet) to a duration in beats."""
+    pool = _VALUE_CANDIDATES if allow_triplet else [
+        c for c in _VALUE_CANDIDATES if not c[3]
+    ]
+    best = min(pool, key=lambda c: abs(c[0] - beats))
+    return best[1], best[0], best[2], best[3]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

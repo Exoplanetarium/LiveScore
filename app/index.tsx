@@ -1,8 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Midi } from "@tonejs/midi";
 import * as FileSystem from "expo-file-system";
 import { LinearGradient } from "expo-linear-gradient";
-import * as Sharing from "expo-sharing";
+import { type Href, useRouter } from "expo-router";
 import React, {
   useCallback,
   useEffect,
@@ -27,6 +26,8 @@ import PianoSheetMusic from "../components/PianoSheetMusic";
 import { ThemedText } from "../components/ThemedText";
 import { ThemedView } from "../components/ThemedView";
 import { useLiveRhythm } from "../hooks/useLiveRhythm";
+import { saveScore } from "../lib/savedScores";
+import { exportScoreAsMidi, exportScoreAsMusicXml } from "../lib/scoreExport";
 
 const BACKEND_URL =
   "https://exoplanetarium--livescore-gpu-fastapi-app.modal.run";
@@ -34,8 +35,21 @@ const CHUNK_INTERVAL_MS = 600;
 const LIVE_AUDIO_SAMPLE_RATE = 44100;
 const USE_LIVE_STREAM_TRANSPORT = true;
 const LIVE_STREAM_CONTEXT_SEC = 1.8;
+// Cadence: 50ms. NOT a free knob. Measured A/B 2026-06-30: dropping to 25ms
+// (gate below the ~40ms packet floor) doubled the decode rate but BACKLOGGED the
+// pipeline -- audioBacklog 460->1376ms, previewDataLag ~200->1014ms, emit-decomp
+// median 168->232ms. The model is cheap (~13ms) but the per-decode overhead
+// (1.8s window copy, hypothesis bookkeeping, payload JSON, lock contention) runs
+// 2x as often and saturates the single-threaded path; the 50ms gate is load-
+// shedding via skippedInferences. Faster cadence is throughput-bound, not GPU-
+// bound. Do not lower without first cutting per-decode overhead. See memory.
 const LIVE_STREAM_INFERENCE_INTERVAL_MS = 50;
 const LIVE_STREAM_TRUSTED_DELAY_MS = 100;
+// Idea #2: render not-yet-confirmed provisional notes on the notation surface as
+// an ephemeral overlay (one decode / one trusted_delay earlier than `active`).
+// They are never accumulated into the committed score, so they self-retract if
+// unconfirmed and cannot change committed accuracy. Toggle for the A/B.
+const LIVE_STREAM_PROVISIONAL_DISPLAY = true;
 const LIVE_STREAM_COMMIT_DELAY_MS = 500;
 const LIVE_STREAM_LOCK_DELAY_MS = 2000;
 const USE_LIVE_NEURAL_PATH = true;
@@ -48,6 +62,38 @@ const LIVE_OSMD_BATCH_MS = 500;
 const LIVE_PREVIEW_STRIP_LOOKBACK_BEATS = 12;
 const LIVE_PREVIEW_STRIP_MIN_HISTORY_SEC = 6;
 const LIVE_PREVIEW_STRIP_LOOKAHEAD_SEC = 1.5;
+
+// Binary live-audio frame: 16-byte little-endian header + PCM16 LE payload.
+//   uint32 sequence | uint32 sampleRate | float64 clientSentAtMs | int16[] pcm
+// Sending raw bytes instead of base64-in-JSON drops per-packet work on both ends
+// (no JSON.stringify here, no JSON parse + base64 decode on the server) and ~25%
+// smaller frames on the wire.
+const BINARY_AUDIO_HEADER_BYTES = 16;
+
+function base64ToUint8(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const len = bin.length;
+  const out = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    out[i] = bin.charCodeAt(i);
+  }
+  return out;
+}
+
+function buildBinaryAudioFrame(
+  pcmBytes: Uint8Array,
+  sequence: number,
+  sampleRate: number,
+  clientSentAtMs: number,
+): ArrayBuffer {
+  const buf = new ArrayBuffer(BINARY_AUDIO_HEADER_BYTES + pcmBytes.byteLength);
+  const view = new DataView(buf);
+  view.setUint32(0, sequence >>> 0, true);
+  view.setUint32(4, sampleRate >>> 0, true);
+  view.setFloat64(8, clientSentAtMs, true);
+  new Uint8Array(buf, BINARY_AUDIO_HEADER_BYTES).set(pcmBytes);
+  return buf;
+}
 
 type LiveNoiseProfile = "open" | "balanced" | "clean";
 
@@ -188,7 +234,7 @@ interface QueuedChunkUpload {
 
 interface LiveStreamNotePayload {
   id?: number;
-  state?: "candidate" | "active" | "committed" | "locked";
+  state?: "candidate" | "active" | "committed" | "locked" | "provisional";
   midi_note: number;
   onset_time: number;
   offset_time?: number;
@@ -197,6 +243,7 @@ interface LiveStreamNotePayload {
   observations?: number;
   first_seen_time?: number;
   last_seen_time?: number;
+  provisional?: boolean;
 }
 
 interface LiveStreamDebugSample {
@@ -277,6 +324,14 @@ interface LiveStreamUpdate {
       promoted_committed?: number;
       promoted_locked?: number;
       birth_samples?: LiveStreamDebugSample[];
+      emit_decomposition?: {
+        midi?: number;
+        delta_active_ms?: number;
+        binding?: "trusted" | "persistence";
+        obs?: number;
+        trusted_delay_ms?: number;
+        term_gap_ms?: number;
+      }[];
     };
   };
   warmup?: {
@@ -298,8 +353,10 @@ interface LiveStreamUpdate {
   active_notes?: LiveStreamNotePayload[];
   committed_notes?: LiveStreamNotePayload[];
   locked_notes?: LiveStreamNotePayload[];
+  provisional_notes?: LiveStreamNotePayload[];
   counts?: {
     candidate?: number;
+    provisional?: number;
     active?: number;
     committed?: number;
     locked?: number;
@@ -468,6 +525,83 @@ function getLiveStreamNoteKey(payload: LiveStreamNotePayload) {
   return `${payload.midi_note}-${Math.round((payload.onset_time ?? 0) * 1000)}`;
 }
 
+// Co-onset clustering window (seconds). Notes struck within this window of each
+// other are treated as one attack and given a single shared onset/duration, so
+// the chord engraves as one stacked beat cell instead of fragmenting into a
+// leading 32nd + the rest of the chord. The model decodes onsets on a ~16ms
+// frame grid, so co-struck tones routinely land exactly one frame (16ms) apart
+// (measured: every orphan gap was 16.0ms); the per-note 1/24-beat start_beat
+// snap then splits them (the cell is <16ms above ~125bpm). The window is set
+// just above one frame so it absorbs that quantization jitter WITHOUT reaching
+// the ~40ms+ spacing of even very fast runs (32nds @180bpm ≈ 42ms) — a wider
+// window over-merges genuine sequential notes. Clustering is on raw onset
+// seconds, so it is independent of the (jittery) live tempo estimate.
+const STREAM_CHORD_CLUSTER_WINDOW_SEC = 0.02;
+
+function clusterStreamPayloadsByOnset(
+  payloads: LiveStreamNotePayload[],
+  windowSec: number = STREAM_CHORD_CLUSTER_WINDOW_SEC,
+): LiveStreamNotePayload[] {
+  if (payloads.length <= 1) {
+    return payloads;
+  }
+  const sorted = [...payloads].sort(
+    (a, b) => Number(a.onset_time ?? 0) - Number(b.onset_time ?? 0),
+  );
+
+  const result: LiveStreamNotePayload[] = [];
+  let cluster: LiveStreamNotePayload[] = [];
+  // Span from the cluster's first onset (not a running gap) so a fast run whose
+  // notes are each <30ms apart but span more than the window does not chain into
+  // one bogus chord.
+  let clusterStart = 0;
+
+  const flush = () => {
+    if (cluster.length === 0) {
+      return;
+    }
+    if (cluster.length === 1) {
+      result.push(cluster[0]);
+      cluster = [];
+      return;
+    }
+    // One representative onset + duration for the whole attack: every member
+    // then snaps to the same start_beat and note value, leaving only pitch to
+    // differ. max-duration keeps the chord a coherent rhythmic value rather than
+    // inheriting the orphan's 16ms (which quantizes to a stray 32nd).
+    const bounds = cluster.map(getLiveStreamPayloadBounds);
+    const meanOnset =
+      bounds.reduce((sum, b) => sum + b.onset, 0) / bounds.length;
+    const maxDuration = bounds.reduce((max, b) => Math.max(max, b.duration), 0);
+    for (const payload of cluster) {
+      result.push({
+        ...payload,
+        onset_time: meanOnset,
+        duration: maxDuration,
+        offset_time: meanOnset + maxDuration,
+      });
+    }
+    cluster = [];
+  };
+
+  for (const payload of sorted) {
+    const onset = Number(payload.onset_time ?? 0);
+    if (cluster.length === 0) {
+      clusterStart = onset;
+      cluster.push(payload);
+    } else if (onset - clusterStart <= windowSec) {
+      cluster.push(payload);
+    } else {
+      flush();
+      clusterStart = onset;
+      cluster.push(payload);
+    }
+  }
+  flush();
+
+  return result;
+}
+
 function buildLiveStreamPreviewResult(
   update: LiveStreamUpdate,
   bpm: number | undefined,
@@ -567,16 +701,36 @@ function buildLiveStreamAnalysisResult(
   ];
 
   for (const payload of visibleNotes) {
-    const key = getLiveStreamNoteKey(payload);
-    accumulatedPayloads?.set(key, payload);
-    noteMap.set(key, streamPayloadToNote(payload, bpm));
+    accumulatedPayloads?.set(getLiveStreamNoteKey(payload), payload);
   }
 
-  if (accumulatedPayloads) {
-    noteMap.clear();
-    for (const [key, payload] of accumulatedPayloads) {
-      noteMap.set(key, streamPayloadToNote(payload, bpm));
-    }
+  // Provisional overlay (idea #2): not-yet-confirmed notes shown one decode early.
+  // They are deliberately NOT accumulated — re-derived from the *current* update
+  // each frame so an unconfirmed note self-retracts, and skipped once its id has
+  // committed (it then lives in accumulatedPayloads). This keeps the committed
+  // score byte-identical to persistence-only; provisional notes are display-only.
+  const accumulatedIds =
+    accumulatedPayloads != null ? new Set(accumulatedPayloads.keys()) : null;
+  const provisionalOverlay = LIVE_STREAM_PROVISIONAL_DISPLAY
+    ? (update.provisional_notes ?? [])
+        .filter(
+          (payload) =>
+            accumulatedIds == null ||
+            !accumulatedIds.has(getLiveStreamNoteKey(payload)),
+        )
+        .map((payload) => ({ ...payload, state: "provisional" as const }))
+    : [];
+
+  // Cluster co-struck notes onto one shared onset before per-note conversion so
+  // a chord engraves as a single stacked beat cell rather than a leading 32nd +
+  // the rest (see clusterStreamPayloadsByOnset). Accumulated payloads stay raw;
+  // clustering is re-derived each render so it is deterministic and never drifts.
+  const sourcePayloads = [
+    ...(accumulatedPayloads ? [...accumulatedPayloads.values()] : visibleNotes),
+    ...provisionalOverlay,
+  ];
+  for (const payload of clusterStreamPayloadsByOnset(sourcePayloads)) {
+    noteMap.set(getLiveStreamNoteKey(payload), streamPayloadToNote(payload, bpm));
   }
 
   const notes = [...noteMap.values()];
@@ -694,6 +848,7 @@ interface MemoizedScoreContentProps {
   isWarmingUp: boolean;
   liveEngravingResult: AnalysisResult | null;
   liveEngravingVersion: number;
+  refineNonce: number;
   onScoreScrollActiveChange: (active: boolean) => void;
   viewportHeight?: number;
 }
@@ -706,15 +861,28 @@ const MemoizedScoreContent = React.memo(function MemoizedScoreContent({
   isWarmingUp,
   liveEngravingResult,
   liveEngravingVersion,
+  refineNonce,
   onScoreScrollActiveChange,
   viewportHeight,
 }: MemoizedScoreContentProps) {
   if (USE_LIVE_OSMD_ENGRAVING_EXPERIMENT) {
     return (
       <PianoSheetMusic
-        results={liveEngravingResult ?? undefined}
+        // Remount when the session ends so the windowed live engrave is torn
+        // down and the finished score re-renders cleanly as one static, playable
+        // full score (liveFollow=false) instead of leaving frozen/squished
+        // chunks behind. While recording, keep the windowed follow path.
+        key={
+          hasStoppedRecording ? `final-score-${refineNonce}` : "live-score"
+        }
+        results={
+          hasStoppedRecording
+            ? (analysisResult ?? liveEngravingResult ?? undefined)
+            : (liveEngravingResult ?? undefined)
+        }
         refinementVersion={liveEngravingVersion}
         compact={compact}
+        liveFollow={!hasStoppedRecording}
         showCompactPlaybackOverlay={hasStoppedRecording}
         viewportHeight={viewportHeight}
         onScoreScrollActiveChange={onScoreScrollActiveChange}
@@ -834,6 +1002,14 @@ export default function LiveTranscriptionScreen() {
   const [livePreviewResult, setLivePreviewResult] =
     useState<LivePreviewStripResult | null>(null);
   const [liveEngravingVersion, setLiveEngravingVersion] = useState(0);
+  // Bumped only by the "Refine rhythm" button. Folded into the finished-score
+  // component key so each refine forces a clean remount that re-engraves the
+  // refined notes from scratch — bypassing the incremental live-update path,
+  // whose version/signature bookkeeping is churned by the analysisResult->
+  // queueLiveEngraving effect and can't be relied on to redraw a refinement.
+  const [refineNonce, setRefineNonce] = useState(0);
+  const [isRefining, setIsRefining] = useState(false);
+  const [refineNotice, setRefineNotice] = useState<string | null>(null);
   const [sessionReady, setSessionReady] = useState(false);
   const [noiseProfile, setNoiseProfile] =
     useState<LiveNoiseProfile>("balanced");
@@ -900,6 +1076,14 @@ export default function LiveTranscriptionScreen() {
   const chunkSequenceRef = useRef(0);
   const liveStreamRecordingStartedAtRef = useRef<number | null>(null);
   const liveStreamFirstPacketSentAtRef = useRef<number | null>(null);
+  const liveStreamLastPacketAtRef = useRef<number | null>(null); // TEMP capture-latency probe
+  const liveStreamPktStatsRef = useRef({
+    count: 0,
+    sumInterval: 0,
+    minInterval: Infinity,
+    maxInterval: 0,
+    totalAudioMs: 0,
+  }); // TEMP capture-latency probe
   const lastLiveStreamLatencyLogAtRef = useRef(0);
   const liveDebugBirthsRef = useRef(0);
   const liveDebugMatchedRef = useRef(0);
@@ -913,6 +1097,9 @@ export default function LiveTranscriptionScreen() {
   // Track concurrent uploads so the spinner only clears when the queue drains.
   const inFlightUploadsRef = useRef(0);
   const [hasStoppedRecording, setHasStoppedRecording] = useState(false);
+  const [isSavingScore, setIsSavingScore] = useState(false);
+  const [savedScoreTitle, setSavedScoreTitle] = useState<string | null>(null);
+  const router = useRouter();
   const selectedNoiseProfile =
     LIVE_NOISE_PROFILE_OPTIONS.find(
       (option) => option.value === noiseProfile,
@@ -1262,6 +1449,158 @@ export default function LiveTranscriptionScreen() {
     setLiveEngravingVersion(pending.version);
   }, []);
 
+  useEffect(() => {
+    const shouldRender =
+      !isRecording && Boolean(liveEngravingResult || analysisResult);
+    console.log("[LiveRefine] button gate", {
+      shouldRender,
+      isRecording,
+      hasLiveEngravingResult: Boolean(liveEngravingResult),
+      hasAnalysisResult: Boolean(analysisResult),
+    });
+  }, [isRecording, liveEngravingResult, analysisResult]);
+
+  const refineLiveScore = useCallback(async () => {
+    const base = liveEngravingResult ?? analysisResultRef.current;
+    console.log("[LiveRefine] button pressed", {
+      hasBase: Boolean(base),
+      source: liveEngravingResult ? "liveEngravingResult" : "analysisResultRef",
+      isRefining,
+      baseNotes: base?.notes?.length ?? 0,
+      detectedBpm: base?.analysis_summary?.detected_bpm,
+      currentBpmRef: currentBpmRef.current,
+    });
+    if (!base || isRefining) {
+      console.log("[LiveRefine] aborted (no base or already refining)");
+      return;
+    }
+    setIsRefining(true);
+    setRefineNotice(null);
+    try {
+      const bpm =
+        base.analysis_summary?.detected_bpm || currentBpmRef.current || 120;
+      const response = await fetch(`${BACKEND_URL}/live/refine`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          notes: base.notes ?? [],
+          chords: base.chords ?? [],
+          bpm,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`refine failed: ${response.status}`);
+      }
+      const data = await response.json();
+
+      // The backend re-estimates the tempo from the onsets (the stream never
+      // computes one, so the bpm we sent was just the 120 default). Adopt the
+      // returned tempo so subsequent refines/engraves use the real beat.
+      const refinedBpm = Number(data.bpm);
+      if (Number.isFinite(refinedBpm) && refinedBpm > 1) {
+        currentBpmRef.current = refinedBpm;
+      }
+      console.log("[LiveRefine] tempo", {
+        bpmSent: bpm,
+        bpmUsedByBackend: data.bpm,
+        bpmSource: data.bpm_source,
+      });
+
+      // --- Refine change log --------------------------------------------
+      // Show exactly what /live/refine altered so we can tell at a glance
+      // whether the backend is re-notating (and, if it "does nothing",
+      // whether it returned identical notes or none at all).
+      try {
+        const beforeNotes = (base.notes ?? []) as NoteResult[];
+        const afterNotes = (data.notes ?? []) as NoteResult[];
+        // Fields that actually drive how a note is engraved.
+        const FIELDS: (keyof NoteResult)[] = [
+          "note_value",
+          "note_divisions",
+          "start_beat",
+          "end_beat",
+          "triplet",
+          "triplet_type",
+          "triplet_position",
+          "dotted",
+          "rest_after_beats",
+          "hand",
+        ];
+        const fmt = (v: unknown) =>
+          v === undefined || v === null ? "-" : String(v);
+        const rows: string[] = [];
+        let changedFields = 0;
+        let tripletsBefore = 0;
+        let tripletsAfter = 0;
+        const n = Math.max(beforeNotes.length, afterNotes.length);
+        for (let i = 0; i < n; i += 1) {
+          const b = beforeNotes[i];
+          const a = afterNotes[i];
+          if (b?.triplet) tripletsBefore += 1;
+          if (a?.triplet) tripletsAfter += 1;
+          const diffs: string[] = [];
+          for (const f of FIELDS) {
+            const bv = b ? b[f] : undefined;
+            const av = a ? a[f] : undefined;
+            if (fmt(bv) !== fmt(av)) {
+              diffs.push(`${f}: ${fmt(bv)} -> ${fmt(av)}`);
+              changedFields += 1;
+            }
+          }
+          if (diffs.length) {
+            const label =
+              (a?.note_name ?? b?.note_name ?? `midi${a?.midi_note ?? b?.midi_note ?? "?"}`) +
+              `@${(a?.time_seconds ?? b?.time_seconds ?? 0).toFixed(3)}s`;
+            rows.push(`#${i} ${label}  ${diffs.join(" | ")}`);
+          }
+        }
+        console.log("[LiveRefine] ===== refine result =====", {
+          bpmSent: bpm,
+          notesSent: beforeNotes.length,
+          notesReturned: afterNotes.length,
+          reportedChanged: Number(data.changed ?? 0),
+          notesWithFieldChanges: rows.length,
+          totalFieldChanges: changedFields,
+          tripletsBefore,
+          tripletsAfter,
+        });
+        if (rows.length === 0) {
+          console.log("[LiveRefine] no per-note field changes (score unchanged)");
+        } else {
+          for (const row of rows) {
+            console.log("[LiveRefine] " + row);
+          }
+        }
+      } catch (logError) {
+        console.warn("[LiveRefine] change-log failed", logError);
+      }
+      // ------------------------------------------------------------------
+
+      const refined: AnalysisResult = {
+        ...base,
+        notes: (data.notes ?? base.notes) as NoteResult[],
+        chords: (data.chords ?? base.chords) as ChordResult[],
+      };
+      analysisResultRef.current = refined;
+      setAnalysisResult(refined);
+      setLiveEngravingResult(refined);
+      setLiveEngravingVersion((version) => version + 1);
+      // Force the finished score to remount and re-engrave the refined notes.
+      setRefineNonce((nonce) => nonce + 1);
+      const changed = Number(data.changed ?? 0);
+      setRefineNotice(
+        changed > 0
+          ? `Refined ${changed} note${changed === 1 ? "" : "s"} to inter-onset rhythm.`
+          : "Already at inter-onset rhythm — nothing to change.",
+      );
+    } catch (error) {
+      console.warn("[LiveRefine] failed", error);
+      setRefineNotice("Refinement failed — see logs.");
+    } finally {
+      setIsRefining(false);
+    }
+  }, [liveEngravingResult, isRefining]);
+
   const queueLiveEngraving = useCallback(
     (result: AnalysisResult | null, version: number) => {
       pendingEngravingRef.current = { result, version };
@@ -1342,6 +1681,16 @@ export default function LiveTranscriptionScreen() {
               ...liveDebugSuppressedSamplesRef.current,
               ...continuityFilter.suppressed_samples,
             ].slice(-12);
+          }
+          // Emit-latency decomposition probe (idea #4): one line per note at the
+          // instant it first displays, tagging whether trusted_delay or
+          // persistence accrual bound the wait. Capture in the Metro log and feed
+          // backend/_emit_decomposition_analysis.py to decide if a targeted
+          // re-decode could help (it only can if persistence dominates).
+          if (hypothesisUpdate?.emit_decomposition?.length) {
+            for (const sample of hypothesisUpdate.emit_decomposition) {
+              console.log(`[EMIT_DECOMP] ${JSON.stringify(sample)}`);
+            }
           }
 
           const nowMs = Date.now();
@@ -1657,17 +2006,56 @@ export default function LiveTranscriptionScreen() {
       if (liveStreamFirstPacketSentAtRef.current == null) {
         liveStreamFirstPacketSentAtRef.current = packetSentAtMs;
       }
-      socket.send(
-        JSON.stringify({
-          type: "audio_packet",
-          session_id: liveStreamSessionIdRef.current,
-          sample_rate: LIVE_AUDIO_SAMPLE_RATE,
-          encoding: "pcm16",
-          pcm16_base64: pcm16Base64,
-          sequence_number: liveStreamPacketSequenceRef.current,
-          client_sent_at_ms: packetSentAtMs,
-        }),
+
+      // Send the PCM as a binary frame (header + raw bytes) instead of base64-in-JSON.
+      const pcmBytes = base64ToUint8(pcm16Base64);
+      const frame = buildBinaryAudioFrame(
+        pcmBytes,
+        liveStreamPacketSequenceRef.current,
+        LIVE_AUDIO_SAMPLE_RATE,
+        packetSentAtMs,
       );
+      socket.send(frame);
+
+      // TEMP capture-latency probe: is the device delivering audio at real-time?
+      // captureRtf = audio-ms-captured / wall-ms-elapsed; ~1.0 = keeping up, <1 =
+      // the device/JS thread is under-delivering and latency will accumulate.
+      // If captureRtf here is ~1.0 but the backend's audioBacklog still grows, the
+      // loss is in transport, not capture.
+      const _pktNow =
+        typeof performance !== "undefined" ? performance.now() : packetSentAtMs;
+      const stats = liveStreamPktStatsRef.current;
+      if (liveStreamLastPacketAtRef.current != null) {
+        const dt = _pktNow - liveStreamLastPacketAtRef.current;
+        stats.sumInterval += dt;
+        stats.minInterval = Math.min(stats.minInterval, dt);
+        stats.maxInterval = Math.max(stats.maxInterval, dt);
+        stats.count += 1;
+      }
+      liveStreamLastPacketAtRef.current = _pktNow;
+      stats.totalAudioMs +=
+        ((pcmBytes.byteLength / 2) / LIVE_AUDIO_SAMPLE_RATE) * 1000;
+      if (stats.count >= 25) {
+        const wallSinceFirst =
+          packetSentAtMs - (liveStreamFirstPacketSentAtRef.current ?? packetSentAtMs);
+        const captureRtf =
+          wallSinceFirst > 0 ? stats.totalAudioMs / wallSinceFirst : 0;
+        console.log(
+          "[capture] pkt ms mean",
+          (stats.sumInterval / stats.count).toFixed(1),
+          "min",
+          stats.minInterval.toFixed(1),
+          "max",
+          stats.maxInterval.toFixed(1),
+          "captureRtf",
+          captureRtf.toFixed(3),
+          "(want ~1.0)",
+        );
+        stats.count = 0;
+        stats.sumInterval = 0;
+        stats.minInterval = Infinity;
+        stats.maxInterval = 0;
+      }
     }) as unknown as { remove?: () => void };
     liveStreamAudioSubscriptionRef.current = subscription;
   }, [removeLiveStreamAudioSubscription]);
@@ -1709,6 +2097,9 @@ export default function LiveTranscriptionScreen() {
       channels: 1,
       bitsPerSample: 16,
       audioSource: 6,
+      // TEMP capture-latency test: 2048 bytes = 1024 samples ≈ 23 ms/packet
+      // (avg buffering ~12 ms). Raise to 4096 if you hear dropouts/crackle.
+      bufferSize: 2048,
       wavFile: "temp_audio.wav",
     };
 
@@ -2085,6 +2476,7 @@ export default function LiveTranscriptionScreen() {
       setSessionReady(false);
       sessionReadyRef.current = false;
       setHasStoppedRecording(false);
+      setSavedScoreTitle(null);
       inFlightUploadsRef.current = 0;
       clearPendingChunkUpload();
       currentChunkStartedAtRef.current = null;
@@ -2100,6 +2492,7 @@ export default function LiveTranscriptionScreen() {
       liveStreamPreviewPayloadsRef.current = new Map();
       setLivePreviewResult(null);
       setLiveEngravingVersion(0);
+      setRefineNonce(0);
       pendingEngravingRef.current = { result: null, version: 0 };
       if (engravingFlushTimeoutRef.current) {
         clearTimeout(engravingFlushTimeoutRef.current);
@@ -2343,70 +2736,74 @@ export default function LiveTranscriptionScreen() {
     }
 
     try {
-      const bpm =
-        analysisResult.analysis_summary?.detected_bpm || currentBpm || 120;
-      const midi = new Midi();
-      midi.header.setTempo(bpm);
-
-      const track = midi.addTrack();
-      track.name = "Piano";
-      track.channel = 0;
-
-      for (const note of analysisResult.notes || []) {
-        const duration =
-          note.duration_seconds ??
-          (note.offset_seconds != null
-            ? note.offset_seconds - note.time_seconds
-            : 0.25);
-        track.addNote({
-          midi: note.midi_note,
-          time: note.time_seconds,
-          duration: Math.max(duration, 0.01),
-          velocity: note.confidence ?? 0.8,
-        });
-      }
-
-      for (const chord of analysisResult.chords || []) {
-        if (!chord.midi_notes) {
-          continue;
-        }
-
-        const duration =
-          chord.duration_seconds ??
-          (chord.offset_seconds != null
-            ? chord.offset_seconds - chord.time_seconds
-            : 0.25);
-        for (const pitch of chord.midi_notes) {
-          track.addNote({
-            midi: pitch,
-            time: chord.time_seconds,
-            duration: Math.max(duration, 0.01),
-            velocity: chord.confidence ?? 0.8,
-          });
-        }
-      }
-
-      if (!FileSystem.cacheDirectory) {
-        throw new Error("Cache directory is unavailable on this device.");
-      }
-
-      const fileUri = `${FileSystem.cacheDirectory}live_score.mid`;
-      const midiBytes = midi.toArray();
-      const binary = String.fromCharCode(...midiBytes);
-      const base64 = btoa(binary);
-
-      await FileSystem.writeAsStringAsync(fileUri, base64, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      await Sharing.shareAsync(fileUri, {
-        mimeType: "audio/midi",
-        dialogTitle: "Export MIDI",
-        UTI: "public.midi-audio",
-      });
+      await exportScoreAsMidi(analysisResult, currentBpm);
     } catch (error: any) {
       Alert.alert("Export Failed", error.message || "Could not export MIDI.");
     }
   }, [analysisResult, currentBpm, hasExportableScore]);
+
+  const exportMusicXML = useCallback(async () => {
+    if (!analysisResult || !hasExportableScore) {
+      Alert.alert(
+        "No Score Yet",
+        "Finish generating a score before exporting the sheet music.",
+      );
+      return;
+    }
+
+    try {
+      await exportScoreAsMusicXml(analysisResult, currentBpm);
+    } catch (error: any) {
+      Alert.alert(
+        "Export Failed",
+        error.message || "Could not export MusicXML.",
+      );
+    }
+  }, [analysisResult, currentBpm, hasExportableScore]);
+
+  const saveCurrentScore = useCallback(async () => {
+    if (!analysisResult || !hasExportableScore) {
+      Alert.alert(
+        "Nothing to Save",
+        "Capture a session before saving a recording.",
+      );
+      return;
+    }
+    if (isSavingScore) {
+      return;
+    }
+
+    setIsSavingScore(true);
+    try {
+      // Auto-title from the capture time so saving is one tap (Alert.prompt is
+      // iOS-only). Users can rename later from the Library.
+      const title = `Recording · ${new Date().toLocaleString(undefined, {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      })}`;
+      const meta = await saveScore({
+        title,
+        bpm: currentBpm || 120,
+        analysis: analysisResult,
+      });
+      setSavedScoreTitle(meta.title);
+      Alert.alert("Recording Saved", `“${meta.title}” is in your Library.`, [
+        { text: "OK", style: "cancel" },
+        {
+          text: "View Library",
+          // Cast: the typed-route map regenerates to include "/library" on the
+          // next dev-server start; this keeps tsc green against the stale map.
+          onPress: () => router.push("/library" as Href),
+        },
+      ]);
+    } catch (error: any) {
+      Alert.alert("Save Failed", error?.message || "Could not save recording.");
+    } finally {
+      setIsSavingScore(false);
+    }
+  }, [analysisResult, currentBpm, hasExportableScore, isSavingScore, router]);
 
   const renderMidiExportCard = () => (
     <LinearGradient
@@ -2421,7 +2818,7 @@ export default function LiveTranscriptionScreen() {
           lightColor="#f8fafc"
           darkColor="#f8fafc"
         >
-          MIDI Export
+          Save &amp; Export
         </ThemedText>
         <ThemedText
           style={styles.exportCardHint}
@@ -2429,24 +2826,63 @@ export default function LiveTranscriptionScreen() {
           darkColor="rgba(226,232,240,0.8)"
         >
           {hasExportableScore
-            ? `${exportableEventCount} events ready to share as a .mid file.`
-            : "Generate a score first, then export it as a .mid file."}
+            ? savedScoreTitle
+              ? `Saved “${savedScoreTitle}” · ${exportableEventCount} events ready to export.`
+              : `${exportableEventCount} events ready to save or export.`
+            : "Capture a session first, then save it or export the score."}
         </ThemedText>
       </View>
 
       <TouchableOpacity
         style={[
           styles.exportActionButton,
-          !hasExportableScore ? styles.exportActionButtonDisabled : null,
+          styles.savePrimaryButton,
+          !hasExportableScore || isSavingScore
+            ? styles.exportActionButtonDisabled
+            : null,
         ]}
-        onPress={exportMIDI}
-        disabled={!hasExportableScore}
+        onPress={saveCurrentScore}
+        disabled={!hasExportableScore || isSavingScore}
       >
-        <Ionicons name="download-outline" size={18} color="#ffffff" />
+        {isSavingScore ? (
+          <ActivityIndicator size="small" color="#ffffff" />
+        ) : (
+          <Ionicons name="bookmark-outline" size={18} color="#ffffff" />
+        )}
         <ThemedText style={styles.exportActionButtonText}>
-          Download MIDI
+          {isSavingScore ? "Saving..." : "Save Recording"}
         </ThemedText>
       </TouchableOpacity>
+
+      <View style={styles.exportButtonRow}>
+        <TouchableOpacity
+          style={[
+            styles.exportActionButton,
+            styles.exportActionButtonFlex,
+            !hasExportableScore ? styles.exportActionButtonDisabled : null,
+          ]}
+          onPress={exportMIDI}
+          disabled={!hasExportableScore}
+        >
+          <Ionicons name="musical-notes-outline" size={18} color="#ffffff" />
+          <ThemedText style={styles.exportActionButtonText}>MIDI</ThemedText>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.exportActionButton,
+            styles.exportActionButtonFlex,
+            !hasExportableScore ? styles.exportActionButtonDisabled : null,
+          ]}
+          onPress={exportMusicXML}
+          disabled={!hasExportableScore}
+        >
+          <Ionicons name="document-text-outline" size={18} color="#ffffff" />
+          <ThemedText style={styles.exportActionButtonText}>
+            MusicXML
+          </ThemedText>
+        </TouchableOpacity>
+      </View>
     </LinearGradient>
   );
 
@@ -2603,6 +3039,7 @@ export default function LiveTranscriptionScreen() {
                   isWarmingUp={isWarmingUp}
                   liveEngravingResult={liveEngravingResult}
                   liveEngravingVersion={liveEngravingVersion}
+                  refineNonce={refineNonce}
                   onScoreScrollActiveChange={setIsScoreScrollActive}
                   viewportHeight={compactScoreViewportHeight}
                 />
@@ -2670,6 +3107,37 @@ export default function LiveTranscriptionScreen() {
                   {recordButtonLabel}
                 </ThemedText>
               </TouchableOpacity>
+
+              {!isRecording && (liveEngravingResult || analysisResult) ? (
+                <View style={styles.refineRow}>
+                  <TouchableOpacity
+                    style={[
+                      styles.refineButton,
+                      isRefining ? styles.refineButtonDisabled : null,
+                    ]}
+                    onPress={refineLiveScore}
+                    disabled={isRefining}
+                  >
+                    {isRefining ? (
+                      <ActivityIndicator size="small" color="#e2e8f0" />
+                    ) : (
+                      <Ionicons
+                        name="sparkles-outline"
+                        size={16}
+                        color="#e2e8f0"
+                      />
+                    )}
+                    <ThemedText style={styles.refineButtonText}>
+                      {isRefining ? "Refining…" : "Refine rhythm"}
+                    </ThemedText>
+                  </TouchableOpacity>
+                  {refineNotice ? (
+                    <ThemedText style={styles.refineNotice}>
+                      {refineNotice}
+                    </ThemedText>
+                  ) : null}
+                </View>
+              ) : null}
             </LinearGradient>
 
             {renderMidiExportCard()}
@@ -2829,6 +3297,37 @@ export default function LiveTranscriptionScreen() {
                 {recordButtonLabel}
               </ThemedText>
             </TouchableOpacity>
+
+            {!isRecording && (liveEngravingResult || analysisResult) ? (
+              <View style={styles.refineRow}>
+                <TouchableOpacity
+                  style={[
+                    styles.refineButton,
+                    isRefining ? styles.refineButtonDisabled : null,
+                  ]}
+                  onPress={refineLiveScore}
+                  disabled={isRefining}
+                >
+                  {isRefining ? (
+                    <ActivityIndicator size="small" color="#0f172a" />
+                  ) : (
+                    <Ionicons
+                      name="sparkles-outline"
+                      size={16}
+                      color="#0f172a"
+                    />
+                  )}
+                  <ThemedText style={styles.refineButtonText}>
+                    {isRefining ? "Refining…" : "Refine rhythm"}
+                  </ThemedText>
+                </TouchableOpacity>
+                {refineNotice ? (
+                  <ThemedText style={styles.refineNotice}>
+                    {refineNotice}
+                  </ThemedText>
+                ) : null}
+              </View>
+            ) : null}
           </LinearGradient>
 
           {renderMidiExportCard()}
@@ -2853,6 +3352,7 @@ export default function LiveTranscriptionScreen() {
               isWarmingUp={isWarmingUp}
               liveEngravingResult={liveEngravingResult}
               liveEngravingVersion={liveEngravingVersion}
+              refineNonce={refineNonce}
               onScoreScrollActiveChange={setIsScoreScrollActive}
             />
           </LinearGradient>
@@ -3112,6 +3612,17 @@ const styles = StyleSheet.create({
   exportActionButtonDisabled: {
     opacity: 0.45,
   },
+  exportButtonRow: {
+    flexDirection: "row",
+    gap: 12,
+  },
+  exportActionButtonFlex: {
+    flex: 1,
+  },
+  savePrimaryButton: {
+    borderColor: "rgba(125,211,252,0.45)",
+    backgroundColor: "rgba(37,99,235,0.55)",
+  },
   exportActionButtonText: {
     color: "#ffffff",
     fontSize: 14,
@@ -3296,6 +3807,36 @@ const styles = StyleSheet.create({
     color: "#0f172a",
     paddingHorizontal: 18,
     letterSpacing: -0.3,
+  },
+  refineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    flexWrap: "wrap",
+    gap: 10,
+  },
+  refineButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(226,232,240,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(226,232,240,0.28)",
+  },
+  refineButtonDisabled: {
+    opacity: 0.6,
+  },
+  refineButtonText: {
+    color: "#e2e8f0",
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  refineNotice: {
+    fontSize: 12,
+    color: "#cbd5e1",
+    flexShrink: 1,
   },
   cardDescription: {
     lineHeight: 21,

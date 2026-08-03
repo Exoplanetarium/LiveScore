@@ -3212,3 +3212,135 @@ score_f1` checkpoint selection toward a product-decoupled metric. Kept as opt-in
   explicit onset-sweep candidates in `backend/tune_continuous_stream_decoder.py`. `backend/gpu_ops.py`
   and `backend/modal_deploy.py` already prefer/package the no-note-value checkpoint.
 - Validation: `env\Scripts\python.exe -m py_compile backend/detect_note.py backend/tune_continuous_stream_decoder.py`.
+
+## 2026-06-18
+
+### Display-latency sweep on the continuous /live/stream path
+
+Goal: lower live display latency without losing accuracy. Latency on the shipped
+WebSocket path (`ContinuousLiveStreamSession`) is policy, not compute — p95 model
+inference is ~25 ms (RTF well under 1), so the wait is set by the hypothesis
+state machine, not the GPU.
+
+Harness: `backend/_latency_sweep.py` replays the gold12 suite
+(`benchmark_artifacts/gold12_reference_prep_20260612/benchmark_manifest_gold12.json`)
+through `ContinuousLiveStreamSession`, micro-averaged note metrics @50 ms (+strict
+30 ms) on the `score` (stable) surface. Latency-to-visible ~= `max(trusted_delay,
+STREAM_MIN_DISPLAY_OBSERVATIONS * inference_interval_ms)`.
+
+Sweep 1 — trusted_delay x min_observations (interval 70 ms):
+
+  | config | trusted | obs | ~latency | P | R | F1@50 |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | baseline | 180 | 3 | 210 ms | 0.984 | 0.918 | 0.950 |
+  | td120_obs3 | 120 | 3 | 210 ms | 0.984 | 0.918 | 0.950 |
+  | obs2 | 180/120/80 | 2 | 140 ms | 0.982 | 0.922 | 0.951 |
+  | obs1 | 80 | 1 | 80 ms | 0.575 | 0.944 | 0.715 |
+
+Sweep 2 — inference_interval at obs2 (trusted held low so obs gate binds):
+
+  | interval | ~latency | P | R | F1@50 | infer p95 | hop RTF |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | 100 ms | 200 ms | 0.986 | 0.923 | 0.953 | 25 ms | 0.25 |
+  | 70 ms | 140 ms | 0.982 | 0.922 | 0.951 | 25 ms | 0.36 |
+  | 50 ms | 100 ms | 0.982 | 0.922 | 0.951 | 25 ms | 0.50 |
+  | 40 ms | 80 ms | 0.863 | 0.932 | 0.897 | 25 ms | 0.63 |
+
+Findings:
+- `trusted_delay` alone is INERT — the observation gate binds; tuning it in
+  isolation does nothing. Diagnostic `td120_obs3 == baseline` proves it.
+- `obs 3 -> 2` is free (F1 0.950 -> 0.951, +3 matched), cuts 210 -> 140 ms.
+- `obs 1` is a precision cliff (P 0.98 -> 0.575; predicted 707 -> 1237) — the
+  corroboration gate is what holds precision; do not run obs1 without a
+  confidence-adaptive promotion path.
+- `interval 50 ms` at obs2 is free (identical F1 0.951), cuts 140 -> 100 ms.
+- `interval 40 ms` TANKS (P 0.98 -> 0.86, F1 -5.4 pt). The knee is the acoustic
+  floor: 40 ms hop ~= A0 fundamental period (~36 ms), so two observations 40 ms
+  apart are too correlated to corroborate. Latency floor is acoustic, not compute.
+
+Net: 210 ms -> 100 ms (52%) at flat F1 0.951, below the 128 ms literature low end.
+
+### PROMOTED: ship obs2 + 50 ms hop
+
+- `backend/main.py`: `STREAM_MIN_DISPLAY_OBSERVATIONS 3 -> 2`; session class
+  defaults `inference_interval_sec 0.10 -> 0.05`, `trusted_delay_sec 0.18 -> 0.10`;
+  factory fallbacks `100 -> 50 ms` / `180 -> 100 ms`.
+- `app/index.tsx`: `LIVE_STREAM_INFERENCE_INTERVAL_MS 70 -> 50`,
+  `LIVE_STREAM_TRUSTED_DELAY_MS 180 -> 100`.
+- Deploy split: `obs=2` is backend (ships via Modal). The interval/trusted values
+  are sent by the frontend at session open, so they ship via app rebuild, not
+  Modal; backend defaults were aligned to 50/100 so a Modal-only deploy is still
+  correct if the client omits them.
+- Caveat: numbers are gold12 DISPLAY-note F1 (12 clips, small N), not raw-onset F1
+  comparable to the literature 95%. Robust finding is the frontier shape, not the
+  absolute 0.95. The next sub-100 ms lever is confidence-adaptive obs1.
+
+## 2026-06-21
+
+### Lowered live onset threshold 0.75 -> 0.70 for recall
+
+- `backend/detect_note.py`: `LIVE_ENHANCED_ONSET_BASE` default `0.75 -> 0.70` (env
+  default string ~L8789 + fallback ~L8791), in `analyze_audio_live_neural` — the
+  live continuous path. The offline `analyze_audio_neural` threshold
+  (`ENHANCED_MEL_ONSET_THRESHOLD`, ~L7923) is unchanged at 0.75.
+- Rationale: 0.75 sat ABOVE the F1 peak. Per the current-model threshold sweep,
+  0.70 is strictly better than 0.75 on BOTH recall (0.9232 -> 0.9300, +0.68pt) and
+  note F1 (0.9525 -> 0.9533, +0.08pt), spending only ~0.6pt of surplus precision
+  (0.9837 -> 0.9778). Dup/100 rises 0.02 -> 0.05 (still negligible).
+- This is an operating-point move along the known curve, NOT a model change; the
+  promoted distill checkpoint is untouched. Fully reversible via the env var.
+- Context: chosen as the cheap recall lever while the paper is being written;
+  large/model-level recall work (heavier distill, octave completion) deliberately
+  deferred until after submission to avoid invalidating reported numbers. Genuine
+  misses remain model-bound (never decoded into the lattice) per the 2026-06-19
+  operating-point analysis; threshold cannot recover those.
+
+## 2026-06-24
+
+### Removed the adaptive (loudness-based) live onset selector — inert on ablation
+
+- Motivation: audit of the live-decode heuristic parameters. The per-chunk
+  loudness-based onset selector (`_select_live_neural_onset_threshold`) carried
+  ~8 hand-set magic numbers (`rms 0.024/0.060/0.110`, `peak 0.45`, `crest 2.30`,
+  `+/-0.04/0.02`, floor `0.30`, caps `0.46/0.95`) and was tagged an experiment
+  (`adaptive_onset_loudness_v1`) but had never been A/B'd against a fixed base.
+
+- Ablation (48-clip live replay, `live_benchmark_replay_auto_v2`, via
+  `test_experiment.py` control[adaptive OFF/fixed] vs treatment[adaptive ON]):
+  - @ base 0.70: dF1 **-0.0002**, dRecall +0.0011, dPrec -0.0016
+  - @ base 0.75: dF1 **-0.0004**, dRecall -0.0004, dPrec -0.0002
+  - Verdict: statistically inert (moves nothing past the 4th decimal). The
+    selector is pure complexity with no measurable effect on the frontier.
+
+- Change (`backend/detect_note.py`):
+  - Deleted `_select_live_neural_onset_threshold` and all 3 call sites in
+    `analyze_audio_live_neural` (enhanced_mel / mel_baseline / custom branches).
+    The live path now uses the fixed base threshold directly:
+    `LIVE_ENHANCED_ONSET_BASE` (0.70), `LIVE_ONSET_BASE` (0.46), custom 0.33.
+  - Dropped the now-dead `neural_chunk_rms / _peak / _crest_factor` timings and
+    the loudness `profile`; `live_onset_threshold_profile` is now the constant
+    `fixed_onset`, `live_onset_threshold_experiment` = `fixed_onset_baseline`.
+  - `adaptive_onset_threshold` kept as a DEPRECATED no-op param at the function
+    boundary (docstring-flagged) to avoid a ~20-site refactor across the FastAPI
+    endpoints (`main.py`) and the benchmark harness. Full param removal is a
+    follow-up; the boolean now has no effect.
+
+- Harness fixups:
+  - `backend/test_experiment.py`: `force_live_onset_threshold` no longer
+    monkeypatches the deleted selector; it now overrides the base-threshold env
+    vars (`LIVE_ENHANCED_ONSET_BASE`, `LIVE_ONSET_BASE`) within the context.
+    Removed the module-level `_ORIGINAL_LIVE_THRESHOLD_SELECTOR` reference that
+    crashed import.
+  - `backend/tune_decoder_settings.py`: added a reproducible `enhanced_onset_075`
+    candidate (pins live base to 0.75) used for this audit.
+
+- Verification: post-removal smoke (3 clips) now shows control == treatment
+  exactly (0.9193 @0.70, 0.9362 @0.75), confirming the flag is inert and that the
+  fixed-base numbers are unchanged vs the pre-removal fixed arm (behavior-
+  preserving). Both files byte-compile. Latency unaffected (one fewer per-chunk
+  numpy pass). Artifacts: `benchmark_artifacts/adaptive_audit_full/`.
+
+- NOT changed: live base stays 0.70 (the deliberate recall lever from
+  2026-06-21). The same 48-clip sweep shows fixed 0.75 would trade -1.0pt recall
+  for +1.75pt precision (+0.33pt net F1) — a precision-leaning operating-point
+  move, left as an explicit decision, not applied.

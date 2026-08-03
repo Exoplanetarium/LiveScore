@@ -8661,58 +8661,15 @@ def _convert_neural_note_events_to_results(note_events, split_midi=60):
     }
 
 
-def _select_live_neural_onset_threshold(audio_chunk, base_onset_threshold, enabled=True):
-    """Adjust live onset sensitivity from cheap chunk loudness stats only."""
-    experiment = 'adaptive_onset_loudness_v1' if enabled else 'fixed_onset_baseline'
-
-    if audio_chunk is None:
-        return float(base_onset_threshold), {
-            'experiment': experiment,
-            'profile': 'no_audio',
-            'chunk_rms': 0.0,
-            'peak_level': 0.0,
-            'crest_factor': 0.0,
-        }
-
-    audio = np.asarray(audio_chunk, dtype=np.float32)
-    if audio.size == 0:
-        return float(base_onset_threshold), {
-            'experiment': experiment,
-            'profile': 'empty_audio',
-            'chunk_rms': 0.0,
-            'peak_level': 0.0,
-            'crest_factor': 0.0,
-        }
-
-    audio64 = audio.astype(np.float64, copy=False)
-    abs_audio = np.abs(audio64)
-    chunk_rms = float(np.sqrt(np.mean(audio64 * audio64)))
-    peak_level = float(np.max(abs_audio))
-    crest_factor = float(peak_level / max(chunk_rms, 1e-6))
-
-    selected = float(base_onset_threshold)
-    profile = 'fixed_baseline' if not enabled else 'baseline_nominal'
-
-    if enabled:
-        if chunk_rms < 0.024 and peak_level < 0.45:
-            selected = max(0.30, base_onset_threshold - 0.04)
-            profile = 'soft_sparse_recall'
-        elif chunk_rms > 0.110 or (chunk_rms > 0.060 and crest_factor < 2.30):
-            precision_cap = 0.46 if base_onset_threshold <= 0.50 else 0.95
-            selected = min(precision_cap, base_onset_threshold + 0.02)
-            profile = 'loud_dense_precision'
-
-    return float(selected), {
-        'experiment': experiment,
-        'profile': profile,
-        'chunk_rms': chunk_rms,
-        'peak_level': peak_level,
-        'crest_factor': crest_factor,
-    }
-
-
 def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_midi=60, device='cuda', adaptive_onset_threshold=True):
-    """Run a minimal array-based neural transcription path for live chunk updates."""
+    """Run a minimal array-based neural transcription path for live chunk updates.
+
+    NOTE: ``adaptive_onset_threshold`` is a deprecated no-op kept only for call
+    compatibility with the live endpoints and the benchmark harness. The live
+    loudness-based onset selector was removed after a 48-clip ablation showed it
+    inert (|ΔF1| <= 0.0004 vs a fixed base threshold); the live path now always
+    uses the fixed base threshold. See gpt_memory live-change-log 2026-06-24.
+    """
     import time
 
     def _format_loader_status(label, status):
@@ -8747,12 +8704,8 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
     model_sr = sr
     inference_detail = {}
     selected_onset_threshold = 0.0
-    onset_threshold_profile = 'not_used'
-    onset_threshold_experiment = (
-        'adaptive_onset_loudness_v1'
-        if adaptive_onset_threshold
-        else 'fixed_onset_baseline'
-    )
+    onset_threshold_profile = 'fixed_onset'
+    onset_threshold_experiment = 'fixed_onset_baseline'
     enhanced_status = {
         'reason': 'not_attempted',
         'selected_path': None,
@@ -8861,15 +8814,7 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             _enhanced_filter_harmonics = _enhanced_filter_harmonics_raw in {
                 '1', 'true', 'yes', 'y', 'on'
             }
-            selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
-                model_audio,
-                _enhanced_base_thr,
-                enabled=adaptive_onset_threshold,
-            )
-            onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
-            onset_threshold_experiment = str(
-                threshold_debug.get('experiment') or onset_threshold_experiment
-            )
+            selected_onset_threshold = _enhanced_base_thr
             timings['neural_onset_threshold_base'] = _enhanced_base_thr
             timings['neural_onset_threshold_selected'] = selected_onset_threshold
             timings['neural_offset_threshold'] = _enhanced_offset_thr
@@ -8884,9 +8829,6 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
             timings['neural_soft_polyphony_min_delta'] = _enhanced_soft_polyphony_min_delta
             timings['neural_soft_polyphony_lookback_sec'] = _enhanced_soft_polyphony_lookback_sec
             timings['neural_lattice_rescue'] = bool(_enhanced_lattice_rescue)
-            timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
-            timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
-            timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
 
             t0 = time.perf_counter()
             transcribed_dict = ensemble_model.transcribe(
@@ -8941,20 +8883,9 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 _mel_base_thr = float(os.environ.get('LIVE_ONSET_BASE', '0.46'))
             except (TypeError, ValueError):
                 _mel_base_thr = 0.46
-            selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
-                model_audio,
-                _mel_base_thr,
-                enabled=adaptive_onset_threshold,
-            )
-            onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
-            onset_threshold_experiment = str(
-                threshold_debug.get('experiment') or onset_threshold_experiment
-            )
+            selected_onset_threshold = _mel_base_thr
             timings['neural_onset_threshold_base'] = _mel_base_thr
             timings['neural_onset_threshold_selected'] = selected_onset_threshold
-            timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
-            timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
-            timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
 
             t0 = time.perf_counter()
             transcribed_dict = ensemble_model.transcribe(
@@ -8982,20 +8913,9 @@ def analyze_audio_live_neural(audio_or_path, sr=SAMPLE_RATE, debug=False, split_
                 model_audio = audio_full_sr
             timings['neural_resample'] = (time.perf_counter() - t0) * 1000
 
-            selected_onset_threshold, threshold_debug = _select_live_neural_onset_threshold(
-                model_audio,
-                0.33,
-                enabled=adaptive_onset_threshold,
-            )
-            onset_threshold_profile = str(threshold_debug.get('profile') or 'baseline_nominal')
-            onset_threshold_experiment = str(
-                threshold_debug.get('experiment') or onset_threshold_experiment
-            )
+            selected_onset_threshold = 0.33
             timings['neural_onset_threshold_base'] = 0.33
             timings['neural_onset_threshold_selected'] = selected_onset_threshold
-            timings['neural_chunk_rms'] = float(threshold_debug.get('chunk_rms') or 0.0)
-            timings['neural_chunk_peak'] = float(threshold_debug.get('peak_level') or 0.0)
-            timings['neural_chunk_crest_factor'] = float(threshold_debug.get('crest_factor') or 0.0)
 
             t0 = time.perf_counter()
             transcribed_dict = custom_model.transcribe(

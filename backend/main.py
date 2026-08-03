@@ -1,8 +1,10 @@
 import asyncio
 import base64
+import json
 import logging
 import math
 import os
+import struct
 import threading
 import time
 from collections import defaultdict
@@ -259,6 +261,31 @@ def _decode_stream_packet_audio(message: Dict, target_sr: int = 44100) -> Tuple[
     return audio, target_sr
 
 
+# Binary live-audio frame: 16-byte little-endian header + PCM16 LE payload.
+#   uint32 sequence_number | uint32 sample_rate | float64 client_sent_at_ms | int16[] pcm
+# Lets the frontend skip per-packet base64 + JSON (smaller frames, and the server
+# avoids a JSON parse + base64 decode on the hot live path).
+_BINARY_AUDIO_HEADER = struct.Struct("<IId")  # 16 bytes
+
+
+def _parse_binary_audio_frame(
+    data: bytes, target_sr: int
+) -> Optional[Tuple[int, float, np.ndarray]]:
+    """(sequence, client_sent_at_ms, mono float32 @ target_sr) from a binary packet."""
+    if data is None or len(data) < _BINARY_AUDIO_HEADER.size:
+        return None
+    sequence, sample_rate, client_sent_at_ms = _BINARY_AUDIO_HEADER.unpack_from(data, 0)
+    pcm = np.frombuffer(data, dtype="<i2", offset=_BINARY_AUDIO_HEADER.size)
+    audio = pcm.astype(np.float32) / 32768.0
+    source_sr = int(sample_rate or target_sr)
+    if audio.size and source_sr != target_sr:
+        gcd = math.gcd(source_sr, target_sr)
+        audio = resample_poly(
+            audio, target_sr // gcd, source_sr // gcd
+        ).astype(np.float32, copy=False)
+    return int(sequence), float(client_sent_at_ms), audio
+
+
 def _note_payload_from_hypothesis(hypothesis: Dict) -> Dict:
     onset = float(hypothesis.get("onset_time", 0.0) or 0.0)
     offset = float(hypothesis.get("offset_time", onset) or onset)
@@ -306,8 +333,29 @@ STREAM_FRAME_EVIDENCE_SEC = 0.08
 # either re-observed across enough overlapping windows (real notes recur many
 # times; noise is seen once or twice) OR carries strong frame evidence. This is
 # what rejects the noise that floods in when the birth gates are merely relaxed.
-STREAM_MIN_DISPLAY_OBSERVATIONS = 2
+STREAM_MIN_DISPLAY_OBSERVATIONS = 2  # persistence: real notes recur across overlapping windows (P 0.63->0.96); noise is seen once or twice
 STREAM_DISPLAY_FRAME_EVIDENCE_SEC = 0.15
+# Interior-margin gate (experimental, default 0.0 = disabled / no behavior change).
+# When > 0, observations whose onset is within this many seconds of "now" (the
+# trailing edge of the decode window) are ignored entirely, so a note is only ever
+# born/updated from a decode that already saw >= this much post-onset audio in its
+# own interior. This removes trailing-edge flicker at the source rather than
+# filtering it out later via multi-observation persistence, which lets min_obs drop
+# to 1 without the P=0.587 flicker flood that plain min_obs=1 suffers.
+STREAM_INTERIOR_MARGIN_SEC = 0.0  # disabled (default): persistence (min_obs>=2) handles trailing-edge flicker
+# Provisional display (idea #2): surface a not-yet-confirmed candidate on the
+# *notation* surface as soon as it has a little post-onset evidence (a single
+# decode past STREAM_PROVISIONAL_MARGIN_SEC), BEFORE it clears the persistence
+# gate. This decouples *felt* onset latency (~one decode / one trusted_delay
+# earlier) from *committed* accuracy: provisional notes are emitted in their own
+# bucket and the frontend treats them as an ephemeral overlay that it re-derives
+# every frame and never accumulates, so an unconfirmed note self-retracts and can
+# never enter the committed score. Only persistence-confirmed hypotheses
+# (obs >= STREAM_MIN_DISPLAY_OBSERVATIONS) ever reach active/committed/locked.
+# Purely additive: with the flag off (or a frontend that ignores the bucket) the
+# committed-score path is byte-identical to persistence-only.
+STREAM_PROVISIONAL_DISPLAY = True
+STREAM_PROVISIONAL_MARGIN_SEC = 0.05  # min post-onset age before a candidate is shown provisionally
 # Master switch for the RMS-attack birth gates in _filter_stream_continuity
 # (same_pitch_boundary / implausible_repeat / harmonic_sustain /
 # weak_birth_outside_attack). When False, every decoded observation is born and
@@ -929,10 +977,23 @@ class ContinuousLiveStreamSession:
             "promoted_committed": 0,
             "promoted_locked": 0,
             "birth_samples": [],
+            # Emit-latency decomposition (idea #4 probe): for each note at the
+            # instant it promotes to `active`, which term bound the wait —
+            # trusted_delay (precision floor) or persistence obs-accrual? If
+            # trusted dominates, a faster 2nd observation (a targeted re-decode)
+            # buys nothing; the floor is trusted_delay, which is the tested-dead
+            # interior-trust knob. Surfaced to the frontend for Metro-log capture.
+            "emit_decomposition": [],
         }
         for observation in observations:
             onset = float(observation["onset_time"])
             if onset < max(0.0, now_sec - self.context_sec - 0.25):
+                stats["stale_skipped"] += 1
+                continue
+            # Interior-margin gate: skip observations too close to the trailing edge
+            # ("now"), where there is no post-onset evidence and flicker lives. The
+            # note will be (re)born from a later decode that sees it in its interior.
+            if STREAM_INTERIOR_MARGIN_SEC > 0.0 and (now_sec - onset) < STREAM_INTERIOR_MARGIN_SEC:
                 stats["stale_skipped"] += 1
                 continue
 
@@ -987,6 +1048,11 @@ class ContinuousLiveStreamSession:
                 observations_count >= STREAM_MIN_DISPLAY_OBSERVATIONS
                 or display_duration >= STREAM_DISPLAY_FRAME_EVIDENCE_SEC
             )
+            # Stamp the audio-time at which persistence/frame-evidence first held,
+            # so at promotion we can tell whether persistence or trusted_delay was
+            # the binding term (idea #4).
+            if display_ready and hypothesis.get("display_ready_time") is None:
+                hypothesis["display_ready_time"] = now_sec
             if (
                 onset <= trusted_cutoff_sec
                 and str(hypothesis.get("state")) == "candidate"
@@ -994,6 +1060,23 @@ class ContinuousLiveStreamSession:
             ):
                 hypothesis["state"] = "active"
                 stats["promoted_active"] += 1
+                # Decompose the emit wait: trusted became satisfiable at
+                # onset+trusted_delay; persistence at display_ready_time. The later
+                # of the two is what actually gated this note's first display.
+                trusted_ready_at = onset + self.trusted_delay_sec
+                display_ready_at = float(hypothesis.get("display_ready_time", now_sec) or now_sec)
+                binding = "trusted" if trusted_ready_at >= display_ready_at else "persistence"
+                if len(stats["emit_decomposition"]) < STREAM_DEBUG_SAMPLE_LIMIT:
+                    stats["emit_decomposition"].append({
+                        "midi": int(hypothesis.get("midi_note", 0) or 0),
+                        "delta_active_ms": int(round((now_sec - onset) * 1000.0)),
+                        "binding": binding,
+                        "obs": int(observations_count),
+                        "trusted_delay_ms": int(round(self.trusted_delay_sec * 1000.0)),
+                        # gap between the two readiness times; small gap = the two
+                        # terms are co-binding (a faster 2nd obs would barely help).
+                        "term_gap_ms": int(round(abs(trusted_ready_at - display_ready_at) * 1000.0)),
+                    })
 
         for hypothesis in self.hypotheses:
             state = str(hypothesis.get("state") or "candidate")
@@ -1042,50 +1125,91 @@ class ContinuousLiveStreamSession:
 
     def _build_update(self, inference_ran: bool, reason: str = "ok", **extra) -> Dict:
         with self._lock:
+            # Per-decode overhead fix (2026-06-30): committed/locked notes are
+            # append-only and the frontend accumulates them by id, so re-emitting
+            # the whole history every decode was O(piece length) wasted work
+            # (sort + payload rebuild + recursive JSON sanitize + send). Emit only
+            # notes whose committed/locked state changed since last decode (delta).
+            # Candidate/active/heard/provisional stay full — they are small and
+            # ephemeral. See memory: cadence_lever_throughput_bound.
+            emitted = getattr(self, "_emitted_states", None)
+            if emitted is None:
+                emitted = self._emitted_states = {}
             candidates = []
             active = []
-            committed = []
-            locked = []
+            committed_delta = []
+            locked_delta = []
             heard = []
+            provisional = []
+            n_committed = 0  # committed-state + locked-state (matches old `committed` count)
+            n_locked = 0
             now_sec = self.current_time_sec
+            live_ids = set()
 
             for hypothesis in sorted(self.hypotheses, key=lambda item: (item.get("onset_time", 0.0), item.get("midi_note", 0))):
                 payload = _note_payload_from_hypothesis(hypothesis)
                 state = payload["state"]
+                hid = payload["id"]
+                live_ids.add(hid)
                 if now_sec - float(payload["last_seen_time"]) <= 0.75:
                     heard.append(payload)
+                # Provisional overlay: a still-unconfirmed candidate that has at
+                # least STREAM_PROVISIONAL_MARGIN_SEC of post-onset evidence. It is
+                # shown early on the notation but never accumulated, so it commits
+                # only if it later clears persistence (becoming active) and quietly
+                # retracts otherwise. Emitted as a separate, ephemeral bucket.
+                if (
+                    STREAM_PROVISIONAL_DISPLAY
+                    and state == "candidate"
+                    and (now_sec - float(payload["onset_time"])) >= STREAM_PROVISIONAL_MARGIN_SEC
+                ):
+                    provisional.append({**payload, "state": "provisional", "provisional": True})
                 if state == "candidate":
                     candidates.append(payload)
                 elif state == "active":
                     active.append(payload)
-                elif state == "locked":
-                    locked.append(payload)
-                    committed.append(payload)
-                else:
-                    committed.append(payload)
+                else:  # committed or locked: emit only on state change
+                    n_committed += 1
+                    if state == "locked":
+                        n_locked += 1
+                    if emitted.get(hid) != state:
+                        committed_delta.append(payload)
+                        if state == "locked":
+                            locked_delta.append(payload)
+                emitted[hid] = state
+
+            # Prune emitted-state map of hypotheses that have aged out.
+            if len(emitted) > len(live_ids):
+                self._emitted_states = {k: v for k, v in emitted.items() if k in live_ids}
 
             update = {
                 "type": "live_stream_update",
-                "session": self.status(),
-                "inference": {
+                # session + inference may carry numpy scalars; sanitize just those.
+                "session": make_json_serializable(self.status()),
+                "inference": make_json_serializable({
                     "ran": bool(inference_ran),
                     "reason": reason,
                     **extra,
-                },
+                }),
+                # Note payloads are already JSON-clean (native int/float/str), so
+                # they skip the recursive sanitizer entirely.
                 "heard_notes": heard[-64:],
                 "candidate_notes": candidates[-64:],
+                "provisional_notes": provisional[-64:],
                 "active_notes": active[-64:],
-                "committed_notes": committed[-256:],
-                "locked_notes": locked[-256:],
+                "committed_notes": committed_delta,
+                "locked_notes": locked_delta,
+                "committed_delta": True,
                 "counts": {
                     "heard": len(heard),
                     "candidate": len(candidates),
+                    "provisional": len(provisional),
                     "active": len(active),
-                    "committed": len(committed),
-                    "locked": len(locked),
+                    "committed": n_committed,
+                    "locked": n_locked,
                 },
             }
-        return make_json_serializable(update)
+        return update
 
 
 _continuous_live_stream_sessions: Dict[str, ContinuousLiveStreamSession] = {}
@@ -1920,7 +2044,37 @@ async def live_stream_websocket(websocket: WebSocket):
 
     try:
         while True:
-            message = await websocket.receive_json()
+            raw = await websocket.receive()
+            if raw.get("type") == "websocket.disconnect":
+                break
+
+            # Binary audio fast-path: 16-byte header + PCM16, no JSON/base64.
+            # Control messages (start/stop/warmup/flush) still arrive as text JSON.
+            binary_payload = raw.get("bytes")
+            if binary_payload is not None:
+                if session is None:
+                    session_id = f"continuous-{int(time.time() * 1000)}"
+                    session = _get_continuous_live_stream_session(session_id, sample_rate=44100)
+                    ensure_inference_worker()
+                parsed = _parse_binary_audio_frame(binary_payload, session.sample_rate)
+                if parsed is not None:
+                    sequence, client_sent_at_ms, audio = parsed
+                    session.append_audio(
+                        audio,
+                        {
+                            "sequence_number": sequence,
+                            "client_sent_at_ms": client_sent_at_ms,
+                            "server_received_at_ms": time.time() * 1000.0,
+                        },
+                    )
+                    ensure_inference_worker()
+                    audio_event.set()
+                continue
+
+            text_payload = raw.get("text")
+            if text_payload is None:
+                continue
+            message = json.loads(text_payload)
             message_type = str(message.get("type") or "audio_packet")
 
             if message_type == "start":
@@ -2535,6 +2689,17 @@ class LiveSessionQuery(BaseModel):
     session_id: str
 
 
+class LiveRefineInput(BaseModel):
+    session_id: str = ""
+    notes: List[dict] = []
+    chords: List[dict] = []
+    bpm: float = 120.0
+    # The continuous stream never computes a tempo, so the client's bpm is its
+    # 120 default. When true (the default), estimate the tempo from the submitted
+    # onsets instead of trusting bpm; bpm is then only a fallback/seed.
+    estimate_tempo: bool = True
+
+
 @app.post("/live/session/create")
 async def live_session_create(req: LiveSessionCreate):
     """
@@ -2671,6 +2836,43 @@ async def live_process_notes(req: LiveNotesInput):
         result.setdefault("_timing_ms", {})["display_state"] = round(display_state_ms, 2)
     
     return JSONResponse(content=make_json_serializable(result))
+
+
+@app.post("/live/refine")
+async def live_refine(req: LiveRefineInput):
+    """On-demand, lookahead re-notation of the notes currently on screen.
+
+    The continuous stream notates each note's *acoustic* (key-held) duration with
+    no lookahead. This endpoint re-notates durations as grid-snapped inter-onset
+    intervals to the next note in the same hand — the score convention the stream
+    can't apply live — which fixes staccato fragmentation, over-extended legato,
+    and forms coherent triplet groups. Onsets are left where the stream placed
+    them; only note VALUES change, and only where they actually differ. Stateless:
+    the frontend sends the displayed notes and gets the refined set back.
+    """
+    from live_rhythm import refine_notes_lookahead, estimate_bpm_from_notes
+
+    # Refine notes and chords over one onset timeline so a note's next event can
+    # be a chord (and vice versa); the dicts are mutated in place by reference.
+    combined = list(req.notes) + list(req.chords)
+
+    # Re-notation is only as good as the beat it snaps to. The client bpm is the
+    # stream's 120 default (no live tempo tracker), so by default estimate the
+    # tempo from the onsets we were just handed; bpm is the fallback/seed.
+    if req.estimate_tempo:
+        bpm = await run_in_threadpool(estimate_bpm_from_notes, combined, req.bpm)
+    else:
+        bpm = req.bpm
+
+    _, changed = await run_in_threadpool(refine_notes_lookahead, combined, bpm)
+
+    return JSONResponse(content=make_json_serializable({
+        "notes": req.notes,
+        "chords": req.chords,
+        "changed": changed,
+        "bpm": bpm,
+        "bpm_source": "estimated" if req.estimate_tempo else "client",
+    }))
 
 
 @app.post("/live/check-refinement")

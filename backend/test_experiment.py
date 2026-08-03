@@ -73,7 +73,11 @@ SELECTION_FEATURE_KEYS = (
 )
 FIXED_THRESHOLD_EXPERIMENT = "fixed_threshold"
 RETRO_CORRECTION_EXPERIMENT = "retro_correction_seam_v1"
-_ORIGINAL_LIVE_THRESHOLD_SELECTOR = detect_note_module._select_live_neural_onset_threshold
+# The live loudness-based onset selector was removed (48-clip ablation showed it
+# inert, |dF1| <= 0.0004 vs a fixed base threshold). The live base threshold is
+# now env-driven, so forcing a fixed threshold overrides the base-threshold env
+# vars instead of monkeypatching the (now-deleted) selector.
+_LIVE_ONSET_BASE_ENV_VARS = ("LIVE_ENHANCED_ONSET_BASE", "LIVE_ONSET_BASE")
 PAIRED_STATS_BOOTSTRAP_SAMPLES = 20000
 PAIRED_STATS_RANDOM_SEED = 0
 PAIRED_STATS_EPSILON = 1e-12
@@ -100,20 +104,20 @@ def force_live_onset_threshold(
     onset_threshold: float,
     experiment_name: str = FIXED_THRESHOLD_EXPERIMENT,
 ) -> Iterator[None]:
-    original_selector = detect_note_module._select_live_neural_onset_threshold
-
-    def _fixed_selector(audio_chunk, base_onset_threshold, enabled=True):
-        _, info = _ORIGINAL_LIVE_THRESHOLD_SELECTOR(audio_chunk, float(onset_threshold), enabled=False)
-        debug_info = dict(info)
-        debug_info["experiment"] = experiment_name
-        debug_info["profile"] = f"fixed_{float(onset_threshold):.2f}"
-        return float(onset_threshold), debug_info
-
-    detect_note_module._select_live_neural_onset_threshold = _fixed_selector
+    # ``experiment_name`` is retained for call compatibility; the live decode now
+    # reports a fixed profile/experiment label itself, so it is not propagated.
+    forced = f"{float(onset_threshold):.6f}"
+    previous = {name: os.environ.get(name) for name in _LIVE_ONSET_BASE_ENV_VARS}
+    for name in _LIVE_ONSET_BASE_ENV_VARS:
+        os.environ[name] = forced
     try:
         yield
     finally:
-        detect_note_module._select_live_neural_onset_threshold = original_selector
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 def load_index(split: str) -> List[Dict]:
